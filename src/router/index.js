@@ -1,5 +1,6 @@
 import Vue from "vue"
 import VueRouter from "vue-router"
+import { clearAuthToken, hasValidAuthToken } from "@/utils/auth-token"
 import { MessageBox } from "element-ui"
 import Login from "@/views/Login"
 import Home from "@/views/Home"
@@ -139,6 +140,7 @@ router.afterEach(() => {
 
 router.beforeEach(async (to, from, next) => {
   const isAuthenticated = window.sessionStorage.getItem("isAuthenticated")
+  const hasToken = hasValidAuthToken()
 
   if (to.path !== from.path && hasDirtyState()) {
     try {
@@ -160,9 +162,11 @@ router.beforeEach(async (to, from, next) => {
 
   if (
     !["/", "/myapi", "/configure", "/connect"].includes(to.path) &&
-    !isAuthenticated
+    (!isAuthenticated || !hasToken)
   ) {
-    next("/") // 重定向到登录页面
+    clearAuthToken()
+    window.sessionStorage.removeItem("isAuthenticated")
+    next({ path: "/", query: { redirect: to.fullPath } })
   } else {
     next()
   }

@@ -275,6 +275,7 @@ import {
 } from "@/utils/api"
 import CuteButton from "@/components/ui/CuteButton.vue"
 import SvgIcon from "@/components/SvgIcon/SvgIcon.vue"
+import { clearAuthenticationState } from "@/utils/auth-session"
 
 export default {
   name: "MyApi",
@@ -318,6 +319,7 @@ export default {
           this.apiUrl = "http://" + this.apiUrl
         }
         this.apiUrl = this.apiUrl.replace(/[\\/]+$/, "")
+        clearAuthenticationState()
         setBaseApiUrl(this.apiUrl)
         setPort(String(port))
         this.$message.success("修改地址端口成功！")

@@ -33,8 +33,19 @@ const uniqueTargets = (values) => {
 
 const choosePreferredOrigin = ({ policy, preferredUrl, targets, currentOrigin }) => {
   const current = normalizeBaseUrl(currentOrigin)
-  if (policy === "preserve" && current) return current
+  const validOrigins = uniqueTargets(targets.map((target) => target.url))
   const explicit = normalizeBaseUrl(preferredUrl)
+  if (policy === "preserve" && current) {
+    if (explicit) {
+      const currentUrl = new URL(current)
+      const explicitUrl = new URL(explicit)
+      if (
+        currentUrl.protocol !== explicitUrl.protocol ||
+        currentUrl.port !== explicitUrl.port
+      ) return explicit
+    }
+    if (validOrigins.includes(current)) return current
+  }
   if (explicit) return explicit
   const wantedKind = policy === "local" ? "local" : policy === "network" ? "network" : null
   if (wantedKind) {
@@ -52,13 +63,20 @@ const choosePreferredOrigin = ({ policy, preferredUrl, targets, currentOrigin })
 
 export const restartRecoveryState = () => {
   try {
+    if (/([?&])reauth=1(?:&|$)/.test(window.location.hash)) {
+      window.sessionStorage.removeItem(STORAGE_KEY)
+      return null
+    }
     const value = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) || "null")
     if (!value || !value.bootId || !Array.isArray(value.accessUrls)) return null
     const policy = value.policy || (value.setup ? "legacy-setup" : "preserve")
-    const preferredOrigin =
-      policy === "preserve"
-        ? normalizeBaseUrl(window.location.origin)
-        : normalizeBaseUrl(value.preferredOrigin) || normalizeBaseUrl(value.accessUrls[0])
+    const available = uniqueTargets(value.accessUrls)
+    const preferredOrigin = choosePreferredOrigin({
+      policy,
+      preferredUrl: value.preferredOrigin,
+      targets: available.map((url) => ({ url })),
+      currentOrigin: window.location.origin,
+    })
     return {
       ...value,
       policy,
@@ -95,7 +113,6 @@ export const startRestartRecovery = ({
   const urls = uniqueTargets([
     preferredOrigin,
     ...targets.map((target) => target.url),
-    window.location.origin,
   ])
   const state = {
     bootId,

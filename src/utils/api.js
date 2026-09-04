@@ -4,6 +4,7 @@ import {
   handleAuthenticationExpired,
   isLocalAuthRecoveryRequest,
 } from "./auth-session"
+import { clearAuthToken, getAuthToken, setAuthToken } from "./auth-token"
 
 let lastErrorKey = ""
 let lastErrorAt = 0
@@ -20,9 +21,10 @@ const showErrorOnce = (message) => {
 // 请求拦截器
 axios.interceptors.request.use(
   (config) => {
-    if (getCookie("tokenStr")) {
+    const token = getAuthToken()
+    if (token) {
       //请求携带自定义token
-      config.headers["Authorization"] = getCookie("tokenStr")
+      config.headers["Authorization"] = token
     }
     return config
   },
@@ -237,6 +239,10 @@ export const getBaseUrlLocalStorage = () => {
 
 //设置cookie方法
 export const setCookie = (name, value, days = 7) => {
+  if (name === "tokenStr") {
+    setAuthToken(value)
+    return
+  }
   var Days = days
   var exp = new Date()
   exp.setTime(exp.getTime() + Days * 24 * 60 * 60 * 1000)
@@ -248,6 +254,7 @@ export const setCookie = (name, value, days = 7) => {
 
 //获取cookie方法
 export const getCookie = (name) => {
+  if (name === "tokenStr") return getAuthToken()
   var arr,
     reg = new RegExp("(^| )" + name + "=([^;]*)(;|$)")
   if (document.cookie.match(reg)) {
@@ -257,5 +264,9 @@ export const getCookie = (name) => {
 }
 
 export const clearCookie = (name) => {
+  if (name === "tokenStr") {
+    clearAuthToken()
+    return
+  }
   setCookie(name, "", -1)
 }

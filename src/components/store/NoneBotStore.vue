@@ -315,6 +315,7 @@ export default {
       confirmCode: false, confirmChanges: false, confirmSource: false, confirmCompatibility: false, confirmMigration: false,
       detailVisible: false, detailLoading: false, detail: null,
       environment: null, repairing: false,
+      loadSequence: 0,
     }
   },
   computed: {
@@ -370,7 +371,7 @@ export default {
     includeIncompatible() { this.page = 1; this.loadPlugins(false) },
   },
   mounted() { this.loadEnvironment(); this.loadPlugins(false); this.restoreAnalysis() },
-  beforeDestroy() { clearTimeout(this.searchTimer); clearTimeout(this.analysisTimer) },
+  beforeDestroy() { this.loadSequence += 1; clearTimeout(this.searchTimer); clearTimeout(this.analysisTimer) },
   methods: {
     newOperationId() {
       const bytes = new Uint8Array(16)
@@ -411,6 +412,7 @@ export default {
       } catch (_) { this.environment = { status: "failed", repairable: false } }
     },
     async loadPlugins(refresh = false) {
+      const sequence = ++this.loadSequence
       this.loading = true; this.error = ""
       try {
         const response = await this.getRequest(`${this.$root.prefix}/store/nonebot/plugins`, {
@@ -418,12 +420,14 @@ export default {
           plugin_type: this.typeFilter, adapter: this.adapterFilter,
           include_incompatible: this.includeIncompatible, refresh,
         })
+        if (sequence !== this.loadSequence) return
         if (!response.suc) throw new Error(response.info || "NoneBot Registry 加载失败")
         this.plugins = response.data.items || []; this.total = Number(response.data.total || 0); this.registryMeta = response.data.registry || {}
         this.enabledAdapters = response.data.enabled_adapters || []
       } catch (error) {
+        if (sequence !== this.loadSequence) return
         this.plugins = []; this.total = 0; this.error = error.response?.data?.detail || error.message || "NoneBot Registry 暂时不可用。"
-      } finally { this.loading = false }
+      } finally { if (sequence === this.loadSequence) this.loading = false }
     },
     async openDetail(plugin) {
       this.detail = null; this.detailVisible = true; this.detailLoading = true

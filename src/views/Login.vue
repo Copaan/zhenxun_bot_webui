@@ -191,7 +191,8 @@
 <script>
 import qs from "qs"
 import logoUrl from "@/assets/image/logo.png"
-import { setCookie, clearCookie, getCookie } from "@/utils/api"
+import { setCookie, clearCookie, syncApiWithBrowserLocation } from "@/utils/api"
+import { clearAuthenticationState } from "@/utils/auth-session"
 import CuteConfirm from "@/components/ui/CuteConfirm"
 import InteractiveInput from "@/components/ui/NeonInput.vue"
 import CuteButton from "@/components/ui/CuteButton.vue"
@@ -306,7 +307,6 @@ export default {
           if (response.warning) {
             this.$message.warning(response.warning)
           } else {
-            window.sessionStorage.setItem("isAuthenticated", true)
             this.$message.success({
               message: response.info,
               duration: 1500,
@@ -315,14 +315,16 @@ export default {
 
             const tokenStr =
               response.data.token_type + " " + response.data.access_token
-            if (getCookie) {
-              clearCookie("tokenStr")
-            }
+            clearCookie("tokenStr")
             setCookie("tokenStr", tokenStr)
+            window.sessionStorage.setItem("isAuthenticated", true)
 
-            let path = this.$route.query.redirect
+            const requestedPath = String(this.$route.query.redirect || "")
+            const path = requestedPath.startsWith("/") && !requestedPath.startsWith("//")
+              ? requestedPath
+              : "/home"
             this.$router.replace(
-              path == "/" || path == undefined ? "/home" : path
+              path === "/" ? "/home" : path
             )
           }
         } else {
@@ -439,6 +441,10 @@ export default {
     },
   },
   mounted() {
+    if (this.$route.query.reauth === "1") {
+      clearAuthenticationState()
+      syncApiWithBrowserLocation()
+    }
     this.checkFirstRun()
     const firstSetting = this.$route.params.firstSetting
     if (firstSetting) {

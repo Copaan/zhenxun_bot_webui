@@ -9,7 +9,7 @@
       <el-button @click="dismiss">关闭等待页</el-button>
     </div>
     <div v-if="timedOut" class="restart-addresses">
-      <a v-for="url in state.accessUrls" :key="url" :href="`${url}/#${state.returnRoute}`">{{ url }}</a>
+      <a v-for="url in state.accessUrls" :key="url" :href="recoveryHref(url)">{{ url }}</a>
     </div>
   </div>
 </template>
@@ -20,6 +20,7 @@ import {
   RESTART_RECOVERY_EVENT,
   restartRecoveryState,
 } from "@/utils/restart-recovery"
+import { clearAuthenticationState } from "@/utils/auth-session"
 
 const wait = (duration) => new Promise((resolve) => window.setTimeout(resolve, duration))
 const REQUEST_TIMEOUT = 3000
@@ -39,6 +40,11 @@ export default {
     this.runId += 1
   },
   methods: {
+    recoveryHref(baseUrl) {
+      const returnRoute = this.state.returnRoute.startsWith("/") ? this.state.returnRoute : `/${this.state.returnRoute}`
+      if (new URL(baseUrl).origin === window.location.origin) return `${baseUrl}/#${returnRoute}`
+      return `${baseUrl}/#/?reauth=1&redirect=${encodeURIComponent(returnRoute)}`
+    },
     handleStart(event) { this.begin(event.detail) },
     begin(state) {
       this.state = state
@@ -67,7 +73,13 @@ export default {
       const returnRoute = this.state.returnRoute.startsWith("/")
         ? this.state.returnRoute
         : `/${this.state.returnRoute}`
-      const target = `${baseUrl}/#${returnRoute}`
+      const destination = new URL(baseUrl)
+      const sameOrigin = destination.origin === window.location.origin
+      destination.pathname = "/"
+      destination.hash = sameOrigin
+        ? returnRoute
+        : `/?reauth=1&redirect=${encodeURIComponent(returnRoute)}`
+      const target = destination.toString()
       this.runId += 1
       this.visible = false
       clearRestartRecovery()
@@ -76,11 +88,12 @@ export default {
         window.sessionStorage.removeItem("zhenxunSetupRestartReceipt")
         window.sessionStorage.removeItem("zhenxunSetupRestartTargets")
       }
-      if (new URL(target).origin === window.location.origin) {
+      if (sameOrigin) {
         window.history.replaceState(null, "", `/#${returnRoute}`)
         window.location.reload()
         return
       }
+      clearAuthenticationState()
       window.location.replace(target)
     },
     async poll(runId) {
@@ -88,12 +101,7 @@ export default {
         await wait(1500)
         const preferred = this.state.preferredOrigin || this.state.accessUrls[0]
         const fallback = this.state.fallbackUrls || []
-        const candidates =
-          this.state.policy === "preserve"
-            ? [preferred]
-            : attempt < 8
-            ? [preferred]
-            : [preferred, ...fallback]
+        const candidates = attempt < 8 ? [preferred] : [preferred, ...fallback]
         for (const baseUrl of candidates.filter(Boolean)) {
           try {
             const payload = await this.readStatus(baseUrl)

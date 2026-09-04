@@ -1,17 +1,18 @@
 import { Message } from "element-ui"
 import router from "@/router"
 import { clearAllDirtyStates } from "./dirty-state"
+import { clearAuthToken } from "./auth-token"
 
 let redirecting = false
 let lastNotificationAt = 0
 
-const clearAuthCookie = () => {
-  document.cookie = "tokenStr=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/"
+export const clearAuthenticationState = () => {
+  clearAuthToken()
+  window.sessionStorage.removeItem("isAuthenticated")
 }
 
 export const handleAuthenticationExpired = (showMessage = true) => {
-  clearAuthCookie()
-  window.sessionStorage.removeItem("isAuthenticated")
+  clearAuthenticationState()
   clearAllDirtyStates()
   window.dispatchEvent(new CustomEvent("zhenxun-auth-expired"))
   const now = Date.now()

@@ -194,7 +194,7 @@
     <el-dialog title="发现模型" :visible.sync="discoveryDialog" width="min(680px, 92vw)" append-to-body>
       <el-input v-model="discoverySearch" clearable prefix-icon="el-icon-search" placeholder="筛选远端模型" />
       <el-checkbox-group v-model="selectedDiscovered" class="discovery-list"><el-checkbox v-for="name in filteredDiscovered" :key="name" :label="name">{{ name }}</el-checkbox></el-checkbox-group>
-      <span slot="footer"><span class="dialog-note">发现 {{ discoveredModels.length }} 个模型</span><el-button icon="el-icon-close" @click="discoveryDialog = false">取消</el-button><el-button type="primary" icon="el-icon-plus" @click="addDiscoveredModels">添加所选模型</el-button></span>
+      <span slot="footer"><span class="dialog-note">发现 {{ discoveredModels.length }} 个模型</span><el-button icon="el-icon-close" @click="discoveryDialog = false">取消</el-button><el-button type="primary" icon="el-icon-plus" :loading="saving === 'discovered-models'" :disabled="!selectedDiscovered.length || Boolean(saving)" @click="addDiscoveredModels">添加并保存</el-button></span>
     </el-dialog>
   </div>
 </template>
@@ -308,15 +308,18 @@ export default {
     handleApiTypeChange(value) { if (!this.providerDraft.api_base && this.defaultApiBases[value]) this.providerDraft.api_base = this.defaultApiBases[value]; this.markProviderDirty() },
     addKey() { this.providerDraft.api_key_slots.push({ existing_index: null, value: "", clientId: uid() }); this.markProviderDirty() },
     removeKey(index) { this.providerDraft.api_key_slots.splice(index, 1); this.markProviderDirty() },
-    providerPayload() { return { expected_revision: this.revision, name: this.providerDraft.name.trim(), api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base?.trim() || null, timeout: this.providerDraft.timeout, temperature: this.providerDraft.temperature, max_output_tokens: this.providerDraft.max_output_tokens, api_keys: this.providerDraft.api_key_slots.map(({ existing_index, value }) => ({ existing_index, value: value || null })), models: this.providerDraft.isNew ? this.providerDraft.models.map(({ capabilities, ...model }) => model) : null } },
-    async saveProvider() {
-      this.saving = "provider"
+    providerPayload({ includeModels = false } = {}) { return { expected_revision: this.revision, name: this.providerDraft.name.trim(), api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base?.trim() || null, timeout: this.providerDraft.timeout, temperature: this.providerDraft.temperature, max_output_tokens: this.providerDraft.max_output_tokens, api_keys: this.providerDraft.api_key_slots.map(({ existing_index, value }) => ({ existing_index, value: value || null })), models: this.providerDraft.isNew || includeModels ? this.providerDraft.models.map(({ capabilities, ...model }) => model) : null } },
+    async saveProvider(options = {}) {
+      const includeModels = Boolean(options?.includeModels)
+      this.saving = options?.savingKey || "provider"
       try {
         const path = this.providerDraft.isNew ? "/ai/providers" : `/ai/providers/${encodeURIComponent(this.selectedProviderName)}`
-        const response = this.providerDraft.isNew ? await this.postRequest(`${this.$root.prefix}${path}`, this.providerPayload()) : await this.putRequest(`${this.$root.prefix}${path}`, this.providerPayload())
+        const payload = this.providerPayload({ includeModels })
+        const response = this.providerDraft.isNew ? await this.postRequest(`${this.$root.prefix}${path}`, payload) : await this.putRequest(`${this.$root.prefix}${path}`, payload)
         if (!response.suc) throw new Error(response.info)
         const name = this.providerDraft.name.trim(); this.applyConfiguration(response.data, name); await this.handleAiApply(response)
-      } catch (error) { this.captureOperationError(error, "服务商保存失败。") }
+        return true
+      } catch (error) { this.captureOperationError(error, "服务商保存失败。"); return false }
       finally { this.saving = "" }
     },
     async removeProvider() {
@@ -328,7 +331,7 @@ export default {
       const resultKey = this.selectedProviderName || "__new__"
       try {
         const temporaryKey = this.providerDraft.api_key_slots.find((slot) => slot.value)?.value || null
-        const response = await this.postRequest(`${this.$root.prefix}/ai/providers/discover`, { provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base, api_key: temporaryKey }, { suppressErrorToast: true })
+        const response = await this.postRequest(`${this.$root.prefix}/ai/providers/discover`, { provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base, api_key: temporaryKey }, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
         this.$set(this.providerProbeResults, resultKey, { success: true, message: `连接成功，发现 ${response.data.models?.length || 0} 个模型，耗时 ${response.data.latency_ms || 0} ms。` })
         this.discoveredModels = response.data.models || []; this.selectedDiscovered = []; this.discoveryDialog = true
@@ -350,7 +353,23 @@ export default {
       }
       return states[provider.discovery_status] || { label: "状态待确认", type: "info" }
     },
-    addDiscoveredModels() { const exists = new Set(this.providerDraft.models.map((item) => item.model_name)); let added = 0; this.selectedDiscovered.forEach((name) => { if (!exists.has(name)) { this.providerDraft.models.push({ ...emptyModel(), model_name: name }); exists.add(name); added += 1 } }); this.modelsDirty = this.modelsDirty || added > 0; if (added) this.invalidateProbeResults(); this.discoveryDialog = false; this.syncDirty() },
+    async addDiscoveredModels() {
+      const exists = new Set(this.providerDraft.models.map((item) => item.model_name))
+      let added = 0
+      this.selectedDiscovered.forEach((name) => {
+        if (!exists.has(name)) {
+          this.providerDraft.models.push({ ...emptyModel(), model_name: name })
+          exists.add(name); added += 1
+        }
+      })
+      this.modelsDirty = this.modelsDirty || added > 0
+      if (added) this.invalidateProbeResults()
+      this.syncDirty()
+      const saved = await this.saveProvider({ includeModels: true, savingKey: "discovered-models" })
+      if (!saved) return
+      this.discoveryDialog = false
+      this.selectedDiscovered = []
+    },
     openModelEditor(model = null, index = null) { this.modelDraft = model ? { ...clone(model), capabilities: undefined } : emptyModel(); this.modelEditIndex = index; this.modelDialog = true },
     confirmModel() { if (!this.modelDraft.model_name.trim()) return this.$message.warning("请填写模型名称。"); const value = { ...this.modelDraft, model_name: this.modelDraft.model_name.trim() }; delete value.capabilities; if (this.modelEditIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.modelEditIndex, 1, value); this.modelsDirty = true; this.invalidateProbeResults(); this.modelDialog = false; this.syncDirty() },
     modelIndex(model) { return this.providerDraft.models.findIndex((item) => item === model || item.model_name === model.model_name) },
