@@ -505,14 +505,35 @@
         </section>
         <section v-if="startupDegradedReasons.length" class="startup-report-section">
           <h3>降级原因</h3>
-          <div
+          <article
             v-for="reason in startupDegradedReasons"
             :key="`${reason.stage}-${reason.source_type}-${reason.source_id}-${reason.code}`"
-            class="startup-operation-row"
+            class="startup-diagnostic"
           >
-            <span>{{ degradedReasonLabel(reason) }}</span>
-            <strong class="is-failed">{{ reason.code }}</strong>
-          </div>
+            <div class="startup-diagnostic-heading">
+              <strong>{{ degradedReasonLabel(reason) }}</strong>
+              <time>{{ formatDiagnosticTime(reason.occurred_at) }}</time>
+            </div>
+            <code>{{ reason.code }}</code>
+            <template v-if="diagnosticFor(reason)">
+              <p>
+                <strong>{{ diagnosticFor(reason).error_type }}</strong>
+                {{ diagnosticFor(reason).summary }}
+              </p>
+              <small v-if="diagnosticDetail(diagnosticFor(reason))">
+                {{ diagnosticDetail(diagnosticFor(reason)) }}
+              </small>
+            </template>
+            <div v-if="reason.diagnostic_id" class="startup-diagnostic-id">
+              <span>{{ reason.diagnostic_id }}</span>
+              <el-button
+                type="text"
+                size="mini"
+                icon="el-icon-document-copy"
+                @click="copyDiagnosticId(reason.diagnostic_id)"
+              >复制诊断ID</el-button>
+            </div>
+          </article>
         </section>
         <section v-if="lifecycleStatus.process" class="startup-report-section">
           <h3>运行健康</h3>
@@ -722,6 +743,12 @@ export default {
     startupDegradedReasons() {
       return this.startupReport.degraded_reasons || this.startupStatus.degraded_reasons || []
     },
+    startupDiagnosticMap() {
+      return (this.startupReport.diagnostics || []).reduce((result, diagnostic) => {
+        result[diagnostic.diagnostic_id] = diagnostic
+        return result
+      }, {})
+    },
     lifecycleReadyCount() {
       const states = this.lifecycleStatus.state_counts || {}
       return Number(states.ready || 0)
@@ -793,6 +820,37 @@ export default {
     degradedReasonLabel(reason) {
       const source = reason.display_name || reason.source_id || "未知来源"
       return `${this.startupStageLabel(reason.stage)} · ${source}`
+    },
+    diagnosticFor(reason) {
+      return this.startupDiagnosticMap[reason.diagnostic_id] || null
+    },
+    diagnosticDetail(diagnostic) {
+      const details = diagnostic?.details || {}
+      if (details.filename) {
+        const position = [details.line, details.column].filter(Boolean).join(":")
+        return `${details.filename}${position ? ` · ${position}` : ""}`
+      }
+      if (details.fields?.length) return `字段：${details.fields.join("、")}`
+      return ""
+    },
+    formatDiagnosticTime(value) {
+      if (!value) return ""
+      try { return new Date(value).toLocaleString("zh-CN", { hour12: false }) } catch (error) { return value }
+    },
+    async copyDiagnosticId(value) {
+      try {
+        await navigator.clipboard.writeText(value)
+      } catch (error) {
+        const input = document.createElement("textarea")
+        input.value = value
+        input.style.position = "fixed"
+        input.style.opacity = "0"
+        document.body.appendChild(input)
+        input.select()
+        document.execCommand("copy")
+        input.remove()
+      }
+      this.$message.success("诊断ID已复制")
     },
     async loadStartupStatus() {
       if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
@@ -1371,6 +1429,75 @@ export default {
   font-size: 13px;
 }
 
+.startup-diagnostic {
+  min-width: 0;
+  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid var(--danger-color);
+  border-radius: 6px;
+  background: var(--bg-color);
+}
+
+.startup-diagnostic-heading,
+.startup-diagnostic-id {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.startup-diagnostic-heading strong,
+.startup-diagnostic p,
+.startup-diagnostic code,
+.startup-diagnostic-id span {
+  overflow-wrap: anywhere;
+}
+
+.startup-diagnostic-heading strong {
+  color: var(--text-color);
+  font-size: 13px;
+}
+
+.startup-diagnostic-heading time,
+.startup-diagnostic-id {
+  color: var(--text-color-secondary);
+  font-size: 11px;
+}
+
+.startup-diagnostic > code {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--danger-color);
+  font-size: 12px;
+}
+
+.startup-diagnostic p {
+  margin: 8px 0 0;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.startup-diagnostic small {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  color: var(--text-color-secondary);
+  font-size: 11px;
+}
+
+.startup-diagnostic p strong {
+  margin-right: 5px;
+  color: var(--text-color);
+}
+
+.startup-diagnostic-id {
+  margin-top: 8px;
+  border-top: 1px solid var(--border-color-light);
+  padding-top: 6px;
+}
+
 ::v-deep .el-menu-item:hover {
   background-color: var(--bg-color-hover) !important;
 }
@@ -1414,6 +1541,7 @@ export default {
 @media (max-width: 768px) {
   .app-header { min-height: 58px; padding: 10px 12px; }
   .brand-area { height: 84px; }
+  .startup-diagnostic-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
 }
 </style>
 

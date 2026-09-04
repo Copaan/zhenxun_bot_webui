@@ -35,7 +35,7 @@ export async function requestRestartWithRecovery(vm, { request, recovery }) {
         recovery.accessTargets?.length
           ? recovery.accessTargets
           : response.data.access_targets || [],
-      preferredUrl: recovery.preferredUrl || "",
+      preferredUrl: recovery.preferredUrl || response.data.preferred_url || "",
       policy: recovery.policy || "preserve",
       returnRoute: recovery.returnRoute,
       message: recovery.message,

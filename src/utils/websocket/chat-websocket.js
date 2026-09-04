@@ -5,6 +5,7 @@ import {
   createAuthenticatedWebSocket,
   emitWebSocketState,
   handleAuthenticatedWebSocketClose,
+  safeWebSocketSend,
 } from "./create-websocket"
 
 var ws = null
@@ -14,9 +15,7 @@ var reconnectEnabled = true
 
 function startHeartbeat() {
   heartbeatInterval = setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send("ping") // 发送心跳消息
-    }
+    safeWebSocketSend(ws, "ping")
   }, 5000)
 }
 

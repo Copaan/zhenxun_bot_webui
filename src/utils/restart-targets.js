@@ -96,7 +96,5 @@ export function buildRestartTargets({
     }
   }
 
-  returnedTargets.forEach((target) => pushUnique(targets, seen, target))
-  pushUnique(targets, seen, currentTarget)
   return targets
 }

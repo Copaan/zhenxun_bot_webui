@@ -14,7 +14,12 @@ const normalizeBaseUrl = (value) => {
 
 const targetKind = (url) => {
   const hostname = url.hostname.toLowerCase()
-  return ["localhost", "127.0.0.1", "::1"].includes(hostname)
+  return (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "::1" ||
+    /^127(?:\.\d{1,3}){3}$/.test(hostname)
+  )
     ? "local"
     : "network"
 }
@@ -35,18 +40,20 @@ const choosePreferredOrigin = ({ policy, preferredUrl, targets, currentOrigin })
   const current = normalizeBaseUrl(currentOrigin)
   const validOrigins = uniqueTargets(targets.map((target) => target.url))
   const explicit = normalizeBaseUrl(preferredUrl)
+  const eligibleExplicit = explicit && validOrigins.includes(explicit) ? explicit : null
   if (policy === "preserve" && current) {
-    if (explicit) {
-      const currentUrl = new URL(current)
-      const explicitUrl = new URL(explicit)
-      if (
-        currentUrl.protocol !== explicitUrl.protocol ||
-        currentUrl.port !== explicitUrl.port
-      ) return explicit
-    }
+    const currentHostname = new URL(current).hostname.toLowerCase()
+    if (
+      eligibleExplicit &&
+      new URL(eligibleExplicit).hostname.toLowerCase() === currentHostname
+    ) return eligibleExplicit
+    const sameHost = validOrigins.find(
+      (origin) => new URL(origin).hostname.toLowerCase() === currentHostname
+    )
+    if (sameHost) return sameHost
     if (validOrigins.includes(current)) return current
   }
-  if (explicit) return explicit
+  if (eligibleExplicit) return eligibleExplicit
   const wantedKind = policy === "local" ? "local" : policy === "network" ? "network" : null
   if (wantedKind) {
     const matched = targets.find((target) => {
@@ -58,7 +65,7 @@ const choosePreferredOrigin = ({ policy, preferredUrl, targets, currentOrigin })
     })
     if (matched) return normalizeBaseUrl(matched.url)
   }
-  return normalizeBaseUrl(targets[0]?.url) || current
+  return normalizeBaseUrl(targets[0]?.url) || null
 }
 
 export const restartRecoveryState = () => {
@@ -70,20 +77,29 @@ export const restartRecoveryState = () => {
     const value = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY) || "null")
     if (!value || !value.bootId || !Array.isArray(value.accessUrls)) return null
     const policy = value.policy || (value.setup ? "legacy-setup" : "preserve")
+    const sourceOrigin = normalizeBaseUrl(value.sourceOrigin) || window.location.origin
+    const preferredKind = value.preferredKind || targetKind(new URL(sourceOrigin))
     const available = uniqueTargets(value.accessUrls)
+    const automatic = available.filter(
+      (url) => targetKind(new URL(url)) === preferredKind
+    )
     const preferredOrigin = choosePreferredOrigin({
       policy,
       preferredUrl: value.preferredOrigin,
-      targets: available.map((url) => ({ url })),
-      currentOrigin: window.location.origin,
+      targets: automatic.map((url) => ({ url })),
+      currentOrigin: sourceOrigin,
     })
     return {
       ...value,
       policy,
+      sourceOrigin,
+      preferredKind,
       preferredOrigin,
       fallbackUrls: Array.isArray(value.fallbackUrls)
-        ? uniqueTargets(value.fallbackUrls)
-        : value.accessUrls.filter((url) => normalizeBaseUrl(url) !== preferredOrigin),
+        ? uniqueTargets(value.fallbackUrls).filter(
+            (url) => targetKind(new URL(url)) === preferredKind
+          )
+        : automatic.filter((url) => normalizeBaseUrl(url) !== preferredOrigin),
     }
   } catch (error) {
     return null
@@ -100,24 +116,36 @@ export const startRestartRecovery = ({
   message = "配置将在新进程中生效。",
   setup = false,
 }) => {
+  const sourceOrigin = normalizeBaseUrl(window.location.origin)
+  const sourceKind = targetKind(new URL(sourceOrigin))
+  const preferredKind =
+    policy === "local" ? "local" : policy === "network" ? "network" : sourceKind
   const targets = [
     ...accessTargets,
     ...accessUrls.map((url) => ({ url })),
   ].filter((target) => normalizeBaseUrl(target?.url))
+  const automaticTargets = targets.filter(
+    (target) => targetKind(new URL(normalizeBaseUrl(target.url))) === preferredKind
+  )
   const preferredOrigin = choosePreferredOrigin({
     policy,
     preferredUrl,
-    targets,
-    currentOrigin: window.location.origin,
+    targets: automaticTargets,
+    currentOrigin: sourceOrigin,
   })
   const urls = uniqueTargets([
     preferredOrigin,
     ...targets.map((target) => target.url),
   ])
+  const automaticUrls = urls.filter(
+    (url) => targetKind(new URL(url)) === preferredKind
+  )
   const state = {
     bootId,
-    preferredOrigin: preferredOrigin || urls[0],
-    fallbackUrls: urls.filter((url) => url !== preferredOrigin),
+    sourceOrigin,
+    preferredKind,
+    preferredOrigin: preferredOrigin || automaticUrls[0],
+    fallbackUrls: automaticUrls.filter((url) => url !== preferredOrigin),
     accessUrls: urls,
     policy,
     returnRoute: returnRoute.startsWith("/") ? returnRoute : `/${returnRoute}`,
