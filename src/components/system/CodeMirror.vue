@@ -231,9 +231,11 @@ export default {
         const json = JSON.parse(this.editor.getValue())
         const formatted = JSON.stringify(json, null, 2)
         this.editor.setValue(formatted)
-        this.$emit('formatted')
+        this.$emit("formatted")
+        return true
       } catch (e) {
-        this.$emit('format-error', e)
+        this.$emit("format-error", e)
+        return false
       }
     },
 

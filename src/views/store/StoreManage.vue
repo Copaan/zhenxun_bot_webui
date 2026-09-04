@@ -25,7 +25,10 @@ export default {
     source(value) {
       const query = { ...this.$route.query, source: value }
       if (value !== "nonebot") delete query.search
-      this.$router.replace({ path: "/store", query }).catch(() => {})
+      const navigation = this.$router.replace({ path: "/store", query })
+      if (navigation && typeof navigation.catch === "function") {
+        navigation.catch(() => {})
+      }
     },
   },
 }

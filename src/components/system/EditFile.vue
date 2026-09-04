@@ -193,7 +193,18 @@ export default {
     clearDirtyState(this.dirtySource)
   },
   methods: {
+    validateContent() {
+      if (this.language !== "json") return true
+      try {
+        JSON.parse(this.editorContent)
+        return true
+      } catch (error) {
+        this.$message.error(`JSON语法错误：${error.message}`)
+        return false
+      }
+    },
     handleSave() {
+      if (!this.validateContent()) return
       const loading = this.getLoading(".kawaii-dialog")
       this.postRequest(`${this.$root.prefix}/system/save_file`, {
         full_path: this.filePath,
@@ -284,8 +295,11 @@ export default {
 
     handleFormat() {
       if (this.language === "json") {
-        this.$refs.editor.formatJson()
-        this.$message.success("JSON格式化完成！")
+        if (this.$refs.editor.formatJson()) {
+          this.$message.success("JSON格式化完成！")
+        } else {
+          this.$message.error("JSON语法错误，无法格式化。")
+        }
       } else {
         this.$message.info("当前文件类型不支持格式化")
       }

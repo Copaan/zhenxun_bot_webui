@@ -10,6 +10,15 @@
           backgroundColor: 'var(--bg-color-secondary)',
         }"
       >
+        <button
+          v-if="isMobile && asideShow"
+          type="button"
+          class="mobile-sidebar-close md:hidden"
+          aria-label="关闭导航菜单"
+          @click="toggleMenu"
+        >
+          <i class="el-icon-close"></i>
+        </button>
         <div class="flex flex-col h-full overflow-hidden">
           <!-- 顶部内容 -->
           <div class="flex-1 overflow-y-auto">
@@ -391,7 +400,7 @@
         <div class="startup-report-row">
           <span>运行模式</span>
           <strong :class="{ 'is-failed': startupOperatingMode === 'management_only' }">
-            {{ startupOperatingMode === "management_only" ? "仅管理面" : "正常" }}
+            {{ startupOperatingMode === "management_only" ? "仅管理面" : startupOperatingMode === "setup_only" ? "首次配置" : "正常" }}
           </strong>
         </div>
         <div class="startup-report-row">
@@ -678,6 +687,7 @@ export default {
     },
     startupSummary() {
       const state = this.startupStatus.state || "starting"
+      if (this.startupStatus.operating_mode === "setup_only") return { status: "warning", label: "等待配置", detail: "首次配置尚未完成，Bot运行时和数据库暂未启动" }
       if (state === "warmup_ready") return { status: "ok", label: "全部就绪", detail: "运行时、渲染与AI预热均已完成" }
       if (state === "runtime_ready") return { status: "warning", label: "服务预热", detail: "Bot运行时已就绪，渲染与AI服务正在预热" }
       if (state === "degraded") {
@@ -702,7 +712,7 @@ export default {
         const stage = stages[key] || { state: "pending", duration_ms: null }
         const value = stage.state === "completed"
           ? this.formatDuration(stage.duration_ms)
-          : stage.state === "failed" ? "失败" : stage.state === "running" ? "进行中" : "等待"
+          : stage.state === "failed" ? "失败" : stage.state === "running" ? "进行中" : stage.state === "skipped" ? "待首次配置" : "等待"
         return { key, label: labels[key], state: stage.state, value }
       })
     },
@@ -1127,6 +1137,21 @@ export default {
 .app-sidebar {
   border-right: 1px solid var(--border-color);
   box-shadow: 4px 0 18px rgba(20, 24, 31, 0.04);
+}
+
+.mobile-sidebar-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-color-secondary);
+  background: var(--bg-color);
 }
 
 .brand-area {
