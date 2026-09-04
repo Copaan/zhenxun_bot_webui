@@ -4,14 +4,20 @@ on:
   push:
     branches: ["main"]
 
+# 赋予 GitHub Action 推送代码所需的写入权限
+permissions:
+  contents: write
+
 jobs:
   main:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 升级到 Node 20 以满足 sass 的依赖要求
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.19.0"
+          node-version: "20"
 
       - name: Install and Build
         run: |
