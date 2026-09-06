@@ -17,8 +17,19 @@
               <el-form-item v-for="field in group.fields" :key="field.key" :label="field.label">
                 <el-switch v-if="field.type === 'switch'" v-model="envFields[field.key]" :disabled="fieldDisabled(field)" />
                 <el-input-number v-else-if="field.type === 'number'" v-model="envFields[field.key]" :min="1" :max="65535" controls-position="right" class="full-control" :disabled="fieldDisabled(field)" />
+                <el-radio-group v-else-if="field.type === 'http-mode'" v-model="envFields[field.key]" size="small" :disabled="fieldDisabled(field)">
+                  <el-radio-button v-for="option in field.options" :key="option.value" :label="option.value">{{ option.label }}</el-radio-button>
+                </el-radio-group>
                 <el-input v-else v-model="envFields[field.key]" :placeholder="field.placeholder" :disabled="fieldDisabled(field)" />
                 <div class="field-help">{{ field.help }}</div>
+                <el-alert
+                  v-if="field.key === 'WEBUI_HTTP_MODE' && envFields.WEBUI_HTTPS_ENABLED && envFields.WEBUI_HTTP_MODE === 'serve'"
+                  class="plaintext-warning"
+                  title="HTTP入口为明文传输，登录凭据和管理数据可能被同网段设备截获，请优先使用HTTPS。"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                />
                 <el-tag size="mini" :type="effectMeta(envFieldEffects[field.key]).type">{{ effectMeta(envFieldEffects[field.key]).label }}</el-tag>
               </el-form-item>
             </div>
@@ -121,8 +132,8 @@ export default {
         { key: "WEBUI_HTTPS_ENABLED", label: "启用 HTTPS", type: "switch", help: "使用用户提供的可信 PEM 证书和私钥，需要重启生效。" },
         { key: "WEBUI_TLS_CERTFILE", label: "TLS 证书路径", placeholder: "C:\\certs\\fullchain.pem", dependsOn: "WEBUI_HTTPS_ENABLED", help: "证书 PEM 的绝对路径，保存时会检查有效期及密钥匹配。" },
         { key: "WEBUI_TLS_KEYFILE", label: "TLS 私钥路径", placeholder: "C:\\certs\\privkey.pem", dependsOn: "WEBUI_HTTPS_ENABLED", help: "未加密私钥 PEM 的绝对路径。" },
-        { key: "WEBUI_HTTP_REDIRECT_ENABLED", label: "HTTP 自动跳转 HTTPS", type: "switch", dependsOn: "WEBUI_HTTPS_ENABLED", launcherOnly: true, help: "由 launcher 启动独立 HTTP 服务并使用 308 保留原路径跳转。" },
-        { key: "WEBUI_HTTP_REDIRECT_PORT", label: "HTTP 跳转端口", type: "number", dependsOn: "WEBUI_HTTP_REDIRECT_ENABLED", launcherOnly: true, placeholder: "80", help: "必须与 HTTPS 端口及 QQ Webhook HTTPS 端口不同。" },
+        { key: "WEBUI_HTTP_MODE", label: "HTTP兼容入口", type: "http-mode", dependsOn: "WEBUI_HTTPS_ENABLED", launcherOnly: true, options: [{ value: "serve", label: "完整访问" }, { value: "redirect", label: "跳转HTTPS" }, { value: "disabled", label: "关闭" }], help: "完整访问由launcher边车代理API、静态资源和WebSocket；边车异常不会中断HTTPS和Bot。" },
+        { key: "WEBUI_HTTP_REDIRECT_PORT", label: "HTTP兼容端口", type: "number", dependsOn: "WEBUI_HTTPS_ENABLED", httpModeRequired: true, launcherOnly: true, placeholder: "80", help: "默认80；端口冲突时HTTPS继续运行，HTTP入口进入降级并自动重试。" },
         { key: "LOG_LEVEL", label: "日志等级", placeholder: "INFO", help: "常用值为 DEBUG、INFO、WARNING。" },
         { key: "SYSTEM_PROXY", label: "系统代理", placeholder: "http://127.0.0.1:7890", help: "留空表示不使用代理。" },
         { key: "NICKNAME", label: "机器人昵称", placeholder: "[\"真寻\"]", help: "使用 dotenv 支持的列表格式。" },
@@ -141,7 +152,7 @@ export default {
   computed: {
     envFieldGroups() {
       return [
-        { title: "WebUI 访问与 HTTPS", description: "配置监听地址、端口、TLS 证书和可选的 HTTP 308 跳转。", fields: this.envFieldDefinitions.slice(0, 7) },
+        { title: "WebUI 访问与 HTTPS", description: "配置HTTPS主入口及独立的HTTP兼容访问模式。", fields: this.envFieldDefinitions.slice(0, 7) },
         { title: "机器人运行环境", description: "配置日志、代理、昵称、权限和插件加载路径。", fields: this.envFieldDefinitions.slice(7) },
       ]
     },
@@ -190,6 +201,13 @@ export default {
   methods: {
     normalizedEnvFields(fields) {
       const result = { ...fields }
+      if (!["serve", "redirect", "disabled"].includes(result.WEBUI_HTTP_MODE)) {
+        result.WEBUI_HTTP_MODE = [true, "true", "1", "yes", "on"].includes(
+          typeof result.WEBUI_HTTP_REDIRECT_ENABLED === "string"
+            ? result.WEBUI_HTTP_REDIRECT_ENABLED.toLowerCase()
+            : result.WEBUI_HTTP_REDIRECT_ENABLED
+        ) ? "redirect" : "serve"
+      }
       this.envFieldDefinitions.forEach((field) => {
         if (field.type === "switch") result[field.key] = [true, "true", "1", "yes", "on"].includes(typeof result[field.key] === "string" ? result[field.key].toLowerCase() : result[field.key])
         if (field.type === "number") result[field.key] = Number(result[field.key] || (field.key === "WEBUI_HTTP_REDIRECT_PORT" ? 80 : 8080))
@@ -211,7 +229,13 @@ export default {
     normalizeCustomEnv(items) {
       return (items || []).map((item) => ({ ...item, clientId: `env-${++this.customEnvSequence}`, value: item.value || "", replacing: false, deleted: false, isNew: false }))
     },
-    fieldDisabled(field) { return Boolean((field.dependsOn && !this.envFields[field.dependsOn]) || (field.launcherOnly && !this.launcherManaged && !(field.type === "switch" && this.envFields[field.key]))) },
+    fieldDisabled(field) {
+      return Boolean(
+        (field.dependsOn && !this.envFields[field.dependsOn]) ||
+        (field.httpModeRequired && this.envFields.WEBUI_HTTP_MODE === "disabled") ||
+        (field.launcherOnly && !this.launcherManaged)
+      )
+    },
     normalizeGroups(groups) {
       return (groups || []).filter((group) => group.module !== "AI").map((group) => ({ ...group, fields: group.fields.map((field) => ({ ...field })) }))
     },
@@ -351,6 +375,7 @@ export default {
 <style scoped>
 .configuration-center { min-height: 420px; }.configuration-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }.configuration-toolbar h2 { margin: 0; font-size: 20px; }.configuration-toolbar p { margin: 5px 0 0; color: var(--text-color-secondary); }
 .env-form { display: flex; flex-direction: column; gap: 18px; }.env-field-group { padding: 16px 18px 2px; border: 1px solid var(--border-color); border-radius: 8px; }.env-field-group > header { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color-light); }.env-field-group h3 { margin: 0; font-size: 16px; }.env-field-group header p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 12px; }.env-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.field-help { margin-top: 5px; color: var(--text-color-secondary); font-size: 12px; line-height: 1.5; }.plugin-config-workbench { display: grid; height: clamp(360px, calc(100vh - 370px), 680px); grid-template-columns: 230px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-color); border-radius: 8px; }.config-groups { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 14px; overflow-y: auto; border-right: 1px solid var(--border-color); }.config-groups .el-input { margin-bottom: 8px; }.config-groups button { display: flex; min-height: 54px; flex-direction: column; justify-content: center; padding: 7px 9px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.config-groups button:hover { background: var(--bg-color-hover); }.config-groups button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.config-groups button strong, .config-groups button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.config-groups button span { margin-top: 3px; color: var(--text-color-secondary); font-size: 11px; }.current-config-group { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 18px 20px 0; }.config-form-scroll { min-height: 0; flex: 1; padding-right: 5px; overflow-y: auto; }.group-heading { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color-light); }.group-heading h3 { margin: 0; font-size: 18px; }.group-heading p { margin: 4px 0 0; color: var(--text-color-secondary); font-size: 12px; }.group-empty, .current-config-empty { color: var(--text-color-secondary); text-align: center; }.group-empty { padding: 24px 4px; }.current-config-empty { display: grid; place-content: center; }.current-config-empty i { font-size: 36px; }.sensitive-placeholder { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 11px; border: 1px dashed var(--border-color); border-radius: 5px; color: var(--text-color-secondary); }
+.plaintext-warning { margin: 8px 0; }
 .action-bar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color-secondary); }.config-action-bar { position: static; flex: none; margin-top: 8px; }.action-bar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.raw-switch { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 10px; }.raw-editor ::v-deep textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; line-height: 1.55; }.inline-error { margin-top: 8px; color: var(--el-color-danger); }
 .validation-issues { margin: 10px 0 0; padding: 10px 14px 10px 34px; border: 1px solid rgba(224,82,96,.35); border-radius: 6px; color: var(--danger-color); background: rgba(224,82,96,.06); }.validation-issues li { margin: 4px 0; line-height: 1.55; }.validation-issues code { margin-right: 8px; }
 .custom-env-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }.custom-env-list { display: flex; flex-direction: column; gap: 10px; padding-bottom: 16px; }.custom-env-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(220px, 1.4fr) auto auto auto; align-items: center; gap: 9px; }.custom-env-row.deleted { opacity: .58; }.secret-configured { display: flex; min-height: 40px; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color-secondary); }.custom-env-empty { padding: 8px 0 20px; color: var(--text-color-secondary); text-align: center; }

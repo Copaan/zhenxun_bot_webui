@@ -1,4 +1,8 @@
-import { getBaseUrl, getCookie } from "@/utils/api"
+import {
+  getBaseUrl,
+  getCookie,
+  syncApiWithBrowserLocation,
+} from "@/utils/api"
 import { handleAuthenticationExpired } from "@/utils/auth-session"
 
 export const AUTH_EXPIRED_CLOSE_CODE = 4401
@@ -30,7 +34,12 @@ export const emitWebSocketState = (channel, status) => {
 }
 
 export const createAuthenticatedWebSocket = (path) => {
-  const url = new URL(getBaseUrl())
+  let url = new URL(getBaseUrl())
+  if (window.location.protocol === "https:" && url.protocol !== "https:") {
+    syncApiWithBrowserLocation()
+    emitWebSocketState(path, "mixed-content-address-reset")
+    url = new URL(getBaseUrl())
+  }
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   url.pathname = path
   url.search = ""

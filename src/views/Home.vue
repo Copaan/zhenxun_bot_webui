@@ -199,7 +199,7 @@
 
           <!-- 右侧功能区 -->
           <div class="flex items-center space-x-4">
-            <el-tooltip :content="startupSummary.detail" placement="bottom">
+            <el-tooltip :content="startupSummary.detail" placement="bottom" :disabled="startupDrawerVisible">
               <button
                 type="button"
                 class="startup-status"
@@ -454,6 +454,10 @@
             <span>当前变更</span>
             <strong>{{ lifecycleStatus.current_mutation?.kind || "无" }}</strong>
           </div>
+          <div v-if="lifecycleStatus.current_mutation?.phase" class="startup-report-row">
+            <span>事务阶段</span>
+            <strong>{{ lifecycleStatus.current_mutation.phase }}</strong>
+          </div>
           <div class="startup-report-row">
             <span>活动作用域</span>
             <strong>{{ lifecycleStatus.active_scope_count || 0 }}</strong>
@@ -463,8 +467,8 @@
             <strong>{{ lifecycleStatus.operation_registry?.active_count || 0 }}</strong>
           </div>
           <div class="startup-report-row">
-            <span>所有权覆盖</span>
-            <strong>{{ lifecycleStatus.ownership?.coverage_percent ?? 100 }}%</strong>
+            <span>已观测资源归属率</span>
+            <strong>{{ lifecycleStatus.ownership?.coverage_percent == null ? "未知" : `${lifecycleStatus.ownership.coverage_percent}%` }}</strong>
           </div>
           <div class="startup-report-row">
             <span>文件监听</span>
@@ -473,6 +477,40 @@
               {{ lifecycleStatus.plugin_runtime?.watcher?.state || "未知" }}
             </strong>
           </div>
+          <template v-if="lifecycleStatus.http_sidecar?.mode">
+            <div class="startup-report-row">
+              <span>HTTP兼容入口</span>
+              <strong>
+                {{ lifecycleStatus.http_sidecar.mode }} /
+                {{ lifecycleStatus.http_sidecar.state || "未知" }}
+              </strong>
+            </div>
+            <div class="startup-report-row">
+              <span>边车 PID / 端口</span>
+              <strong>
+                {{ lifecycleStatus.http_sidecar.pid || "-" }} /
+                {{ lifecycleStatus.http_sidecar.port || "-" }}
+              </strong>
+            </div>
+            <div class="startup-report-row">
+              <span>边车连接 / 转发失败</span>
+              <strong>
+                {{ lifecycleStatus.http_sidecar.active_connections || 0 }} /
+                {{ lifecycleStatus.http_sidecar.proxy_failures || 0 }}
+              </strong>
+            </div>
+            <div class="startup-report-row">
+              <span>流式截断 / 排空耗时</span>
+              <strong>{{ lifecycleStatus.http_sidecar.stream_truncations || 0 }} / {{ lifecycleStatus.http_sidecar.drain_seconds ?? "-" }} s</strong>
+            </div>
+            <div v-if="lifecycleStatus.http_sidecar.drain_timed_out" class="startup-failures">HTTP边车排空超时</div>
+            <div v-if="lifecycleStatus.http_sidecar.last_error" class="startup-failures">
+              HTTP兼容入口：{{ lifecycleStatus.http_sidecar.last_error }}
+            </div>
+            <div v-if="lifecycleStatus.http_sidecar.mode === 'serve'" class="startup-failures">
+              HTTP兼容入口使用明文传输，请优先通过HTTPS管理真寻。
+            </div>
+          </template>
           <div
             v-if="lifecycleStatus.ownership?.unowned_resource_count"
             class="startup-failures"
@@ -484,6 +522,22 @@
           </div>
           <div v-if="lifecycleUnhealthyComponents.length" class="startup-failures">
             {{ lifecycleUnhealthyComponents.join("、") }}
+          </div>
+          <div v-if="lifecycleStatus.plugin_runtime?.integrity_recovery_required?.length" class="startup-failures">
+            插件入口已冻结：{{ lifecycleStatus.plugin_runtime.integrity_recovery_required.join("、") }}
+          </div>
+          <article v-for="(failure, index) in lifecycleStopFailures" :key="`stop-${index}`" class="startup-diagnostic">
+            <strong>{{ failure.owner }}</strong>
+            <p>关闭阶段：{{ failure.stage }}</p>
+            <code>{{ failure.error_code }}</code>
+          </article>
+          <article v-for="(resource, index) in lifecycleStatus.unresolved_resources || []" :key="`resource-${index}`" class="startup-diagnostic">
+            <strong>{{ resource.owner_id }}</strong>
+            <p>未确认释放：{{ resource.provider }} / {{ resource.resource_type }}</p>
+            <code>{{ resource.error_code || resource.state }}</code>
+          </article>
+          <div v-for="(task, index) in lifecycleStatus.cleanup_tasks || []" :key="`cleanup-${index}`" class="startup-failures">
+            清理任务：{{ task.owner }} / {{ task.stage }} / {{ task.state }}
           </div>
           <div v-if="sharedDependencyConflicts.length" class="startup-failures">
             共享依赖冲突：{{ sharedDependencyConflicts.join("、") }}
@@ -553,6 +607,33 @@
             <span>事件循环延迟</span>
             <strong>{{ formatDuration(lifecycleStatus.process.event_loop_lag_ms) }}</strong>
           </div>
+          <template v-if="lifecycleStatus.transport">
+            <div class="startup-report-row">
+              <span>HTTP / WebSocket 重置</span>
+              <strong>
+                {{ lifecycleStatus.transport.http_reset_count || 0 }} /
+                {{ lifecycleStatus.transport.websocket_reset_count || 0 }}
+              </strong>
+            </div>
+            <div class="startup-report-row">
+              <span>Proactor 关闭重置</span>
+              <strong>{{ lifecycleStatus.transport.proactor_close_reset_count || 0 }}</strong>
+            </div>
+            <div class="startup-report-row">
+              <span>预排空连接</span>
+              <strong>{{ lifecycleStatus.transport.predrained_connection_count || 0 }}</strong>
+            </div>
+            <div
+              v-if="lifecycleStatus.transport.unclassified_windows_reset_count"
+              class="startup-failures"
+            >
+              未分类 Windows 重置：
+              {{ lifecycleStatus.transport.unclassified_windows_reset_count }}
+              <template v-if="lifecycleStatus.transport.last_unclassified_reset?.diagnostic_id">
+                · {{ lifecycleStatus.transport.last_unclassified_reset.diagnostic_id }}
+              </template>
+            </div>
+          </template>
           <template v-if="launcherWorkerProcess">
             <div class="startup-report-row">
               <span>Worker spawn PID</span>
@@ -575,6 +656,20 @@
             <span>{{ operationLabel(operation) }}</span>
             <strong>{{ formatDuration(operation.duration_ms) }}</strong>
           </div>
+        </section>
+        <section v-if="lifecycleStatus.launcher?.process_history?.length" class="startup-report-section">
+          <h3>进程关闭记录</h3>
+          <article v-for="item in lifecycleStatus.launcher.process_history.slice(-6).reverse()" :key="item.startup_id" class="startup-diagnostic">
+            <strong>{{ item.role }}</strong>
+            <p>Spawn PID {{ item.spawn_pid || "-" }} / Runtime PID {{ item.runtime_pid || "-" }}</p>
+            <p>退出来源：{{ item.exit_reason || "未知" }}</p>
+            <code v-if="item.shutdown_id">{{ item.shutdown_id }}</code>
+            <p v-for="(stage, index) in item.stop_stages || []" :key="index">
+              {{ stage.stage }} · {{ formatDuration((stage.elapsed_seconds || 0) * 1000) }}
+              <span v-if="stage.timed_out"> · 预算耗尽</span>
+              <code v-if="stage.error_code">{{ stage.error_code }}</code>
+            </p>
+          </article>
         </section>
       </div>
     </el-drawer>
@@ -771,6 +866,14 @@ export default {
         .filter((component) => ["degraded", "failed"].includes(component.state))
         .slice(0, 8)
         .map((component) => component.component_id)
+    },
+    lifecycleStopFailures() {
+      return (this.lifecycleStatus.components || []).flatMap(component =>
+        (component.metadata?.stop_errors || []).map(failure => ({
+          owner: component.component_id,
+          ...failure,
+        }))
+      )
     },
     launcherWorkerProcess() {
       return (this.lifecycleStatus.launcher?.process_graph || [])

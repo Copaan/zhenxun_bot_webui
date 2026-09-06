@@ -108,7 +108,7 @@
       </div>
     </div>
 
-    <!-- 插件管理区域 -->
+    <!-- 插件策略摘要 -->
     <div
       class="plugin-section"
       :style="{
@@ -125,73 +125,30 @@
           class="mr-2"
           color="var(--primary-color-light)"
         />
-        Bot插件管理
+        插件策略
       </h3>
 
-      <div class="space-y-6">
-        <!-- 全局禁用被动 -->
-        <div
-          v-if="$store.state.botType == 'zhenxun'"
-          class="grid grid-cols-12 gap-4 items-center"
-        >
-          <label
-            class="col-span-3 text-xs"
-            :style="{ color: 'var(--text-color-secondary)' }"
-            >全局禁用被动</label
-          >
-          <div class="col-span-9">
-            <el-select
-              v-model="postData.blockTasks"
-              multiple
-              placeholder="请选择要禁用的被动"
-              class="w-full"
-              popper-class="cute-select-dropdown"
-            >
-              <el-option
-                v-for="v in botModuleData.blockTasks"
-                :label="v.name"
-                :value="v.module"
-                :key="v.module"
-              ></el-option>
-            </el-select>
-          </div>
+      <div class="policy-summary">
+        <div class="summary-row">
+          <span>当前模式</span>
+          <strong>{{ policySummary.modeLabel }}</strong>
         </div>
-
-        <!-- 全局禁用插件 -->
-        <div class="grid grid-cols-12 gap-4 items-center">
-          <label
-            class="col-span-3 text-xs"
-            :style="{ color: 'var(--text-color-secondary)' }"
-            >全局禁用插件</label
-          >
-          <div class="col-span-9">
-            <el-select
-              v-model="postData.blockPlugins"
-              multiple
-              placeholder="请选择要禁用的插件"
-              class="w-full"
-              popper-class="cute-select-dropdown"
-            >
-              <el-option
-                v-for="n in botModuleData.blockPlugins"
-                :label="n.name"
-                :value="n.module"
-                :key="n.module"
-              ></el-option>
-            </el-select>
-          </div>
+        <div class="summary-row">
+          <span>禁用插件</span>
+          <strong>{{ policySummary.pluginCount }}</strong>
         </div>
-
-        <!-- 应用按钮 -->
-        <button
-          @click="clickBotManage"
-          class="apply-button w-full py-2 text-white text-sm"
-          :style="{
-            background: 'var(--primary-color)',
-          }"
+        <div class="summary-row">
+          <span>禁用被动技能</span>
+          <strong>{{ policySummary.taskCount }}</strong>
+        </div>
+        <el-button
+          type="primary"
+          icon="el-icon-setting"
+          class="w-full"
+          @click="openPluginPolicy"
         >
-          应用设置
-        </button>
+          进入插件策略
+        </el-button>
       </div>
     </div>
   </div>
@@ -205,13 +162,10 @@ export default {
   components: { SvgIcon },
   data() {
     return {
-      botModuleData: {
-        blockPlugins: [],
-        blockTasks: [],
-      },
-      postData: {
-        blockPlugins: [],
-        blockTasks: [],
+      policySummary: {
+        modeLabel: "独立设置",
+        pluginCount: 0,
+        taskCount: 0,
       },
       botInfo: {},
       pluginSectionHeight: 0,
@@ -247,7 +201,7 @@ export default {
       var loading = this.getLoading(".left-info-container")
 
       this.postRequest(`${this.$root.prefix}/main/change_bot_status`, {
-        bot_id: this.botInfo.self_id,
+        bot_id: this.botInfo.storage_bot_id || this.botInfo.self_id,
         status: !this.botInfo.status,
       }).then((resp) => {
         if (resp.suc) {
@@ -268,16 +222,20 @@ export default {
       var loading = this.getLoading(".left-info-container")
 
       this.getRequest(`${this.$root.prefix}/main/get_bot_block_module`, {
-        bot_id: this.botInfo.self_id,
+        bot_id: this.botInfo.storage_bot_id || this.botInfo.self_id,
       }).then((resp) => {
         if (resp.suc) {
           if (resp.warning) {
             this.$message.warning(resp.warning)
           } else {
-            this.botModuleData.blockPlugins = resp.data.all_plugins
-            this.botModuleData.blockTasks = resp.data.all_tasks
-            this.postData.blockPlugins = resp.data.block_plugins
-            this.postData.blockTasks = resp.data.block_tasks
+            this.policySummary = {
+              modeLabel:
+                resp.data.policy_mode === "linked"
+                  ? resp.data.policy_name || "共享策略"
+                  : "独立设置",
+              pluginCount: resp.data.block_plugins.length,
+              taskCount: resp.data.block_tasks.length,
+            }
           }
         } else {
           this.$message.error(resp.info)
@@ -285,26 +243,9 @@ export default {
         loading.close()
       })
     },
-    clickBotManage() {
-      if (!this.botInfo.self_id) return
-      var loading = this.getLoading(".left-info-container")
-
-      this.postRequest(`${this.$root.prefix}/main/update_bot_manage`, {
-        bot_id: this.botInfo.self_id,
-        block_plugins: this.postData.blockPlugins,
-        block_tasks: this.postData.blockTasks,
-      }).then((resp) => {
-        if (resp.suc) {
-          if (resp.warning) {
-            this.$message.warning(resp.warning)
-          } else {
-            this.$message.success(resp.info)
-          }
-        } else {
-          this.$message.error(resp.info)
-        }
-        loading.close()
-      })
+    openPluginPolicy() {
+      const botId = this.botInfo.storage_bot_id || this.botInfo.self_id
+      this.$router.push({ path: "/plugin-policy", query: { bot_id: botId } })
     },
   },
 }
@@ -330,6 +271,27 @@ export default {
   border: 1px solid var(--border-color-light);
   border-radius: 8px;
   background: var(--bg-color-secondary);
+}
+
+.policy-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color-light);
+  color: var(--text-color-secondary);
+  font-size: 13px;
+}
+
+.summary-row strong {
+  color: var(--text-color);
+  font-weight: 600;
 }
 
 .avatar-section {

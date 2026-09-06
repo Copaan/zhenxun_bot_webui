@@ -290,7 +290,7 @@ export default {
       if (result) {
         const operationId = this.newOperationId()
         sessionStorage.setItem("zhenxun_plugin_operation", JSON.stringify({ operationId, action: "remove", pluginName: data.plugin_name }))
-        this.$store.commit("START_PLUGIN_OPERATION", { action: "remove", pluginName: data.plugin_name, title: "正在卸载插件", message: "请稍候，切换到其他页面不会中断当前操作。" })
+        this.$store.commit("START_PLUGIN_OPERATION", { action: "remove", pluginName: data.plugin_name, title: "正在卸载插件", message: "请稍后，插件正在卸载，请不要刷新页面" })
         try {
           const resp = await this.postRequest(`${this.$root.prefix}/store/remove_plugin`, {
             store_key: data.store_key,

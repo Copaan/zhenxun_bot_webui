@@ -331,7 +331,7 @@ export default {
       const resultKey = this.selectedProviderName || "__new__"
       try {
         const temporaryKey = this.providerDraft.api_key_slots.find((slot) => slot.value)?.value || null
-        const response = await this.postRequest(`${this.$root.prefix}/ai/providers/discover`, { provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base, api_key: temporaryKey }, { suppressErrorToast: true })
+        const response = await this.postRequest(`${this.$root.prefix}/ai/providers/discover`, { expected_revision: this.revision, provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base, api_key: temporaryKey }, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
         this.$set(this.providerProbeResults, resultKey, { success: true, message: `连接成功，发现 ${response.data.models?.length || 0} 个模型，耗时 ${response.data.latency_ms || 0} ms。` })
         this.discoveredModels = response.data.models || []; this.selectedDiscovered = []; this.discoveryDialog = true
@@ -386,6 +386,7 @@ export default {
         const temporaryKey = this.providerDraft.api_key_slots.find((slot) => String(slot.value || "").trim())?.value || null
         const { capabilities, ...modelConfig } = model
         const response = await this.postRequest(`${this.$root.prefix}/ai/models/test`, {
+          expected_revision: this.revision,
           model: `${providerName}/${model.model_name}`,
           provider_name: providerName,
           saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName,

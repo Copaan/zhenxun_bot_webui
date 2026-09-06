@@ -19,6 +19,8 @@ const DatabaseManage = () =>
   import(/* webpackChunkName: "database" */ "@/views/database/DatabaseManage")
 const MainDashboard = () =>
   import(/* webpackChunkName: "dashboard" */ "@/views/dashboard/MainDashboard")
+const PluginPolicy = () =>
+  import(/* webpackChunkName: "plugin-policy" */ "@/views/plugin-policy/PluginPolicy")
 const SystemInfo = () =>
   import(/* webpackChunkName: "system" */ "@/views/system/SystemInfo")
 const Configure = () =>
@@ -62,6 +64,7 @@ const routes = [
     redirect: "/dashboard",
     children: [
       { path: "/dashboard", name: "仪表盘", component: MainDashboard },
+      { path: "/plugin-policy", name: "插件策略", component: PluginPolicy },
       {
         path: "/command",
         name: "BOT控制台",

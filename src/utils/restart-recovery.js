@@ -42,6 +42,7 @@ const choosePreferredOrigin = ({ policy, preferredUrl, targets, currentOrigin })
   const explicit = normalizeBaseUrl(preferredUrl)
   const eligibleExplicit = explicit && validOrigins.includes(explicit) ? explicit : null
   if (policy === "preserve" && current) {
+    if (validOrigins.includes(current)) return current
     const currentHostname = new URL(current).hostname.toLowerCase()
     if (
       eligibleExplicit &&
@@ -51,7 +52,6 @@ const choosePreferredOrigin = ({ policy, preferredUrl, targets, currentOrigin })
       (origin) => new URL(origin).hostname.toLowerCase() === currentHostname
     )
     if (sameHost) return sameHost
-    if (validOrigins.includes(current)) return current
   }
   if (eligibleExplicit) return eligibleExplicit
   const wantedKind = policy === "local" ? "local" : policy === "network" ? "network" : null

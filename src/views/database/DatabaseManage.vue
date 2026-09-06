@@ -13,23 +13,32 @@
           <em v-if="databaseStatus.latency_ms != null">{{ databaseStatus.latency_ms }} ms</em>
         </span>
       </div>
-      <el-radio-group v-model="database.mode" class="mode-selector">
-        <el-radio-button label="sqlite">SQLite</el-radio-button>
-        <el-radio-button label="mysql">MySQL</el-radio-button>
-        <el-radio-button label="postgres">PostgreSQL</el-radio-button>
-        <el-radio-button label="url">高级 URL</el-radio-button>
-      </el-radio-group>
-      <el-form label-position="top" class="form-grid">
-        <el-form-item v-if="database.mode === 'sqlite'" label="SQLite 路径" class="wide"><el-input v-model="database.path" /></el-form-item>
-        <template v-else-if="database.mode !== 'url'">
-          <el-form-item label="主机"><el-input v-model="database.host" /></el-form-item>
-          <el-form-item label="端口"><el-input-number v-model="database.port" :min="1" :max="65535" controls-position="right" /></el-form-item>
-          <el-form-item label="用户名"><el-input v-model="database.username" /></el-form-item>
-          <el-form-item label="密码"><el-input v-model="database.password" type="password" show-password :placeholder="database.has_password ? '留空沿用当前密码' : '请输入密码'" /></el-form-item>
-          <el-form-item label="数据库名" class="wide"><el-input v-model="database.database" /></el-form-item>
-        </template>
-        <el-form-item v-else label="数据库连接 URL" class="wide"><el-input v-model="database.url" type="password" show-password :placeholder="database.has_saved_url ? '留空沿用当前 URL' : 'driver://user:password@host/database'" /></el-form-item>
-      </el-form>
+      <el-tabs v-model="databaseMode" class="database-tabs">
+        <el-tab-pane label="SQLite" name="sqlite">
+          <el-form label-position="top" class="form-grid"><el-form-item label="SQLite 路径" class="wide"><el-input v-model="databaseDrafts.sqlite.path" /></el-form-item></el-form>
+        </el-tab-pane>
+        <el-tab-pane label="MySQL" name="mysql">
+          <el-form label-position="top" class="form-grid">
+            <el-form-item label="主机"><el-input v-model="databaseDrafts.mysql.host" /></el-form-item>
+            <el-form-item label="端口"><el-input-number v-model="databaseDrafts.mysql.port" :min="1" :max="65535" controls-position="right" /></el-form-item>
+            <el-form-item label="用户名"><el-input v-model="databaseDrafts.mysql.username" /></el-form-item>
+            <el-form-item label="密码"><el-input v-model="databaseDrafts.mysql.password" type="password" show-password :placeholder="databaseDrafts.mysql.has_password ? '留空沿用当前密码' : '请输入密码'" /></el-form-item>
+            <el-form-item label="数据库名" class="wide"><el-input v-model="databaseDrafts.mysql.database" /></el-form-item>
+          </el-form>
+        </el-tab-pane>
+        <el-tab-pane label="PostgreSQL" name="postgres">
+          <el-form label-position="top" class="form-grid">
+            <el-form-item label="主机"><el-input v-model="databaseDrafts.postgres.host" /></el-form-item>
+            <el-form-item label="端口"><el-input-number v-model="databaseDrafts.postgres.port" :min="1" :max="65535" controls-position="right" /></el-form-item>
+            <el-form-item label="用户名"><el-input v-model="databaseDrafts.postgres.username" /></el-form-item>
+            <el-form-item label="密码"><el-input v-model="databaseDrafts.postgres.password" type="password" show-password :placeholder="databaseDrafts.postgres.has_password ? '留空沿用当前密码' : '请输入密码'" /></el-form-item>
+            <el-form-item label="数据库名" class="wide"><el-input v-model="databaseDrafts.postgres.database" /></el-form-item>
+          </el-form>
+        </el-tab-pane>
+        <el-tab-pane label="高级 URL" name="url">
+          <el-form label-position="top" class="form-grid"><el-form-item label="数据库连接 URL" class="wide"><el-input v-model="databaseDrafts.url.url" type="password" show-password :placeholder="databaseDrafts.url.has_saved_url ? '留空沿用当前 URL' : 'driver://user:password@host/database'" /></el-form-item></el-form>
+        </el-tab-pane>
+      </el-tabs>
     </section>
 
     <section class="settings-band">
@@ -79,7 +88,7 @@
       </div>
     </section>
 
-    <div v-if="probeError" class="inline-error">{{ probeError }}</div>
+    <div v-if="pageError" class="inline-error">{{ pageError }}</div>
     <footer class="save-bar">
       <span>{{ launcherManaged ? "保存后可确认由 launcher 受控重启" : "当前为直接 worker，保存后需手动重启" }}</span>
       <el-button :loading="probing" @click="probe">测试连接</el-button>
@@ -93,21 +102,36 @@
 import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 
+const createDatabaseDrafts = () => ({
+  sqlite: { mode: "sqlite", path: "data/db/zhenxun.db" },
+  mysql: { mode: "mysql", host: "127.0.0.1", port: 3306, username: "", password: "", database: "", has_password: false },
+  postgres: { mode: "postgres", host: "127.0.0.1", port: 5432, username: "", password: "", database: "", has_password: false },
+  url: { mode: "url", url: "", has_saved_url: false },
+})
+
 export default {
   name: "DatabaseManage",
   data() {
     return {
-      loading: false, saving: false, probing: false, cacheAction: "", revision: "", launcherManaged: false, runtime: {}, probeError: "",
-      database: { mode: "sqlite", path: "data/db/zhenxun.db", host: "127.0.0.1", port: 3306, username: "", password: "", database: "", url: "" },
+      loading: false, saving: false, probing: false, cacheAction: "", revision: "", launcherManaged: false, runtime: {}, operationError: "",
+      databaseMode: "sqlite",
+      savedDatabaseMode: "sqlite",
+      databaseDrafts: createDatabaseDrafts(),
+      databaseBaselines: {},
+      databaseProbeErrors: {},
+      draftsInitialized: false,
       cache: { mode: "MEMORY", host: "127.0.0.1", port: 6379, password: "" },
       probeResults: {},
-      originalPayload: "",
+      cacheBaseline: "",
     }
   },
   computed: {
-    databaseStatus() { return this.probeResults.database || this.runtime.database?.connection || {} },
+    activeDatabase() { return this.databaseDrafts[this.databaseMode] },
+    activeProbeResult() { return this.probeResults[this.databaseMode] || {} },
+    databaseStatus() { return this.activeProbeResult.database || (this.databaseMode === this.savedDatabaseMode ? this.runtime.database?.connection : {}) || {} },
+    pageError() { return this.operationError || this.databaseProbeErrors[this.databaseMode] || "" },
     cacheStatus() {
-      if (this.probeResults.cache) return this.probeResults.cache
+      if (this.activeProbeResult.cache) return this.activeProbeResult.cache
       if (this.cache.mode === "REDIS") return this.runtime.cache?.redis || {}
       return { status: "ok", latency_ms: 0 }
     },
@@ -122,7 +146,7 @@ export default {
   mounted() { this.loadRuntime() },
   beforeDestroy() { clearDirtyState("database-configuration") },
   watch: {
-    database: { deep: true, handler() { this.updateDirtyState() } },
+    databaseDrafts: { deep: true, handler() { this.updateDirtyState() } },
     cache: { deep: true, handler() { this.updateDirtyState() } },
   },
   methods: {
@@ -130,48 +154,61 @@ export default {
     formatNumber(value) { return value == null ? "-" : Number(value).toLocaleString() },
     formatBytes(value) { if (!value) return "-"; const units = ["B", "KB", "MB", "GB"]; let size = Number(value); let index = 0; while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1 } return `${size.toFixed(index ? 1 : 0)} ${units[index]}` },
     async loadRuntime() {
-      this.loading = true; this.probeError = ""
+      this.loading = true; this.operationError = ""
       try {
         const response = await this.getRequest(`${this.$root.prefix}/database/runtime`)
         if (!response.suc) throw new Error(response.info)
         this.runtime = response.data; this.revision = response.data.revision; this.launcherManaged = response.data.launcher_managed
-        this.database = { ...this.database, ...response.data.database.configuration }
+        if (!this.draftsInitialized) {
+          const configuration = response.data.database.configuration
+          const mode = configuration.mode || "sqlite"
+          this.databaseMode = mode
+          this.savedDatabaseMode = mode
+          this.databaseDrafts[mode] = { ...this.databaseDrafts[mode], ...configuration, mode }
+          Object.keys(this.databaseDrafts).forEach((key) => { this.$set(this.databaseBaselines, key, JSON.stringify(this.databaseDrafts[key])) })
+          this.draftsInitialized = true
+        }
         this.cache = { ...this.cache, ...response.data.cache.configuration }
-        this.$nextTick(() => { this.originalPayload = JSON.stringify(this.payload()); clearDirtyState("database-configuration") })
-      } catch (error) { this.probeError = error.response?.data?.detail || error.message || "数据服务状态加载失败。" }
+        this.$nextTick(() => { if (!this.cacheBaseline) this.cacheBaseline = JSON.stringify(this.cache); this.updateDirtyState() })
+      } catch (error) { this.operationError = error.response?.data?.detail || error.message || "数据服务状态加载失败。" }
       finally { this.loading = false }
     },
     payload() {
-      return { database: { ...this.database, port: this.database.port || null }, cache: { ...this.cache } }
+      return { database: { ...this.activeDatabase, port: this.activeDatabase.port || null }, cache: { ...this.cache } }
     },
     updateDirtyState() {
-      if (!this.originalPayload) return
-      setDirtyState("database-configuration", JSON.stringify(this.payload()) !== this.originalPayload)
+      if (!this.draftsInitialized || !this.cacheBaseline) return
+      const databaseDirty = Object.keys(this.databaseDrafts).some((key) => JSON.stringify(this.databaseDrafts[key]) !== this.databaseBaselines[key])
+      setDirtyState("database-configuration", databaseDirty || JSON.stringify(this.cache) !== this.cacheBaseline)
     },
     async probe() {
-      this.probing = true; this.probeError = ""
+      this.probing = true; this.operationError = ""; this.$delete(this.databaseProbeErrors, this.databaseMode)
       try {
         const response = await this.postRequest(`${this.$root.prefix}/database/probe`, this.payload())
         if (!response.suc) throw new Error(response.info)
-        this.probeResults = response.data
-        if (response.data.database.status === "error" || response.data.cache.status === "error") this.probeError = "连接检查未通过，请根据状态修改配置。"
+        this.$set(this.probeResults, this.databaseMode, response.data)
+        if (response.data.database.status === "error" || response.data.cache.status === "error") this.$set(this.databaseProbeErrors, this.databaseMode, "连接检查未通过，请根据状态修改配置。")
         else this.$message.success("数据库与缓存检查完成。")
-      } catch (error) { this.probeError = error.response?.data?.detail || error.message || "连接检查失败。" }
+      } catch (error) { this.$set(this.databaseProbeErrors, this.databaseMode, error.response?.data?.detail || error.message || "连接检查失败。") }
       finally { this.probing = false }
     },
     async save() {
-      this.saving = true; this.probeError = ""
+      this.saving = true; this.operationError = ""
       try {
         const response = await this.putRequest(`${this.$root.prefix}/database/configuration`, { expected_revision: this.revision, ...this.payload() })
-        if (!response.suc) { this.probeResults = response.data || {}; throw new Error(response.info) }
-        this.revision = response.data.revision; this.originalPayload = JSON.stringify(this.payload()); clearDirtyState("database-configuration")
+        if (!response.suc) { this.$set(this.probeResults, this.databaseMode, response.data || {}); throw new Error(response.info) }
+        this.revision = response.data.revision
+        this.savedDatabaseMode = this.databaseMode
+        this.$set(this.databaseBaselines, this.databaseMode, JSON.stringify(this.activeDatabase))
+        this.cacheBaseline = JSON.stringify(this.cache)
+        this.updateDirtyState()
         await handleApplyResult(this, response, {
           restartPrompt: "数据与缓存配置已保存，需要重启后生效。",
           restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/database",
           recoveryMessage: "数据服务配置将在新进程中生效。",
         })
-      } catch (error) { this.probeError = error.response?.data?.detail || error.message || "配置保存失败。" }
+      } catch (error) { this.operationError = error.response?.data?.detail || error.message || "配置保存失败。" }
       finally { this.saving = false }
     },
     async refreshRuntime() { await this.cacheRequest("refresh", "/database/cache/refresh", {}) },

@@ -237,7 +237,12 @@ export default {
         action,
         pluginName: plugin.name,
         title: runningTitles[action],
-        message: "请稍候，切换到其他页面不会中断当前操作。",
+        message: {
+          install: "请稍后，插件正在安装，请不要刷新页面",
+          update: "请稍后，插件正在更新，请不要刷新页面",
+          remove: "请稍后，插件正在卸载，请不要刷新页面",
+          reload: "请稍后，插件正在热重载，请不要刷新页面",
+        }[action],
       })
       try {
         const payload = action === "reload"
