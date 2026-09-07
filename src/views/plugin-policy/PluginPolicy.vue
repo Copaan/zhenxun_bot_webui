@@ -5,8 +5,8 @@
         <h1>插件策略</h1>
         <p>按机器人账号控制插件与被动技能</p>
       </div>
-      <div class="header-actions">
-        <el-button icon="el-icon-document-copy" @click="openCopyDialog" :disabled="!account">复制设置</el-button>
+      <div class="header-actions" v-if="policyScope === 'account'">
+        <el-button v-if="!editingPolicy" icon="el-icon-document-copy" @click="openCopyDialog" :disabled="!account">复制账号已保存设置</el-button>
         <el-button icon="el-icon-collection" @click="policyDialogVisible = true">策略管理</el-button>
         <el-button type="primary" icon="el-icon-plus" @click="openCreatePolicy">新建策略</el-button>
       </div>
@@ -17,7 +17,7 @@
     </el-alert>
 
     <div class="mobile-account-select">
-      <el-select v-model="selectedBotId" filterable @change="selectAccount" placeholder="选择机器人账号">
+      <el-select :value="selectedBotId" filterable @change="selectAccount" placeholder="选择机器人账号" :disabled="saving">
         <el-option v-for="item in accounts" :key="item.bot_id" :label="accountLabel(item)" :value="item.bot_id" />
       </el-select>
     </div>
@@ -34,6 +34,7 @@
             v-for="item in filteredAccounts"
             :key="item.bot_id"
             type="button"
+            :disabled="saving"
             :class="{ active: item.bot_id === selectedBotId }"
             @click="selectAccount(item.bot_id)"
           >
@@ -45,9 +46,25 @@
             <em>{{ item.policy ? item.policy.name : "独立" }}</em>
           </button>
         </div>
+        <div v-if="policyScope === 'group'" class="account-list group-list">
+          <strong>已知群 · {{ groups.length }}</strong>
+          <button v-for="group in groups" :key="groupKey(group)" type="button" :disabled="saving" :class="{ active: groupKey(group) === selectedGroupKey }" @click="selectGroup(groupKey(group))">
+            <i class="el-icon-chat-dot-round"></i><span><strong>{{ group.group_name }}</strong><small>{{ group.group_id }}{{ group.channel_id ? '/' + group.channel_id : '' }}</small></span>
+          </button>
+        </div>
       </aside>
 
       <section v-if="account || editingPolicy" class="editor-pane">
+        <div v-if="!editingPolicy" class="scope-toolbar">
+          <el-radio-group :value="policyScope" @input="selectScope" size="small" :disabled="saving">
+            <el-radio-button label="account">账号默认</el-radio-button>
+            <el-radio-button label="group">单群设置</el-radio-button>
+          </el-radio-group>
+          <el-select v-if="policyScope === 'group'" :value="selectedGroupKey" @change="selectGroup" filterable placeholder="选择该 Bot 的已知群" :disabled="saving">
+            <el-option v-for="group in groups" :key="groupKey(group)" :value="groupKey(group)" :label="`${group.group_name} (${group.group_id}${group.channel_id ? '/' + group.channel_id : ''})`" />
+          </el-select>
+        </div>
+        <el-alert v-if="policyScope === 'group' && !groupAccount" title="暂无选中的群，请选择已知群；群连接同步或收到群消息后会更新关联。" type="info" :closable="false" />
         <div class="editor-heading">
           <div>
             <button v-if="editingPolicy" type="button" class="back-button" @click="leavePolicyEditor" title="返回账号设置">
@@ -59,6 +76,7 @@
           </div>
           <div class="editor-status">
             <el-tag v-if="editingPolicy" size="small">共享策略</el-tag>
+            <el-tag v-else-if="policyScope === 'group'" size="small" type="info">Bot 独立群设置</el-tag>
             <el-tag v-else-if="account.mode === 'linked' && !detachPending" size="small" type="warning">{{ account.policy.name }}</el-tag>
             <el-tag v-else size="small" type="info">独立设置</el-tag>
           </div>
@@ -89,6 +107,7 @@
           </el-form-item>
         </el-form>
 
+        <template v-if="policyScope === 'account' || groupAccount">
         <div class="feature-toolbar">
           <el-radio-group v-model="activeKind" size="small">
             <el-radio-button label="plugins">插件</el-radio-button>
@@ -97,8 +116,8 @@
           <el-input v-model="featureSearch" size="small" clearable prefix-icon="el-icon-search" placeholder="搜索名称或模块" />
           <el-select v-model="statusFilter" size="small" placeholder="全部状态">
             <el-option label="全部状态" value="all" />
-            <el-option label="账号启用" value="enabled" />
-            <el-option label="账号禁用" value="disabled" />
+            <el-option :label="`${editingPolicy ? '策略' : policyScope === 'group' ? '本群' : '账号'}启用`" value="enabled" />
+            <el-option :label="`${editingPolicy ? '策略' : policyScope === 'group' ? '本群' : '账号'}禁用`" value="disabled" />
             <el-option label="全局不可用" value="unavailable" />
           </el-select>
         </div>
@@ -112,7 +131,7 @@
 
         <div class="feature-table">
           <div class="feature-row feature-head">
-            <span></span><span>功能</span><span>类型</span><span>最终状态</span><span>账号设置</span>
+            <span></span><span>功能</span><span>类型</span><span>{{ dirty ? '保存后状态预览' : '最终状态' }}</span><span>{{ editingPolicy ? '共享策略设置' : policyScope === 'group' ? '本群设置' : '账号设置' }}</span>
           </div>
           <div v-for="item in filteredFeatures" :key="item.module" class="feature-row">
             <el-checkbox v-model="selectedModules" :label="item.module"><span></span></el-checkbox>
@@ -124,16 +143,17 @@
             <span>
               <el-tag size="mini" :type="effectiveType(item)">{{ effectiveLabel(item) }}</el-tag>
             </span>
-            <span><el-switch :value="isEnabled(item.module)" @change="setFeatureEnabled(item.module, $event)" /></span>
+            <span><el-switch :value="isEnabled(item.module)" :disabled="saving" @change="setFeatureEnabled(item.module, $event)" /></span>
           </div>
           <div v-if="!filteredFeatures.length" class="empty-state">没有符合条件的功能</div>
         </div>
 
         <footer class="save-bar">
           <span>{{ dirty ? "有尚未保存的修改" : "配置已同步" }}</span>
-          <el-button :disabled="!dirty" @click="discardChanges">放弃修改</el-button>
-          <el-button type="primary" icon="el-icon-check" :loading="saving" :disabled="!dirty" @click="saveEditor">保存并生效</el-button>
+          <el-button :disabled="!dirty || saving" @click="discardChanges">放弃修改</el-button>
+          <el-button type="primary" icon="el-icon-check" :loading="saving" :disabled="!dirty || (policyScope === 'group' && !groupAccount)" @click="saveEditor">保存并生效</el-button>
         </footer>
+        </template>
       </section>
       <section v-else class="empty-editor">暂无机器人账号</section>
     </div>
@@ -210,6 +230,7 @@ export default {
       loading: false, saving: false, dialogSaving: false, loadError: "",
       accounts: [], policies: [], catalog: { plugins: [], tasks: [] },
       selectedBotId: "", account: null, editingPolicy: null,
+      policyScope: "account", groups: [], groupAccount: null, selectedGroupKey: "", selectionRequest: 0, listRequest: 0, destroyed: false,
       draft: { plugins: [], tasks: [] }, baseline: { plugins: [], tasks: [] },
       detachPending: false, activeKind: "plugins", accountSearch: "", featureSearch: "", statusFilter: "all", selectedModules: [],
       createDialogVisible: false, policyDialogVisible: false, bindDialogVisible: false, copyDialogVisible: false,
@@ -219,9 +240,9 @@ export default {
   },
   computed: {
     dirty() { return Boolean(JSON.stringify(this.draft) !== JSON.stringify(this.baseline) || (this.editingPolicy && (this.editingPolicy.name !== this.editingPolicy.originalName || this.editingPolicy.description !== this.editingPolicy.originalDescription))) },
-    editorTitle() { return this.editingPolicy ? this.editingPolicy.name : (this.account?.nickname || this.account?.runtime_bot_id || "账号设置") },
+    editorTitle() { return this.editingPolicy ? this.editingPolicy.name : (this.groupAccount?.group_name || this.account?.nickname || this.account?.runtime_bot_id || "账号设置") },
     filteredAccounts() { const q = this.accountSearch.trim().toLowerCase(); return q ? this.accounts.filter((x) => `${x.nickname} ${x.bot_id} ${x.runtime_bot_id}`.toLowerCase().includes(q)) : this.accounts },
-    currentFeatures() { const known = this.catalog[this.activeKind] || []; const missing = this.account && !this.editingPolicy ? (this.activeKind === "plugins" ? this.account.missing_plugins : this.account.missing_tasks) : []; return [...known, ...missing.filter((module) => !known.some((x) => x.module === module)).map((module) => ({ module, name: "已缺失模块", feature_type: "MISSING", load_status: false, global_status: false, missing: true }))] },
+    currentFeatures() { const known = this.catalog[this.activeKind] || []; const target = this.groupAccount || this.account; const missing = target && !this.editingPolicy ? (this.activeKind === "plugins" ? target.missing_plugins : target.missing_tasks) || [] : []; return [...known, ...missing.filter((module) => !known.some((x) => x.module === module)).map((module) => ({ module, name: "已缺失模块", feature_type: "MISSING", load_status: false, global_status: false, missing: true }))] },
     filteredFeatures() { const q = this.featureSearch.trim().toLowerCase(); return this.currentFeatures.filter((item) => { const matchText = !q || `${item.name} ${item.module} ${item.menu_type || ""}`.toLowerCase().includes(q); const enabled = this.isEnabled(item.module); const unavailable = !item.load_status || !item.global_status; const matchStatus = this.statusFilter === "all" || (this.statusFilter === "enabled" && enabled) || (this.statusFilter === "disabled" && !enabled) || (this.statusFilter === "unavailable" && unavailable); return matchText && matchStatus }) },
     allFilteredSelected() { return this.filteredFeatures.length > 0 && this.filteredFeatures.every((x) => this.selectedModules.includes(x.module)) },
     someFilteredSelected() { const count = this.filteredFeatures.filter((x) => this.selectedModules.includes(x.module)).length; return count > 0 && count < this.filteredFeatures.length },
@@ -233,9 +254,48 @@ export default {
     activeKind() { this.selectedModules = [] },
   },
   async mounted() { await this.loadAll() },
-  beforeDestroy() { clearDirtyState(SOURCE) },
+  beforeDestroy() { this.destroyed = true; this.selectionRequest++; this.listRequest++; this.impactRequest++; clearDirtyState(SOURCE) },
   methods: {
+    navigate(query) {
+      this.$router.replace({ path: "/plugin-policy", query }, () => {}, (error) => {
+        if (error instanceof Error) this.$message.error(error.message || "页面导航失败")
+      })
+    },
+    groupKey(group) { return JSON.stringify([group.platform_scope, group.group_id, group.channel_id || ""]) },
+    groupUrl(group) { return `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/groups/${encodeURIComponent(group.group_id)}?platform_scope=${encodeURIComponent(group.platform_scope)}&channel_id=${encodeURIComponent(group.channel_id || "")}` },
+    setDraft(record) { this.draft = { plugins: sorted(record.block_plugins), tasks: sorted(record.block_tasks) }; this.baseline = JSON.parse(JSON.stringify(this.draft)); this.selectedModules = []; this.detachPending = false; clearDirtyState(SOURCE) },
+    async confirmDiscard() { if (!this.dirty) return true; try { await this.$confirm("当前修改尚未保存，是否放弃？", "切换设置", { type: "warning" }); return true } catch (_) { return false } },
+    async selectScope(scope) {
+      if (this.saving || scope === this.policyScope || !await this.confirmDiscard()) return
+      this.selectionRequest++; this.policyScope = scope; this.groupAccount = null; this.selectedGroupKey = ""; this.setDraft(this.account)
+      if (scope === "account") return
+      const request = ++this.selectionRequest
+      this.loading = true
+      try {
+        const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/groups`)
+        if (request !== this.selectionRequest || this.destroyed) return
+        if (!resp.suc) throw new Error(resp.info)
+        this.groups = resp.data.groups || []
+        if (this.groups.length) await this.selectGroup(this.groupKey(this.groups[0]))
+      } catch (error) { if (request === this.selectionRequest) this.loadError = error.message || "群列表读取失败" }
+      finally { if (!this.destroyed) this.loading = false }
+    },
+    async selectGroup(key) {
+      if (this.saving || key === this.selectedGroupKey || !await this.confirmDiscard()) return
+      const group = this.groups.find((item) => this.groupKey(item) === key)
+      if (!group) return
+      const request = ++this.selectionRequest
+      this.loading = true
+      try {
+        const resp = await this.getRequest(this.groupUrl(group))
+        if (request !== this.selectionRequest || this.destroyed) return
+        if (!resp.suc) throw new Error(resp.info)
+        this.groupAccount = resp.data; this.selectedGroupKey = key; this.setDraft(resp.data)
+      } catch (error) { if (request === this.selectionRequest) this.loadError = error.message || "群设置读取失败" }
+      finally { if (request === this.selectionRequest) this.loading = false }
+    },
     async loadAll() {
+      const request = ++this.listRequest
       this.loading = true; this.loadError = ""
       try {
         const [catalog, accounts, policies] = await Promise.all([
@@ -243,6 +303,7 @@ export default {
           this.getRequest(`${this.$root.prefix}/plugin-policy/accounts`),
           this.getRequest(`${this.$root.prefix}/plugin-policy/policies`),
         ])
+        if (request !== this.listRequest || this.destroyed) return
         if (!catalog.suc || !accounts.suc || !policies.suc) throw new Error("插件策略数据读取失败")
         this.catalog = catalog.data; this.accounts = accounts.data; this.policies = policies.data
         const requested = this.$route.query.bot_id
@@ -252,40 +313,43 @@ export default {
       finally { this.loading = false }
     },
     async loadAccount(botId) {
+      const request = ++this.selectionRequest
       const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(botId)}`)
+      if (request !== this.selectionRequest || this.destroyed) return
       if (!resp.suc) throw new Error(resp.info)
       this.selectedBotId = botId; this.account = resp.data; this.editingPolicy = null; this.detachPending = false
+      this.policyScope = "account"; this.groups = []; this.groupAccount = null; this.selectedGroupKey = ""
       this.draft = { plugins: sorted(resp.data.block_plugins), tasks: sorted(resp.data.block_tasks) }
       this.baseline = JSON.parse(JSON.stringify(this.draft)); this.selectedModules = []; clearDirtyState(SOURCE)
-      if (this.$route.query.bot_id !== botId) this.$router.replace({ path: "/plugin-policy", query: { bot_id: botId } }).catch(() => {})
+      if (this.$route.query.bot_id !== botId) this.navigate({ bot_id: botId })
     },
     async selectAccount(botId) {
-      if (!botId || botId === this.account?.bot_id && !this.editingPolicy) return
+      if (this.saving || !botId || botId === this.account?.bot_id && !this.editingPolicy) return
       if (this.dirty) { try { await this.$confirm("当前修改尚未保存，是否放弃？", "切换账号", { type: "warning" }) } catch (_) { return } }
       this.loading = true; try { await this.loadAccount(botId) } finally { this.loading = false }
     },
     accountLabel(item) { return `${item.nickname || item.runtime_bot_id} (${item.bot_id})` },
     boundAccountNames(policy) { return policy.bound_bot_ids.map((id) => this.accounts.find((item) => item.bot_id === id)?.nickname || id).join("、") },
     isEnabled(module) { return !this.draft[this.activeKind].includes(module) },
-    setFeatureEnabled(module, enabled) { const values = new Set(this.draft[this.activeKind]); enabled ? values.delete(module) : values.add(module); this.draft = { ...this.draft, [this.activeKind]: sorted(values) }; if (this.account?.mode === "linked" && !this.editingPolicy) this.detachPending = true },
+    setFeatureEnabled(module, enabled) { if (this.saving) return; const values = new Set(this.draft[this.activeKind]); enabled ? values.delete(module) : values.add(module); this.draft = { ...this.draft, [this.activeKind]: sorted(values) }; if (this.policyScope === "account" && this.account?.mode === "linked" && !this.editingPolicy) this.detachPending = true },
     toggleFilteredSelection(value) { const values = new Set(this.selectedModules); this.filteredFeatures.forEach((x) => value ? values.add(x.module) : values.delete(x.module)); this.selectedModules = [...values] },
     setSelectedEnabled(enabled) { this.selectedModules.forEach((module) => this.setFeatureEnabled(module, enabled)); this.selectedModules = [] },
     typeLabel(item) { const map = { NORMAL: "普通", DEPENDANT: "依赖", ADMIN: "管理员", SUPERUSER: "超级用户", ADMIN_SUPER: "管理/超管", TASK: "被动", MISSING: "缺失" }; return map[item.feature_type] || item.feature_type },
-    effectiveLabel(item) { if (!item.load_status) return item.missing ? "模块缺失" : "未加载"; if (!item.global_status) return "全局关闭"; return this.isEnabled(item.module) ? "可用" : "账号禁用" },
-    effectiveType(item) { if (!item.load_status || !item.global_status) return "info"; return this.isEnabled(item.module) ? "success" : "danger" },
-    discardChanges() { if (this.editingPolicy) { this.editingPolicy.name = this.editingPolicy.originalName; this.editingPolicy.description = this.editingPolicy.originalDescription } this.draft = JSON.parse(JSON.stringify(this.baseline)); this.detachPending = false },
-    async saveEditor() { if (this.editingPolicy) return this.savePolicy(); this.saving = true; try { const resp = await this.putRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`, { expected_revision: this.account.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }); if (resp.suc) { this.$message.success(resp.info); await this.loadAll() } } catch (error) { if (error?.response?.status === 409) this.$message.warning("配置已变化，草稿已保留，请重新加载后比较") } finally { this.saving = false } },
+    effectiveLabel(item) { if (!item.load_status) return item.missing ? "模块缺失" : "未加载"; if (!item.global_status) return "全局关闭"; if (this.groupAccount) { const suffix = this.activeKind === "plugins" ? "plugins" : "tasks"; if ((this.groupAccount[`account_block_${suffix}`] || []).includes(item.module)) return "账号禁用"; if ((this.groupAccount[`group_block_${suffix}`] || []).includes(item.module)) return "原群禁用"; } return this.isEnabled(item.module) ? "可用" : (this.editingPolicy ? "策略禁用" : this.groupAccount ? "本群禁用" : "账号禁用") },
+    effectiveType(item) { if (!item.load_status || !item.global_status) return "info"; return this.effectiveLabel(item) === "可用" ? "success" : "danger" },
+    discardChanges() { if (this.saving) return; if (this.editingPolicy) { this.editingPolicy.name = this.editingPolicy.originalName; this.editingPolicy.description = this.editingPolicy.originalDescription } this.draft = JSON.parse(JSON.stringify(this.baseline)); this.detachPending = false },
+    async saveEditor() { if (this.saving || (this.policyScope === "group" && !this.groupAccount)) return; if (this.editingPolicy) return this.savePolicy(); this.saving = true; try { const target = this.groupAccount || this.account; const url = this.groupAccount ? this.groupUrl(target) : `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`; const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true }); if (this.destroyed) return; if (resp.suc) { this.$message.success(resp.info); if (this.groupAccount) { this.groupAccount = resp.data; this.setDraft(resp.data) } else await this.loadAll() } } catch (error) { if (error?.response?.status === 409) this.$message.warning("配置已变化，草稿已保留，请重新加载后比较"); else this.$message.error("保存失败，草稿已保留") } finally { this.saving = false } },
     openCreatePolicy() { if (!this.account) return; this.createForm = { name: "", description: "", bindCurrent: true }; this.createDialogVisible = true },
     async createPolicy() { if (!this.createForm.name.trim()) return this.$message.warning("请输入策略名称"); this.dialogSaving = true; try { const bind = this.createForm.bindCurrent ? [this.account.bot_id] : []; const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/policies`, { name: this.createForm.name, description: this.createForm.description, source_bot_id: this.account.bot_id, source_revision: this.account.revision, block_plugins: [], block_tasks: [], bind_bot_ids: bind, expected_revisions: bind.length ? { [this.account.bot_id]: this.account.revision } : {} }); if (resp.suc) { this.$message.success(resp.info); this.createDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
-    editPolicy(policy) { this.policyDialogVisible = false; this.editingPolicy = { ...policy, originalName: policy.name, originalDescription: policy.description }; this.draft = { plugins: sorted(policy.block_plugins), tasks: sorted(policy.block_tasks) }; this.baseline = JSON.parse(JSON.stringify(this.draft)); this.detachPending = false },
+    async editPolicy(policy) { if (this.saving || !await this.confirmDiscard()) return; this.policyDialogVisible = false; this.editingPolicy = { ...policy, originalName: policy.name, originalDescription: policy.description }; this.draft = { plugins: sorted(policy.block_plugins), tasks: sorted(policy.block_tasks) }; this.baseline = JSON.parse(JSON.stringify(this.draft)); this.detachPending = false },
     async savePolicy() { this.saving = true; try { await this.$confirm(`此修改会同步影响 ${this.editingPolicy.bound_bot_ids.length} 个账号。`, "保存共享策略", { type: "warning" }); const resp = await this.putRequest(`${this.$root.prefix}/plugin-policy/policies/${this.editingPolicy.id}`, { expected_revision: this.editingPolicy.revision, name: this.editingPolicy.name, description: this.editingPolicy.description, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }); if (resp.suc) { this.$message.success(resp.info); await this.loadAll() } } catch (error) { if (error !== "cancel" && error?.response?.status === 409) this.$message.warning("共享策略已变化，草稿已保留") } finally { this.saving = false } },
     async leavePolicyEditor() { if (this.dirty) { try { await this.$confirm("当前策略修改尚未保存，是否放弃？", "返回账号设置", { type: "warning" }) } catch (_) { return } } if (this.selectedBotId) await this.loadAccount(this.selectedBotId) },
     openBindDialog(policy) { this.bindingPolicy = policy; this.bindTargets = []; this.bindImpacts = []; this.policyDialogVisible = false; this.bindDialogVisible = true },
     async bindPolicy() { this.dialogSaving = true; try { const revisions = Object.fromEntries(this.bindTargets.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])); const resp = await this.putRequest(`${this.$root.prefix}/plugin-policy/bindings`, { policy_id: this.bindingPolicy.id, bot_ids: this.bindTargets, expected_revisions: revisions }); if (resp.suc) { this.$message.success(resp.info); this.bindDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
     impactFor(target, source) { const plugins = new Set(target.block_plugins); const sourcePlugins = new Set(source.block_plugins); const tasks = new Set(target.block_tasks); const sourceTasks = new Set(source.block_tasks); return { bot_id: target.bot_id, name: target.nickname || target.runtime_bot_id || target.bot_id, pluginsDisabled: [...sourcePlugins].filter((x) => !plugins.has(x)).length, pluginsEnabled: [...plugins].filter((x) => !sourcePlugins.has(x)).length, tasksDisabled: [...sourceTasks].filter((x) => !tasks.has(x)).length, tasksEnabled: [...tasks].filter((x) => !sourceTasks.has(x)).length } },
-    async loadImpacts(targets, source, field) { const request = ++this.impactRequest; const details = await Promise.all(targets.map(async (botId) => { const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(botId)}`); return resp.suc ? this.impactFor(resp.data, source) : null })); if (request === this.impactRequest) this[field] = details.filter(Boolean) },
+    async loadImpacts(targets, source, field) { const request = ++this.impactRequest; try { const details = await Promise.all(targets.map(async (botId) => { const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(botId)}`); return resp.suc ? this.impactFor(resp.data, source) : null })); if (!this.destroyed && request === this.impactRequest) this[field] = details.filter(Boolean) } catch (_) { if (!this.destroyed && request === this.impactRequest) { this[field] = []; this.$message.error("覆盖差异读取失败，请重新选择目标账号。") } } },
     loadBindImpacts() { if (this.bindingPolicy) this.loadImpacts(this.bindTargets, this.bindingPolicy, "bindImpacts") },
-    openCopyDialog() { this.copyTargets = []; this.copyImpacts = []; this.copyDialogVisible = true },
+    async openCopyDialog() { if (this.saving || this.policyScope !== "account" || !await this.confirmDiscard()) return; this.copyTargets = []; this.copyImpacts = []; this.copyDialogVisible = true },
     loadCopyImpacts() { if (this.account) this.loadImpacts(this.copyTargets, this.account, "copyImpacts") },
     async copyAccount() { this.dialogSaving = true; try { const revisions = Object.fromEntries(this.copyTargets.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])); const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/copy`, { source_bot_id: this.account.bot_id, source_revision: this.account.revision, target_bot_ids: this.copyTargets, expected_revisions: revisions }); if (resp.suc) { this.$message.success(resp.info); this.copyDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
     async deletePolicy(policy) { try { await this.$confirm(`确定删除策略“${policy.name}”？`, "删除策略", { type: "warning" }); const resp = await this.deleteRequest(`${this.$root.prefix}/plugin-policy/policies/${policy.id}?expected_revision=${policy.revision}`); if (resp.suc) { this.$message.success(resp.info); await this.loadAll() } } catch (error) { if (error !== "cancel") this.$message.error("删除策略失败") } },
@@ -294,6 +358,11 @@ export default {
 </script>
 
 <style scoped>
+.scope-toolbar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.scope-toolbar .el-select { flex: 1; min-width: 180px; max-width: 100%; }
+.editor-heading > div:first-child { flex-wrap: wrap; }
+.editor-heading h2 { width: 100%; overflow-wrap: anywhere; }
+.policy-page .save-bar { position: static; margin: 18px 0 0; padding: 12px 0; }
 .policy-page { min-height: 100%; padding: 20px 22px 32px; overflow: auto; color: var(--text-color); background: var(--bg-color); }
 .page-header, .header-actions, .editor-heading, .editor-heading > div, .feature-toolbar, .batch-toolbar, .save-bar, .policy-list-row, .policy-list-row > div { display: flex; align-items: center; }
 .page-header { justify-content: space-between; gap: 18px; margin-bottom: 14px; }

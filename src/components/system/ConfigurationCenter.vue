@@ -5,9 +5,10 @@
         <h2>运行配置</h2>
         <p>运行时配置会直接应用；监听、协议和未知自定义变量需要重启。</p>
       </div>
-      <el-button icon="el-icon-refresh" @click="loadSummary">重新加载</el-button>
+      <el-button icon="el-icon-refresh" :disabled="Boolean(saving)" @click="reloadSummary">重新加载</el-button>
     </div>
 
+    <NetworkStatus :status="networkStatus" />
     <el-tabs v-model="section">
       <el-tab-pane label="环境配置" name="env">
         <el-form label-position="top" class="env-form">
@@ -77,7 +78,6 @@
             </div>
             <div class="action-bar config-action-bar">
               <span>{{ Object.keys(simpleChanges).length ? `${Object.keys(simpleChanges).length} 个配置组有未保存修改` : "未知配置组和字段会原样保留" }}</span>
-              <el-button icon="el-icon-refresh-left" :disabled="!simpleChanges[currentGroup.module]" @click="resetCurrentGroup">恢复默认值</el-button>
               <el-button type="primary" icon="el-icon-check" :loading="saving === 'simple'" :disabled="pluginInvalidPaths.length > 0 || !Object.keys(simpleChanges).length" @click="saveSimple">保存配置</el-button>
             </div>
           </section>
@@ -88,7 +88,7 @@
       <el-tab-pane label="高级原文" name="raw" lazy>
         <el-alert title="原文可能包含 Token、密码和 Secret。请勿截图、分享或粘贴到外部服务。" type="warning" :closable="false" show-icon />
         <div class="raw-switch">
-          <el-radio-group v-model="rawFile" size="small" @change="loadRaw">
+          <el-radio-group :value="rawFile" size="small" :disabled="Boolean(saving)" @input="loadRaw">
             <el-radio-button label="env">.env.dev</el-radio-button>
             <el-radio-button label="simple">config.yaml</el-radio-button>
           </el-radio-group>
@@ -115,15 +115,17 @@
 
 <script>
 import SchemaForm from "@/components/config/SchemaForm.vue"
+import NetworkStatus from "@/components/system/NetworkStatus.vue"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 
 export default {
   name: "ConfigurationCenter",
-  components: { SchemaForm },
+  components: { SchemaForm, NetworkStatus },
   data() {
     return {
+      networkStatus: {}, rawLoading: false,
       loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envFieldEffects: {}, customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], simpleChanges: {}, groupSearch: "", selectedGroup: "", launcherManaged: false,
       rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalidPaths: [], pluginIssues: [],
       envFieldDefinitions: [
@@ -239,11 +241,21 @@ export default {
     normalizeGroups(groups) {
       return (groups || []).filter((group) => group.module !== "AI").map((group) => ({ ...group, fields: group.fields.map((field) => ({ ...field })) }))
     },
-    async loadSummary() {
+    async confirmDiscard(message) {
+      try { await this.$confirm(message, "放弃未保存修改？", { type: "warning", confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); return true } catch (_) { return false }
+    },
+    async reloadSummary() {
+      if (this.saving || this.loading) return
+      if ((Object.keys(this.changedEnvFields()).length || this.customOperations.length || Object.keys(this.simpleChanges).length) && !await this.confirmDiscard("环境及插件配置草稿将重新读取；高级原文草稿保持不变。")) return
+      await this.loadSummary()
+    },
+    async loadSummary(scope = "all") {
       this.loading = true
       try {
         const response = await this.getRequest(`${this.$root.prefix}/system/configuration/summary`)
         if (!response.suc) throw new Error(response.info)
+        this.networkStatus = response.data.network || {}
+        if (scope === "all" || scope === "env") {
         this.envRevision = response.data.env.revision
         this.envFields = this.normalizedEnvFields(response.data.env.fields)
         this.originalEnvFields = this.normalizedEnvFields(response.data.env.fields)
@@ -251,13 +263,16 @@ export default {
         this.customEnv = this.normalizeCustomEnv(response.data.env.custom_env)
         this.originalCustomEnv = this.customEnv.map((item) => ({ ...item }))
         this.customEnvError = ""
+        clearDirtyState("environment-configuration")
+        }
+        if (scope === "all" || scope === "simple") {
         this.simpleRevision = response.data.simple.revision
         this.groups = this.normalizeGroups(response.data.simple.groups)
         if (!this.groups.some((group) => group.module === this.selectedGroup)) this.selectedGroup = this.groups[0]?.module || ""
         this.pluginInvalidPaths = []; this.pluginIssues = []
         this.simpleChanges = {}
         clearDirtyState("plugin-configuration")
-        clearDirtyState("environment-configuration")
+        }
         this.launcherManaged = response.data.launcher_managed
       } catch (error) { this.$message.error(error.message || "配置摘要加载失败") }
       finally { this.loading = false }
@@ -297,16 +312,26 @@ export default {
     },
     markEnvDirty() { this.customEnvError = this.validateCustomEnv(); setDirtyState("environment-configuration", Object.keys(this.changedEnvFields()).length > 0 || this.customOperations.length > 0) },
     async saveEnv() {
+      if (this.saving) return
       const fields = this.changedEnvFields()
       this.customEnvError = this.validateCustomEnv()
       if (this.customEnvError) return
       const customOperations = this.customOperations
       if (!Object.keys(fields).length && !customOperations.length) return this.$message.info("没有需要保存的环境配置。")
       this.saving = "env"
+      const submittedFields = JSON.stringify(this.envFields)
+      const submittedCustom = JSON.stringify(this.customEnv)
       try {
         const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/env`, { expected_revision: this.envRevision, fields, custom_operations: customOperations })
         if (!response.suc) throw new Error(response.info)
-        await this.loadSummary()
+        if (response.data?.apply_mode !== "failed") {
+          const fieldsDraft = this.envFields
+          const customDraft = this.customEnv
+          await this.loadSummary("env")
+          if (JSON.stringify(fieldsDraft) !== submittedFields) this.envFields = fieldsDraft
+          if (JSON.stringify(customDraft) !== submittedCustom) this.customEnv = customDraft
+          this.markEnvDirty()
+        }
         await handleApplyResult(this, response, {
           restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/system",
@@ -315,12 +340,14 @@ export default {
       finally { this.saving = "" }
     },
     async saveSimple() {
+      if (this.saving) return
       if (!Object.keys(this.simpleChanges).length) return this.$message.info("没有需要保存的插件配置。")
       this.saving = "simple"
+      const submitted = JSON.parse(JSON.stringify(this.simpleChanges))
       try {
         const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/simple`, { expected_revision: this.simpleRevision, fields: this.simpleChanges })
         if (!response.suc) throw new Error(response.info)
-        this.simpleRevision = response.data.revision; this.simpleChanges = {}; clearDirtyState("plugin-configuration")
+        if (response.data?.apply_mode !== "failed") { this.simpleRevision = response.data.revision; Object.keys(submitted).forEach(module => { if (JSON.stringify(this.simpleChanges[module]) === JSON.stringify(submitted[module])) this.$delete(this.simpleChanges, module) }); setDirtyState("plugin-configuration", Boolean(Object.keys(this.simpleChanges).length)) }
         await handleApplyResult(this, response, {
           restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/system",
@@ -329,12 +356,16 @@ export default {
       finally { this.saving = "" }
     },
     async loadRaw(file) {
-      this.rawError = ""; this.rawIssues = []; this.rawRevision = ""
+      if (this.saving || this.rawLoading) return
+      if (this.rawContent !== this.rawOriginal && !await this.confirmDiscard("高级原文中的未保存修改将被放弃。")) return
+      this.rawLoading = true
       try {
         const response = await this.getRequest(`${this.$root.prefix}/system/configuration/files/${file}`, {}, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
+        this.rawFile = file; this.rawError = ""; this.rawIssues = []
         this.rawContent = response.data.content; this.rawOriginal = response.data.content; this.rawRevision = response.data.revision; this.$set(this.rawLoaded, file, true); clearDirtyState("raw-configuration")
-      } catch (error) { this.rawError = apiErrorDetail(error, "配置文件读取失败。"); this.$set(this.rawLoaded, file, false) }
+      } catch (error) { this.rawError = apiErrorDetail(error, "配置文件读取失败。") }
+      finally { this.rawLoading = false }
     },
     async validateRaw() {
       if (!this.rawReady) return
@@ -347,17 +378,17 @@ export default {
       finally { this.validating = false }
     },
     async saveRaw() {
-      if (!this.rawReady) return
+      if (!this.rawReady || this.saving) return
       this.saving = "raw"; this.rawError = ""; this.rawIssues = []
+      const content = this.rawContent
       try {
         const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/${this.rawFile}`, { expected_revision: this.rawRevision, content: this.rawContent })
         if (!response.suc) throw new Error(response.info)
-        this.rawRevision = response.data.revision; this.rawOriginal = this.rawContent; clearDirtyState("raw-configuration")
+        if (response.data?.apply_mode !== "failed") { this.rawRevision = response.data.revision; this.rawOriginal = content; setDirtyState("raw-configuration", this.rawContent !== content) }
         await handleApplyResult(this, response, {
           restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/system",
         })
-        if (!response.data.restart_required) await this.loadSummary()
       } catch (error) { this.rawIssues = apiErrorIssues(error); this.rawError = apiErrorDetail(error, "保存失败。"); if (error.response?.status === 409) this.$set(this.rawLoaded, this.rawFile, false) }
       finally { this.saving = "" }
     },

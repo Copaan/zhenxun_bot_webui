@@ -273,6 +273,7 @@ export default {
   beforeDestroy() { clearDirtyState("ai-configuration") },
   methods: {
     async loadConfiguration() {
+      if (this.loading || this.saving) return
       if (this.dirtyCount && !(await this.confirmDiscard())) return
       this.loading = true
       this.loadError = ""
@@ -297,9 +298,50 @@ export default {
       if (!slots.length) slots.push({ existing_index: null, value: "", clientId: uid() })
       this.providerDraft = { ...clone(provider), api_key_slots: slots, isNew: false }
     },
-    async selectProvider(name) { if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = name; this.providerDirty = false; this.modelsDirty = false; this.resetProviderDraft(); this.syncDirty() },
+    applySavedConfiguration(data, preferredName, submitted) {
+      const draft = clone(this.providerDraft)
+      const providerDirty = this.providerDirty
+      const modelsDirty = this.modelsDirty
+      const sections = clone(this.sectionDrafts)
+      const dirtySections = { ...this.dirtySections }
+      const invalidSections = clone(this.invalidSections)
+      const rows = clone(this.groupRows)
+      const routeId = this.selectedRouteGroupId
+      this.applyConfiguration(data, preferredName)
+      Object.keys(dirtySections).forEach((name) => {
+        const current = name === "model_groups" ? rows : sections[name]
+        if (dirtySections[name] && (submitted.section !== name || JSON.stringify(current) !== submitted.value)) {
+          this.$set(this.sectionDrafts, name, sections[name])
+          this.$set(this.dirtySections, name, true)
+          this.$set(this.invalidSections, name, invalidSections[name] || [])
+          if (name === "model_groups") { this.groupRows = rows; this.selectedRouteGroupId = routeId }
+        }
+      })
+      if (draft) {
+        const { models, ...fields } = draft
+        if (providerDirty && submitted.provider !== JSON.stringify(fields)) {
+          this.providerDraft = { ...fields, models: this.providerDraft?.models || [] }
+          if (submitted.provider) {
+            const savedSlots = JSON.parse(submitted.provider).api_key_slots.filter(slot => slot.existing_index != null || slot.value)
+            this.providerDraft.isNew = false
+            this.providerDraft.api_key_slots = fields.api_key_slots.map(slot => {
+              const index = savedSlots.findIndex(saved => saved.clientId === slot.clientId)
+              return index < 0 ? slot : { ...slot, existing_index: index, value: slot.value === savedSlots[index].value ? "" : slot.value }
+            })
+          }
+          this.providerDirty = true
+        }
+        if (modelsDirty && submitted.models !== JSON.stringify(models)) {
+          if (!this.providerDraft) this.providerDraft = draft
+          this.providerDraft.models = models
+          this.modelsDirty = true
+        }
+      }
+      this.syncDirty()
+    },
+    async selectProvider(name) { if (this.saving) return; if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = name; this.providerDirty = false; this.modelsDirty = false; this.resetProviderDraft(); this.syncDirty() },
     async confirmDiscard() { try { await this.$confirm("当前 AI 配置有尚未保存的修改。", "放弃修改？", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑", type: "warning" }); return true } catch (_) { return false } },
-    async createProvider() { if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = ""; this.providerDraft = { name: "", api_type: "openai", api_base: "", timeout: 180, temperature: null, max_output_tokens: null, api_key_slots: [{ existing_index: null, value: "", clientId: uid() }], models: [], discovery_supported: true, isNew: true }; this.providerDirty = true; this.modelsDirty = false; this.syncDirty() },
+    async createProvider() { if (this.saving) return; if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = ""; this.providerDraft = { name: "", api_type: "openai", api_base: "", timeout: 180, temperature: null, max_output_tokens: null, api_key_slots: [{ existing_index: null, value: "", clientId: uid() }], models: [], discovery_supported: true, isNew: true }; this.providerDirty = true; this.modelsDirty = false; this.syncDirty() },
     invalidateProbeResults() {
       const key = this.selectedProviderName || "__new__"
       if (this.providerProbeResults[key]) this.$delete(this.providerProbeResults, key)
@@ -310,21 +352,27 @@ export default {
     removeKey(index) { this.providerDraft.api_key_slots.splice(index, 1); this.markProviderDirty() },
     providerPayload({ includeModels = false } = {}) { return { expected_revision: this.revision, name: this.providerDraft.name.trim(), api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base?.trim() || null, timeout: this.providerDraft.timeout, temperature: this.providerDraft.temperature, max_output_tokens: this.providerDraft.max_output_tokens, api_keys: this.providerDraft.api_key_slots.map(({ existing_index, value }) => ({ existing_index, value: value || null })), models: this.providerDraft.isNew || includeModels ? this.providerDraft.models.map(({ capabilities, ...model }) => model) : null } },
     async saveProvider(options = {}) {
+      if (this.saving) return false
       const includeModels = Boolean(options?.includeModels)
       this.saving = options?.savingKey || "provider"
       try {
+        const { models, ...fields } = clone(this.providerDraft)
+        const submitted = { provider: JSON.stringify(fields), models: includeModels || fields.isNew ? JSON.stringify(models) : undefined }
         const path = this.providerDraft.isNew ? "/ai/providers" : `/ai/providers/${encodeURIComponent(this.selectedProviderName)}`
         const payload = this.providerPayload({ includeModels })
         const response = this.providerDraft.isNew ? await this.postRequest(`${this.$root.prefix}${path}`, payload) : await this.putRequest(`${this.$root.prefix}${path}`, payload)
         if (!response.suc) throw new Error(response.info)
-        const name = this.providerDraft.name.trim(); this.applyConfiguration(response.data, name); await this.handleAiApply(response)
+        if (response.data?.apply_mode === "failed") { await this.handleAiApply(response); return false }
+        this.applySavedConfiguration(response.data, payload.name, submitted); await this.handleAiApply(response)
         return true
       } catch (error) { this.captureOperationError(error, "服务商保存失败。"); return false }
       finally { this.saving = "" }
     },
     async removeProvider() {
+      if (this.saving) return
       try { await this.$confirm(`删除 ${this.providerDraft.name} 后，引用该服务商的默认模型和路由必须先调整。`, "删除服务商？", { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }) } catch (_) { return }
-      try { const response = await this.deleteRequest(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}?expected_revision=${encodeURIComponent(this.revision)}`); if (!response.suc) throw new Error(response.info); this.applyConfiguration(response.data); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "服务商删除失败。") }
+      this.saving = "provider"
+      try { const { models, ...fields } = this.providerDraft; const submitted = { provider: JSON.stringify(fields), models: JSON.stringify(models) }; const response = await this.deleteRequest(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}?expected_revision=${encodeURIComponent(this.revision)}`); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, "", submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "服务商删除失败。") } finally { this.saving = "" }
     },
     async discoverModels() {
       this.discovering = true
@@ -374,7 +422,7 @@ export default {
     confirmModel() { if (!this.modelDraft.model_name.trim()) return this.$message.warning("请填写模型名称。"); const value = { ...this.modelDraft, model_name: this.modelDraft.model_name.trim() }; delete value.capabilities; if (this.modelEditIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.modelEditIndex, 1, value); this.modelsDirty = true; this.invalidateProbeResults(); this.modelDialog = false; this.syncDirty() },
     modelIndex(model) { return this.providerDraft.models.findIndex((item) => item === model || item.model_name === model.model_name) },
     deleteModel(model) { const actual = this.modelIndex(model); if (actual < 0) return; this.providerDraft.models.splice(actual, 1); this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty() },
-    async saveModels() { this.saving = "models"; try { const models = this.providerDraft.models.map(({ capabilities, ...model }) => model); const response = await this.putRequest(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}/models`, { expected_revision: this.revision, models }); if (!response.suc) throw new Error(response.info); this.applyConfiguration(response.data, this.selectedProviderName); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "模型列表保存失败。") } finally { this.saving = "" } },
+    async saveModels() { if (this.saving) return; this.saving = "models"; try { const submitted = { models: JSON.stringify(this.providerDraft.models) }; const models = this.providerDraft.models.map(({ capabilities, ...model }) => model); const response = await this.putRequest(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}/models`, { expected_revision: this.revision, models }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "模型列表保存失败。") } finally { this.saving = "" } },
     capabilityTags(model) { const caps = model.capabilities || {}; const result = []; if (caps.is_embedding_model) result.push("Embedding"); if (caps.is_rerank_model) result.push("Rerank"); if ((caps.output_modalities || []).includes("image")) result.push("图像"); if ((caps.output_modalities || []).includes("audio")) result.push("语音"); if (caps.supports_tool_calling) result.push("工具"); return result.slice(0, 3) },
     modelTask(model) { const caps = model.capabilities || {}; if (caps.is_embedding_model || model.task_type === "embedding") return "embedding"; if (caps.is_rerank_model || model.task_type === "rerank") return "rerank"; if ((caps.output_modalities || []).includes("image") || model.task_type === "image_generation") return "image"; if ((caps.output_modalities || []).includes("audio") || model.task_type === "tts") return "tts"; return "chat" },
     async testModel(model) {
@@ -482,7 +530,7 @@ export default {
     resetSection(name) { this.$set(this.sectionDrafts, name, clone(this.originalSections[name])); if (name === "model_groups") { this.groupRows = this.groupsToRows(this.sectionDrafts.model_groups); this.selectedRouteGroupId = this.groupRows[0]?.clientId || ""; this.routingIssues = [] } this.$set(this.dirtySections, name, false); this.syncDirty() },
     setSectionValidity(name, paths) { this.$set(this.invalidSections, name, paths || []) },
     sectionInvalid(name) { return Boolean(this.invalidSections[name]?.length) },
-    async saveSection(name, value = this.sectionDrafts[name]) { if (this.sectionInvalid(name)) return; this.saving = name; try { const response = await this.putRequest(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); this.applyConfiguration(response.data, this.selectedProviderName); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
+    async saveSection(name, value = this.sectionDrafts[name]) { if (this.sectionInvalid(name) || (this.saving && this.saving !== "model_groups")) return; this.saving = name; try { const submitted = { section: name, value: JSON.stringify(name === "model_groups" ? this.groupRows : this.sectionDrafts[name]) }; const response = await this.putRequest(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
     groupsToRows(groups) { const names = new Set(Object.keys(groups || {})); return Object.entries(groups || {}).map(([name, targets]) => ({ name, targets: targets.map((value) => ({ kind: names.has(value) ? "group" : "model", value, clientId: uid() })), clientId: uid() })) },
     addGroup() { const group = { name: "", targets: [], clientId: uid() }; this.groupRows.push(group); this.selectedRouteGroupId = group.clientId; this.markGroupsDirty() },
     removeGroup(index) { this.groupRows.splice(index, 1); this.markGroupsDirty() },
@@ -509,6 +557,7 @@ export default {
       return ""
     },
     async saveGroups() {
+      if (this.saving) return
       if (this.hasGroupErrors) { this.$message.warning("请先修正路由组名称、目标或循环引用。"); return }
       const value = this.groupRows.map((item) => ({ name: item.name.trim(), targets: item.targets.map((target) => target.value.trim()) }))
       this.saving = "model_groups"

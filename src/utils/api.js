@@ -168,11 +168,12 @@ export const postRequest = (url, params, config = {}) => {
   })
 }
 //传递json的put请求
-export const putRequest = (url, params) => {
+export const putRequest = (url, params, config = {}) => {
   if (!url.startsWith("http")) {
     url = `${getBaseUrl()}${url}`
   }
   return axios({
+    ...config,
     method: "put",
     url: url,
     data: params,

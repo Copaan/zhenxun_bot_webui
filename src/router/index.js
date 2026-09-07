@@ -137,10 +137,6 @@ router.onError((error) => {
   )
 })
 
-router.afterEach(() => {
-  window.sessionStorage.removeItem(CHUNK_RELOAD_KEY)
-})
-
 router.beforeEach(async (to, from, next) => {
   const isAuthenticated = window.sessionStorage.getItem("isAuthenticated")
   const hasToken = hasValidAuthToken()

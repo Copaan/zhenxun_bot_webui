@@ -4,6 +4,7 @@
     <i v-else class="el-icon-warning-outline warning"></i>
     <h2>{{ timedOut ? "自动连接等待超时" : "正在重启真寻" }}</h2>
     <p>{{ timedOut ? "服务可能仍在启动，可以重新检测或手动打开下列地址。" : state.message }}</p>
+    <p v-if="insecureTargets">当前 HTTPS 页面无法安全探测 HTTP 入口，请手动打开目标地址并重新登录。</p>
     <div v-if="timedOut" class="restart-actions">
       <el-button type="primary" @click="retry">重新检测</el-button>
       <el-button @click="dismiss">关闭等待页</el-button>
@@ -35,6 +36,9 @@ export default {
     const saved = restartRecoveryState()
     if (saved) this.begin(saved)
   },
+  computed: {
+    insecureTargets() { return window.location.protocol === "https:" && this.state.accessUrls.some(url => new URL(url).protocol === "http:") },
+  },
   beforeDestroy() {
     window.removeEventListener(RESTART_RECOVERY_EVENT, this.handleStart)
     this.runId += 1
@@ -54,6 +58,7 @@ export default {
       this.poll(this.runId)
     },
     async readStatus(baseUrl) {
+      if (window.location.protocol === "https:" && new URL(baseUrl).protocol === "http:") return null
       const controller = new AbortController()
       const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT)
       try {
@@ -102,9 +107,11 @@ export default {
         const preferred = this.state.preferredOrigin || this.state.accessUrls[0]
         const fallback = this.state.fallbackUrls || []
         const candidates = attempt < 8 ? [preferred] : [preferred, ...fallback]
+        if ([preferred, ...fallback].filter(Boolean).every(url => window.location.protocol === "https:" && new URL(url).protocol === "http:")) { this.timedOut = true; return }
         for (const baseUrl of candidates.filter(Boolean)) {
           try {
             const payload = await this.readStatus(baseUrl)
+            if (runId !== this.runId) return
             const bootId = payload && payload.data && payload.data.boot_id
             if (!bootId || bootId === this.state.bootId) continue
             if (payload.data.transaction_verification_pending) continue

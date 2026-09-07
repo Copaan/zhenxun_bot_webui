@@ -376,7 +376,6 @@ export default {
 
 <style>
 /* 添加自定义字体 */
-@import url("https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap");
 
 .font-comic {
   font-family: "Comic Neue", cursive;

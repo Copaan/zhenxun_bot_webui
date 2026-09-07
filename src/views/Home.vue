@@ -477,6 +477,11 @@
               {{ lifecycleStatus.plugin_runtime?.watcher?.state || "未知" }}
             </strong>
           </div>
+          <NetworkStatus :status="lifecycleStatus.network || {}" />
+          <div class="startup-report-row">
+            <span>TLS关闭超时回收</span>
+            <strong>{{ lifecycleStatus.transport?.tls_drain_abort_count || 0 }}</strong>
+          </div>
           <template v-if="lifecycleStatus.http_sidecar?.mode">
             <div class="startup-report-row">
               <span>HTTP兼容入口</span>
@@ -663,6 +668,7 @@
             <strong>{{ item.role }}</strong>
             <p>Spawn PID {{ item.spawn_pid || "-" }} / Runtime PID {{ item.runtime_pid || "-" }}</p>
             <p>退出来源：{{ item.exit_reason || "未知" }}</p>
+            <p>Spawn 退出码：{{ item.spawn_return_code ?? item.return_code ?? "未退出" }} · Runtime 关闭：{{ item.runtime_shutdown?.result === "confirmed" ? "已核验" : "未确认" }}</p>
             <code v-if="item.shutdown_id">{{ item.shutdown_id }}</code>
             <p v-for="(stage, index) in item.stop_stages || []" :key="index">
               {{ stage.stage }} · {{ formatDuration((stage.elapsed_seconds || 0) * 1000) }}
@@ -671,6 +677,15 @@
             </p>
           </article>
         </section>
+        <section class="startup-report-section">
+          <h3>诊断采集与关闭核验</h3>
+          <p>快照：{{ lifecycleStatus.snapshot_at || "未知" }} · {{ lifecycleStatus.snapshot_phase || "未知" }}</p>
+          <p>系统采样：{{ lifecycleStatus.process?.process_sample_state || "未知" }} · {{ lifecycleStatus.process?.process_sampled_at || "暂无有效采样" }}</p>
+          <p>Task、线程及子进程数量为最后采样值，不代表关闭后的存活数量。</p>
+          <p>launcher 终态：{{ lifecycleStatus.launcher?.terminal_shutdown?.result === "confirmed" ? "已核验关闭" : "尚无匹配终态收据" }}</p>
+          <p v-if="lifecycleStatus.launcher?.current_commit_session">当前事务：{{ lifecycleStatus.launcher.current_commit_session.phase }}</p>
+          <p v-if="lifecycleStatus.launcher?.historical_commit_session">历史已结束事务：{{ lifecycleStatus.launcher.historical_commit_session.phase }}</p>
+        </section>
       </div>
     </el-drawer>
   </div>
@@ -678,6 +693,7 @@
 
 <script>
 import AccountSecurityDialog from "@/components/account/AccountSecurityDialog"
+import NetworkStatus from "@/components/system/NetworkStatus"
 import BotRequiredState from "@/components/common/BotRequiredState"
 import PluginOperationDialog from "@/components/store/PluginOperationDialog"
 import logoUrl from "@/assets/image/logo.png"
@@ -688,7 +704,7 @@ import { hasDirtyState } from "@/utils/dirty-state"
 import { startRestartRecovery } from "@/utils/restart-recovery"
 export default {
   name: "MainHome",
-  components: { AccountSecurityDialog, BotRequiredState, PluginOperationDialog },
+  components: { AccountSecurityDialog, BotRequiredState, PluginOperationDialog, NetworkStatus },
   data() {
     return {
       accountSecurityVisible: false,
@@ -966,9 +982,9 @@ export default {
       } catch (error) {
         this.startupStatus = { state: "failed", stages: {}, errors: [{ code: "status_unavailable" }] }
       }
-      if (!["warmup_ready", "degraded", "failed"].includes(this.startupStatus.state)) {
-        this.startupPollTimer = window.setTimeout(this.loadStartupStatus, 1200)
-      }
+      if (this._isDestroyed || this._isBeingDestroyed) return
+      const settled = ["warmup_ready", "degraded", "failed"].includes(this.startupStatus.state)
+      this.startupPollTimer = window.setTimeout(this.loadStartupStatus, settled ? 10000 : 1200)
     },
     async openStartupReport() {
       this.startupDrawerVisible = true
@@ -1080,7 +1096,7 @@ export default {
       try {
         const response = await this.postRequest(`${this.$root.prefix}/system/restart`, {})
         if (!response || !response.suc) throw new Error(response && response.info)
-        startRestartRecovery({ bootId: response.data.boot_id, accessUrls: response.data.access_urls, returnRoute: this.$route.path, message: "正在等待 launcher 启动新的真寻进程。" })
+        startRestartRecovery({ bootId: response.data.boot_id, accessUrls: response.data.access_urls, accessTargets: response.data.access_targets, preferredUrl: response.data.preferred_url, returnRoute: this.$route.path, message: "正在等待 launcher 启动新的真寻进程。" })
       } catch (error) {
         this.$message.error(error.response?.data?.detail || error.message || "重启请求失败。")
       } finally {

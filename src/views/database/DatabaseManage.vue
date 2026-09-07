@@ -154,12 +154,14 @@ export default {
     formatNumber(value) { return value == null ? "-" : Number(value).toLocaleString() },
     formatBytes(value) { if (!value) return "-"; const units = ["B", "KB", "MB", "GB"]; let size = Number(value); let index = 0; while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1 } return `${size.toFixed(index ? 1 : 0)} ${units[index]}` },
     async loadRuntime() {
+      if (this.loading || this.saving) return
       this.loading = true; this.operationError = ""
       try {
         const response = await this.getRequest(`${this.$root.prefix}/database/runtime`)
         if (!response.suc) throw new Error(response.info)
-        this.runtime = response.data; this.revision = response.data.revision; this.launcherManaged = response.data.launcher_managed
+        this.runtime = response.data; this.launcherManaged = response.data.launcher_managed
         if (!this.draftsInitialized) {
+          this.revision = response.data.revision
           const configuration = response.data.database.configuration
           const mode = configuration.mode || "sqlite"
           this.databaseMode = mode
@@ -168,7 +170,7 @@ export default {
           Object.keys(this.databaseDrafts).forEach((key) => { this.$set(this.databaseBaselines, key, JSON.stringify(this.databaseDrafts[key])) })
           this.draftsInitialized = true
         }
-        this.cache = { ...this.cache, ...response.data.cache.configuration }
+        if (!this.cacheBaseline) this.cache = { ...this.cache, ...response.data.cache.configuration }
         this.$nextTick(() => { if (!this.cacheBaseline) this.cacheBaseline = JSON.stringify(this.cache); this.updateDirtyState() })
       } catch (error) { this.operationError = error.response?.data?.detail || error.message || "数据服务状态加载失败。" }
       finally { this.loading = false }
@@ -182,26 +184,37 @@ export default {
       setDirtyState("database-configuration", databaseDirty || JSON.stringify(this.cache) !== this.cacheBaseline)
     },
     async probe() {
+      if (this.probing || this.saving) return
+      const mode = this.databaseMode
+      const draft = JSON.stringify(this.databaseDrafts[mode])
+      const cache = JSON.stringify(this.cache)
       this.probing = true; this.operationError = ""; this.$delete(this.databaseProbeErrors, this.databaseMode)
       try {
         const response = await this.postRequest(`${this.$root.prefix}/database/probe`, this.payload())
         if (!response.suc) throw new Error(response.info)
-        this.$set(this.probeResults, this.databaseMode, response.data)
-        if (response.data.database.status === "error" || response.data.cache.status === "error") this.$set(this.databaseProbeErrors, this.databaseMode, "连接检查未通过，请根据状态修改配置。")
+        if (draft !== JSON.stringify(this.databaseDrafts[mode]) || cache !== JSON.stringify(this.cache)) return
+        this.$set(this.probeResults, mode, response.data)
+        if (response.data.database.status === "error" || response.data.cache.status === "error") this.$set(this.databaseProbeErrors, mode, "连接检查未通过，请根据状态修改配置。")
         else this.$message.success("数据库与缓存检查完成。")
-      } catch (error) { this.$set(this.databaseProbeErrors, this.databaseMode, error.response?.data?.detail || error.message || "连接检查失败。") }
+      } catch (error) { if (draft === JSON.stringify(this.databaseDrafts[mode])) this.$set(this.databaseProbeErrors, mode, error.response?.data?.detail || error.message || "连接检查失败。") }
       finally { this.probing = false }
     },
     async save() {
+      if (this.saving || this.probing) return
+      const mode = this.databaseMode
+      const draft = JSON.stringify(this.databaseDrafts[mode])
+      const cache = JSON.stringify(this.cache)
       this.saving = true; this.operationError = ""
       try {
         const response = await this.putRequest(`${this.$root.prefix}/database/configuration`, { expected_revision: this.revision, ...this.payload() })
-        if (!response.suc) { this.$set(this.probeResults, this.databaseMode, response.data || {}); throw new Error(response.info) }
+        if (!response.suc) { this.$set(this.probeResults, mode, response.data || {}); throw new Error(response.info) }
+        if (response.data?.apply_mode !== "failed") {
         this.revision = response.data.revision
-        this.savedDatabaseMode = this.databaseMode
-        this.$set(this.databaseBaselines, this.databaseMode, JSON.stringify(this.activeDatabase))
-        this.cacheBaseline = JSON.stringify(this.cache)
+        this.savedDatabaseMode = mode
+        this.$set(this.databaseBaselines, mode, draft)
+        this.cacheBaseline = cache
         this.updateDirtyState()
+        }
         await handleApplyResult(this, response, {
           restartPrompt: "数据与缓存配置已保存，需要重启后生效。",
           restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
@@ -220,6 +233,7 @@ export default {
       } catch (error) { /* User cancelled. */ }
     },
     async cacheRequest(action, path, payload) {
+      if (this.cacheAction || this.saving) return
       this.cacheAction = action
       try {
         const response = await this.postRequest(`${this.$root.prefix}${path}`, payload)

@@ -253,7 +253,6 @@ export default {
 
 <style scoped>
 /* 自定义字体 */
-@import url("https://fonts.googleapis.com/css2?family=Mochiy+Pop+P+One&display=swap");
 
 .switch-border {
   display: flex;

@@ -130,6 +130,12 @@ export default {
           this.ws = null
         }
         stopHeartbeat()
+        if (event.code === 1013) {
+          reconnectEnabled = false
+          emitWebSocketState("chat", "limited")
+          vue.$message.warning("聊天连接已达到上限或接收过慢，请关闭其他聊天页面后重新连接。")
+          return
+        }
         if (handleAuthenticatedWebSocketClose(event)) {
           reconnectEnabled = false
           emitWebSocketState("chat", "idle")

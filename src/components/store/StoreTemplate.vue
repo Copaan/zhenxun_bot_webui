@@ -30,7 +30,7 @@
 
     <div v-if="error" class="inline-state is-error">
       <i class="el-icon-warning-outline"></i><span>{{ error }}</span>
-      <el-button type="text" @click="loadPlugins">重新加载</el-button>
+      <el-button type="text" @click="loadPlugins(false)">重新加载</el-button>
     </div>
 
     <div v-loading="loading" class="store-content">
