@@ -15,17 +15,33 @@
 
     <section v-if="selectedPlatform === 'onebot_v11'" class="configuration-section">
       <div class="section-heading"><div><h2>OneBot V11</h2><p>协议端使用反向 WebSocket 主动连接真寻。</p></div><el-tag type="primary" effect="plain">反向 WebSocket</el-tag></div>
-      <el-form class="form-grid" label-position="top">
-        <el-form-item label="反向连接主机" class="span-2"><el-input v-model="onebotHost" placeholder="留空使用当前页面主机；仅主机名或 IP" maxlength="253" /></el-form-item>
-        <el-form-item label="连接地址" class="span-2"><div class="copy-field"><code>{{ onebotWebSocketUrl }}</code><el-button size="small" icon="el-icon-document-copy" :disabled="!endpoint.url || !['tls_not_enabled', 'tls_certificate_identity_ok'].includes(endpoint.code)" @click="copyText(onebotWebSocketUrl)">复制</el-button></div></el-form-item>
+      <div class="endpoint-section">
+        <div class="endpoint-heading"><h3>当前运行连接地址</h3><el-button size="small" icon="el-icon-refresh" :loading="statusLoading" @click="loadStatus">刷新状态</el-button></div>
+        <div class="copy-field"><code>{{ onebotWebSocketUrl }}</code><el-button size="small" icon="el-icon-document-copy" :disabled="!canCopyEndpoint" @click="copyText(onebotWebSocketUrl)">复制</el-button></div>
+        <p class="field-help">{{ endpointSource }} · DNS、网络及客户端信任未验证</p>
+        <el-alert v-if="onebotEndpointWarning" :title="onebotEndpointWarning" type="warning" show-icon :closable="false" />
+      </div>
+      <div v-if="endpoint.certificate_candidates && endpoint.certificate_candidates.length" class="endpoint-section">
+        <h3>证书域名候选</h3>
+        <p class="field-help">DNS、网络及客户端信任未验证。域名需在协议端解析到本体；直接使用 WSS，不依赖 308。</p>
+        <div v-for="candidate in endpoint.certificate_candidates" :key="candidate.url" class="candidate-row">
+          <code>{{ candidate.url }}</code>
+          <div class="candidate-actions"><el-button size="small" icon="el-icon-document-copy" :disabled="!candidate.certificate_valid_now || !candidate.certificate_name_match" @click="copyText(candidate.url)">复制</el-button><el-button size="small" icon="el-icon-edit" :disabled="saving" @click="onebotHost = candidate.connection_host">选入草稿</el-button></div>
+        </div>
+      </div>
+      <p v-if="endpoint.certificate_wildcards && endpoint.certificate_wildcards.length" class="field-help">通配符证书：{{ endpoint.certificate_wildcards.join('、') }}，请填写匹配的具体子域名，不能直接使用 * 连接。</p>
+      <div class="endpoint-section saved-endpoint">
+        <div class="endpoint-heading"><h3>已保存目标地址</h3><el-tag size="small" :type="savedEndpoint.pending_restart ? 'warning' : 'info'">{{ savedEndpoint.url ? savedEndpoint.pending_restart ? '已保存，待重启' : '与运行配置一致' : '目标配置未确认' }}</el-tag></div>
+        <code>{{ savedEndpoint.url || '目标地址暂不可用' }}</code>
+      </div>
+      <el-form class="form-grid" label-position="top" :disabled="saving">
+        <el-form-item label="反向连接主机（保存后重启生效）" class="span-2"><el-input v-model="onebotHost" placeholder="留空使用当前页面主机；仅主机名或 IP" maxlength="253" /><span v-if="protocolDirty" class="field-help">未保存修改</span></el-form-item>
         <el-form-item label="Access Token" class="span-2">
           <el-input v-model="onebotToken" show-password autocomplete="new-password" :placeholder="configuration.onebot.has_access_token ? '已配置，留空表示沿用当前值' : '建议设置 Token'" />
           <div class="field-actions"><span>协议端必须填写相同 Token，保存后重启生效。</span><el-button v-if="configuration.onebot.has_access_token" type="text" class="danger-text" @click="clearOnebotToken = !clearOnebotToken">{{ clearOnebotToken ? "取消清除" : "清除现有 Token" }}</el-button></div>
           <el-alert v-if="clearOnebotToken" type="warning" :closable="false" title="保存后将移除 OneBot Access Token。" />
         </el-form-item>
       </el-form>
-      <el-alert v-if="onebotEndpointWarning" :title="onebotEndpointWarning" type="warning" show-icon :closable="false" />
-      <p v-if="endpoint.certificate_domains && endpoint.certificate_domains.length">证书域名：{{ endpoint.certificate_domains.join('、') }}。所选域名需要在协议端解析到本体，直接使用 WSS，不依赖 308。</p>
       <el-button type="primary" :loading="saving" :disabled="!configuration.revision" @click="saveConfiguration">保存配置</el-button>
     </section>
 
@@ -128,6 +144,7 @@ export default {
   data() {
     return {
       selectedPlatform: "qq_official", loading: false, saving: false, statusLoading: false,
+      statusConfirmed: false, statusSequence: 0, configurationSequence: 0,
       status: { onebot_v11_connected: false, qq_official_enabled: false, qq_official_connected: false, qq_webhook_mode: "external", qq_webhook_callback_url: null, connections: [], qq_bots: [], onebot_v11_reverse_ws_path: "/onebot/v11/ws", qq_webhook_path: "/qq/webhook" },
       configuration: { revision: "", launcher_managed: false, onebot: { has_access_token: false }, qq: { bots: [] } },
       onebotToken: "", onebotHost: "", clearOnebotToken: false, qqSetupMode: "scan", logoUrl, registration: emptyRegistration(), registrationTimer: null,
@@ -136,9 +153,13 @@ export default {
     }
   },
   computed: {
-    endpoint() { return this.status.onebot_endpoint?.url ? this.status.onebot_endpoint : this.configuration.onebot.endpoint || {} },
+    endpoint() { return this.statusConfirmed ? this.status.onebot_endpoint || {} : {} },
+    savedEndpoint() { return this.configuration.onebot.configured_endpoint || {} },
+    protocolDirty() { return Boolean(this.originalProtocol && this.protocolSnapshot() !== this.originalProtocol) },
+    canCopyEndpoint() { return Boolean(this.endpoint.url && ['tls_not_enabled', 'tls_certificate_identity_ok'].includes(this.endpoint.code)) },
+    endpointSource() { return !this.statusConfirmed ? '运行状态未确认' : this.endpoint.host_source === 'configured' ? '来源：当前生效的反向连接主机' : '来源：页面访问主机，协议与端口取自本次启动' },
     onebotWebSocketUrl() { return this.endpoint.url || "连接地址暂不可用" },
-    onebotEndpointWarning() { const messages = { tls_certificate_name_mismatch: "连接主机不在证书名称中，协议端会拒绝 TLS 连接。请设置匹配证书的域名。", tls_certificate_time_invalid: "证书尚未生效或已过期，请更换有效证书。", tls_certificate_unavailable: "无法检查证书，请核对本体证书配置。", tls_not_enabled: "当前连接未加密，Token 将明文传输。" }; return messages[this.endpoint.code] || "" },
+    onebotEndpointWarning() { if (!this.statusConfirmed) return '运行状态尚未确认，请刷新状态；已保存配置不代表当前可连接。'; const messages = { connection_host_invalid: '无法生成连接地址，请填写有效的主机名或 IP。', tls_certificate_name_mismatch: "连接主机不在证书名称中，协议端会拒绝 TLS 连接。请设置匹配证书的域名。", tls_certificate_time_invalid: "证书尚未生效或已过期，请更换有效证书。", tls_certificate_unavailable: "无法检查证书，请核对本体证书配置。", tls_not_enabled: "当前连接未加密，Token 将明文传输。" }; return messages[this.endpoint.code] || "" },
     hasAnyConnection() { return this.status.connections.length > 0 },
     hasWebhookBots() { return this.qqForm.bots.some((bot) => !bot.use_websocket) },
     configuredBotRows() {
@@ -166,7 +187,7 @@ export default {
     registrationDescription() { if (this.registration.status === "completed") return this.registration.restartAvailable ? "配置已安全保存。可以立即重启，也可以稍后从顶部重启真寻。" : "配置已安全保存，请手动重启真寻后连接机器人。"; if (this.registration.status === "expired") return "请重新生成二维码后再扫描。"; if (this.registration.status === "error") return "可以重试当前操作或重新生成二维码。"; return "使用手机 QQ 扫描二维码，并按页面提示选择或创建机器人。" },
   },
   async mounted() { await Promise.all([this.loadConfiguration(), this.loadStatus()]) },
-  beforeDestroy() { this.clearRegistrationTimer(); clearDirtyState("protocol-configuration") },
+  beforeDestroy() { this.statusSequence++; this.configurationSequence++; this.clearRegistrationTimer(); clearDirtyState("protocol-configuration") },
   watch: {
     qqForm: { deep: true, handler() { this.updateDirtyState() } },
     onebotToken() { this.updateDirtyState() },
@@ -175,11 +196,25 @@ export default {
   },
   methods: {
     async loadConfiguration() {
+      const sequence = ++this.configurationSequence
+      const snapshot = this.protocolSnapshot()
       this.loading = true
-      try { const response = await this.getRequest(`${this.$root.prefix}/protocol/configuration`, {}, { suppressErrorToast: true }); if (!response || !response.suc) throw new Error(response && response.info); this.configuration = response.data; this.onebotHost = response.data.onebot.reverse_ws_host || ""; const qq = response.data.qq; this.qqForm = { enabled: qq.enabled, bots: (qq.bots || []).map((bot) => ({ ...emptyBot(), ...bot, use_websocket: Boolean(qq.bot_modes?.[bot.id]) })), webhook_mode: qq.webhook_mode || "external", public_base_url: qq.public_base_url || "", listen_host: qq.listen_host || "0.0.0.0", listen_port: qq.listen_port || 443, tls_certfile: "", tls_keyfile: "", has_tls_certfile: qq.has_tls_certfile, has_tls_keyfile: qq.has_tls_keyfile }; this.$nextTick(() => { this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration") }) }
-      catch (error) { this.$message.error(apiErrorDetail(error, "机器人配置读取失败。")) } finally { this.loading = false }
+      try { const response = await this.getRequest(`${this.$root.prefix}/protocol/configuration`, {}, { suppressErrorToast: true }); if (sequence !== this.configurationSequence || snapshot !== this.protocolSnapshot()) return; if (!response || !response.suc) throw new Error(response && response.info); this.configuration = response.data; this.onebotHost = response.data.onebot.reverse_ws_host || ""; const qq = response.data.qq; this.qqForm = { enabled: qq.enabled, bots: (qq.bots || []).map((bot) => ({ ...emptyBot(), ...bot, use_websocket: Boolean(qq.bot_modes?.[bot.id]) })), webhook_mode: qq.webhook_mode || "external", public_base_url: qq.public_base_url || "", listen_host: qq.listen_host || "0.0.0.0", listen_port: qq.listen_port || 443, tls_certfile: "", tls_keyfile: "", has_tls_certfile: qq.has_tls_certfile, has_tls_keyfile: qq.has_tls_keyfile }; this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration") }
+      catch (error) { if (sequence === this.configurationSequence) this.$message.error(apiErrorDetail(error, "机器人配置读取失败。")) } finally { if (sequence === this.configurationSequence) this.loading = false }
     },
-    async loadStatus() { this.statusLoading = true; try { const response = await this.getRequest(`${this.$root.prefix}/protocol/status`, {}, { suppressErrorToast: true }); if (response && response.suc) this.status = response.data } finally { this.statusLoading = false } },
+    async loadStatus() {
+      const sequence = ++this.statusSequence
+      this.statusLoading = true
+      try {
+        const response = await this.getRequest(`${this.$root.prefix}/protocol/status`, {}, { suppressErrorToast: true })
+        if (sequence !== this.statusSequence) return
+        if (!response || !response.suc) throw new Error('protocol_status_unavailable')
+        this.status = response.data
+        this.statusConfirmed = Boolean(response.data.onebot_endpoint)
+      } catch (error) {
+        if (sequence === this.statusSequence) this.statusConfirmed = false
+      } finally { if (sequence === this.statusSequence) this.statusLoading = false }
+    },
     protocolSnapshot() { return JSON.stringify({ onebotHost: this.onebotHost, onebotToken: this.onebotToken, clearOnebotToken: this.clearOnebotToken, qq: { ...this.qqForm, bots: this.qqForm.bots.map(({ probing, removing, probeResult, probeError, localKey, ...bot }) => bot) } }) },
     updateDirtyState() { if (this.originalProtocol) setDirtyState("protocol-configuration", this.protocolSnapshot() !== this.originalProtocol) },
     clearRegistrationTimer() { if (this.registrationTimer) window.clearTimeout(this.registrationTimer); this.registrationTimer = null },
@@ -226,8 +261,38 @@ export default {
     canProbeBot(bot) { return Boolean(bot.id && (bot.secret || bot.has_secret)) },
     async probeBot(bot) { bot.probing = true; bot.probeResult = ""; bot.probeError = null; try { const response = await this.postRequest(`${this.$root.prefix}/protocol/qq/probe`, { id: bot.id, token: bot.token || null, secret: bot.secret || null }, { suppressErrorToast: true }); if (!response || !response.suc) throw new Error(response && response.info); bot.probeResult = response.data.username || response.data.bot_id || "凭据有效" } catch (error) { bot.probeError = apiErrorDiagnostic(error, "凭据验证失败。") } finally { bot.probing = false } },
     async saveConfiguration() {
+      if (this.saving) return
+      ++this.configurationSequence
+      this.loading = false
+      const submittedSnapshot = this.protocolSnapshot()
       this.saving = true
-      try { const response = await this.putRequest(`${this.$root.prefix}/protocol/configuration`, { expected_revision: this.configuration.revision, onebot_reverse_ws_host: this.onebotHost, onebot_access_token: this.onebotToken || null, clear_onebot_access_token: this.clearOnebotToken, qq_enabled: this.qqForm.enabled, qq_bots: this.qqForm.bots.map((bot) => ({ id: bot.id, token: bot.token || null, secret: bot.secret || null, use_websocket: bot.use_websocket })), qq_webhook_mode: this.qqForm.webhook_mode, qq_webhook_public_base_url: this.qqForm.public_base_url, qq_webhook_listen_host: this.qqForm.listen_host, qq_webhook_listen_port: this.qqForm.listen_port, qq_webhook_tls_certfile: this.qqForm.tls_certfile, qq_webhook_tls_keyfile: this.qqForm.tls_keyfile }); if (!response || !response.suc) throw new Error(response && response.info); this.configuration.revision = response.data.revision; this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration"); await handleApplyResult(this, response, { restartPrompt: "协议配置已保存，需要重启后生效。", restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}), returnRoute: "/protocol", recoveryMessage: "协议端将在新进程中使用更新后的配置。" }) }
+      try {
+        const response = await this.putRequest(`${this.$root.prefix}/protocol/configuration`, {
+          expected_revision: this.configuration.revision,
+          onebot_reverse_ws_host: this.onebotHost,
+          onebot_access_token: this.onebotToken || null,
+          clear_onebot_access_token: this.clearOnebotToken,
+          qq_enabled: this.qqForm.enabled,
+          qq_bots: this.qqForm.bots.map((bot) => ({ id: bot.id, token: bot.token || null, secret: bot.secret || null, use_websocket: bot.use_websocket })),
+          qq_webhook_mode: this.qqForm.webhook_mode,
+          qq_webhook_public_base_url: this.qqForm.public_base_url,
+          qq_webhook_listen_host: this.qqForm.listen_host,
+          qq_webhook_listen_port: this.qqForm.listen_port,
+          qq_webhook_tls_certfile: this.qqForm.tls_certfile,
+          qq_webhook_tls_keyfile: this.qqForm.tls_keyfile,
+        })
+        if (!response || !response.suc || response.data?.apply_mode === 'failed') throw new Error(response && response.info)
+        this.configuration.revision = response.data.revision
+        this.configuration.onebot = { ...this.configuration.onebot, ...response.data.onebot }
+        this.originalProtocol = submittedSnapshot
+        this.updateDirtyState()
+        await handleApplyResult(this, response, {
+          restartPrompt: "协议配置已保存，需要重启后生效。",
+          restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
+          returnRoute: "/protocol",
+          recoveryMessage: "协议端将在新进程中使用更新后的配置。",
+        })
+      }
       catch (error) { this.$message.error(apiErrorDetail(error, "机器人配置保存失败。")) } finally { this.saving = false }
     },
     async restartRegistration() {
@@ -245,6 +310,18 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+.endpoint-section { padding: 18px 0; border-bottom: 1px solid var(--border-color-light); min-width: 0; }
+.endpoint-section h3 { margin: 0 0 10px; font-size: 16px; }
+.endpoint-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.endpoint-heading h3 { margin: 0; }
+.endpoint-section .el-alert { margin-top: 10px; }
+.candidate-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border-color-light); }
+.candidate-row:last-child { border-bottom: 0; }
+.candidate-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.candidate-actions { display: flex; flex-shrink: 0; gap: 8px; }
+.candidate-actions .el-button + .el-button { margin-left: 0; }
+.saved-endpoint code { overflow-wrap: anywhere; }
+@media (max-width: 640px) { .candidate-row { align-items: stretch; flex-direction: column; } .copy-field { align-items: flex-start; } .copy-field > .el-button { flex-shrink: 0; } }
 .protocol-page { height: 100%; overflow-y: auto; padding: 4px 6px 84px; color: var(--text-color); }.page-heading, .section-heading, .bot-list-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }.page-heading { margin-bottom: 22px; }.page-heading h1 { margin: 4px 0 7px; font-size: 30px; }.page-heading p, .section-heading p, .bot-list-heading p { margin: 0; color: var(--text-color-secondary); line-height: 1.6; }.eyebrow { color: var(--primary-color) !important; font-size: 12px; font-weight: 700; letter-spacing: .14em; }
 .overall-status { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--border-color-light); border-radius: 20px; color: var(--text-color-secondary); }.overall-status span { width: 8px; height: 8px; border-radius: 50%; background: var(--text-color-placeholder); }.overall-status.online { color: var(--success-color); }.overall-status.online span { background: var(--success-color); }
 .platform-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }.platform-card { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 13px 15px; border: 1px solid var(--border-color-light); border-radius: 7px; color: var(--text-color); background: var(--bg-color-secondary); cursor: pointer; text-align: left; }.platform-card.active { border-color: var(--primary-color); box-shadow: 0 3px 12px rgba(255,107,149,.1); }.platform-card > span:nth-child(2) { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }.platform-card small { color: var(--text-color-secondary); }.platform-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 7px; color: #fff; font-weight: 700; background: #7564dd; }.platform-icon.qq_official { background: #0891b2; }

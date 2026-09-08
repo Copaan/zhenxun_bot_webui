@@ -6,6 +6,7 @@ import {
   handleAuthenticatedWebSocketClose,
   safeWebSocketSend,
 } from "./create-websocket"
+import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 
 var ws = null
 var heartbeatInterval = null
@@ -26,7 +27,7 @@ function stopHeartbeat() {
 }
 
 function scheduleReconnect(onMessage, context) {
-  if (!reconnectEnabled || reconnectTimer) return
+  if (isBusinessNetworkFrozen() || !reconnectEnabled || reconnectTimer) return
   emitWebSocketState("status", "reconnecting")
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
@@ -34,10 +35,11 @@ function scheduleReconnect(onMessage, context) {
   }, 3000)
 }
 
-export default {
+const statusWebSocket = {
   ws: null,
   //初始化ws
   initWebSocket: function (onMessage) {
+    if (isBusinessNetworkFrozen()) return
     reconnectEnabled = true
     if (!ws) {
       emitWebSocketState("status", "connecting")
@@ -46,15 +48,20 @@ export default {
       const websocket = createAuthenticatedWebSocket(
         "/zhenxun/socket/system_status"
       )
+      if (!websocket) return
       ws = websocket
       this.ws = websocket
       startHeartbeat()
       websocket.onopen = () => {
+        if (isBusinessNetworkFrozen() || ws !== websocket) return
         console.log("STATUS_WS_URL WebSocket 已连接...")
         emitWebSocketState("status", "connected")
       }
-      websocket.onmessage = onMessage
+      websocket.onmessage = (event) => {
+        if (!isBusinessNetworkFrozen() && ws === websocket) onMessage(event)
+      }
       websocket.onclose = (event) => {
+        if (ws !== websocket) return
         if (ws === websocket) {
           ws = null
           this.ws = null
@@ -80,8 +87,17 @@ export default {
       reconnectTimer = null
     }
     stopHeartbeat()
-    if (ws && ws.readyState <= WebSocket.OPEN) {
-      ws.close()
+    const websocket = ws
+    ws = null
+    this.ws = null
+    if (websocket && websocket.readyState <= WebSocket.OPEN) {
+      websocket.close()
     }
   },
 }
+
+onBusinessNetworkChange((frozen) => {
+  if (frozen) statusWebSocket.closeWebSocket()
+})
+
+export default statusWebSocket

@@ -6,6 +6,7 @@ import {
   handleAuthenticatedWebSocketClose,
   safeWebSocketSend,
 } from "./create-websocket"
+import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 
 var ws = null
 var heartbeatInterval = null
@@ -26,31 +27,37 @@ function stopHeartbeat() {
 }
 
 function scheduleReconnect(onMessage, context) {
-  if (!reconnectEnabled || reconnectTimer) return
+  if (isBusinessNetworkFrozen() || !reconnectEnabled || reconnectTimer) return
   emitWebSocketState("log", "reconnecting")
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     if (reconnectEnabled) context.initWebSocket(onMessage)
   }, 3000)
 }
-export default {
+const logWebSocket = {
   ws: null,
   //初始化ws
   initWebSocket: function (onMessage) {
+    if (isBusinessNetworkFrozen()) return
     reconnectEnabled = true
     if (!ws) {
       emitWebSocketState("log", "connecting")
       console.log("LOG_WS_URL WebSocket 正在连接...")
       const websocket = createAuthenticatedWebSocket("/zhenxun/socket/logs")
+      if (!websocket) return
       ws = websocket
       this.ws = websocket
       startHeartbeat()
       websocket.onopen = () => {
+        if (isBusinessNetworkFrozen() || ws !== websocket) return
         console.log("LOG_WS_URL WebSocket 已连接...")
         emitWebSocketState("log", "connected")
       }
-      websocket.onmessage = onMessage
+      websocket.onmessage = (event) => {
+        if (!isBusinessNetworkFrozen() && ws === websocket) onMessage(event)
+      }
       websocket.onclose = (event) => {
+        if (ws !== websocket) return
         if (ws === websocket) {
           ws = null
           this.ws = null
@@ -65,7 +72,10 @@ export default {
         else emitWebSocketState("log", "idle")
       }
     } else {
-      ws.onmessage = onMessage
+      const websocket = ws
+      ws.onmessage = (event) => {
+        if (!isBusinessNetworkFrozen() && ws === websocket) onMessage(event)
+      }
     }
   },
   //断开socked方法
@@ -78,8 +88,17 @@ export default {
       reconnectTimer = null
     }
     stopHeartbeat()
-    if (ws && ws.readyState <= WebSocket.OPEN) {
-      ws.close()
+    const websocket = ws
+    ws = null
+    this.ws = null
+    if (websocket && websocket.readyState <= WebSocket.OPEN) {
+      websocket.close()
     }
   },
 }
+
+onBusinessNetworkChange((frozen) => {
+  if (frozen) logWebSocket.closeWebSocket()
+})
+
+export default logWebSocket

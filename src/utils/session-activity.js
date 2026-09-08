@@ -1,6 +1,7 @@
 import axios from "axios"
 import { getBaseUrl, getCookie, setCookie } from "@/utils/api"
 import { handleAuthenticationExpired } from "@/utils/auth-session"
+import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "./restart-network"
 
 const RENEW_INTERVAL_MS = 60 * 1000
 const TRAILING_DELAY_MS = 1000
@@ -19,14 +20,14 @@ let renewal = null
 const authenticated = () => Boolean(getCookie("tokenStr"))
 
 const renew = async (trailing = false) => {
-  if (!authenticated()) return
+  if (isBusinessNetworkFrozen() || !authenticated()) return
   if (renewal) return renewal
   if (!trailing && Date.now() - lastRequestAt < RENEW_INTERVAL_MS) return
   if (trailing && activityVersion <= renewedActivityVersion) return
   const sequence = ++requestSequence
   const epoch = sessionEpoch
   lastRequestAt = Date.now()
-  renewal = axios
+  const request = axios
     .post(
       `${getBaseUrl()}/zhenxun/api/auth/activity`,
       {},
@@ -35,7 +36,7 @@ const renew = async (trailing = false) => {
     .then((response) => {
       const data = response?.data?.data || response?.data
       if (
-        epoch !== sessionEpoch ||
+        isBusinessNetworkFrozen() || epoch !== sessionEpoch ||
         sequence < appliedSequence ||
         !data?.access_token
       ) return
@@ -44,12 +45,13 @@ const renew = async (trailing = false) => {
       setCookie("tokenStr", `Bearer ${data.access_token}`, 1)
     })
     .catch((error) => {
-      if (error?.response?.status === 401) handleAuthenticationExpired(true)
+      if (!isBusinessNetworkFrozen() && epoch === sessionEpoch && !axios.isCancel(error) && error?.response?.status === 401) handleAuthenticationExpired(true)
     })
     .finally(() => {
-      renewal = null
+      if (renewal === request) renewal = null
     })
-  return renewal
+  renewal = request
+  return request
 }
 
 const scheduleTrailingRenewal = () => {
@@ -61,7 +63,7 @@ const scheduleTrailingRenewal = () => {
 }
 
 const onActivity = () => {
-  if (!authenticated()) return
+  if (isBusinessNetworkFrozen() || !authenticated()) return
   activityVersion += 1
   if (Date.now() - lastRequestAt >= RENEW_INTERVAL_MS) {
     void renew()
@@ -95,6 +97,10 @@ export const stopSessionActivity = () => {
   window.removeEventListener("zhenxun-auth-expired", resetSessionActivity)
   resetSessionActivity()
 }
+
+onBusinessNetworkChange((frozen) => {
+  if (frozen) resetSessionActivity()
+})
 
 export const sessionActivityForTests = {
   onActivity,

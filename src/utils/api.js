@@ -5,11 +5,30 @@ import {
   isLocalAuthRecoveryRequest,
 } from "./auth-session"
 import { clearAuthToken, getAuthToken, setAuthToken } from "./auth-token"
+import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "./restart-network"
+
+const businessRequests = new Set()
+const recoveryCancellation = () => new axios.Cancel("restart_recovery")
+
+window.addEventListener("unhandledrejection", (event) => {
+  // Legacy fire-and-forget callers may omit a rejection handler. Keep normal
+  // failures visible, but do not report the intentional recovery cancellation.
+  if (axios.isCancel(event.reason) && event.reason.message === "restart_recovery") {
+    event.preventDefault()
+  }
+})
+
+onBusinessNetworkChange((frozen) => {
+  if (frozen) for (const request of Array.from(businessRequests)) request.controller.abort()
+})
+
+const releaseBusinessRequest = (config) => config?._restartNetwork?.release()
 
 let lastErrorKey = ""
 let lastErrorAt = 0
 
 const showErrorOnce = (message) => {
+  if (isBusinessNetworkFrozen()) return
   const value = String(message || "请求处理失败，请稍后重试。")
   const now = Date.now()
   if (value === lastErrorKey && now - lastErrorAt < 5000) return
@@ -21,6 +40,27 @@ const showErrorOnce = (message) => {
 // 请求拦截器
 axios.interceptors.request.use(
   (config) => {
+    if (isBusinessNetworkFrozen()) throw recoveryCancellation()
+    const controller = new AbortController()
+    const sourceSignal = config.signal
+    const cancelToken = config.cancelToken
+    const abort = () => controller.abort()
+    const request = {
+      controller,
+      epoch: businessNetworkEpoch(),
+      release() {
+        businessRequests.delete(request)
+        sourceSignal?.removeEventListener("abort", abort)
+        cancelToken?.unsubscribe(request.release)
+      },
+    }
+    businessRequests.add(request)
+    controller.signal.addEventListener("abort", request.release, { once: true })
+    sourceSignal?.addEventListener("abort", abort, { once: true })
+    cancelToken?.subscribe(request.release)
+    if (sourceSignal?.aborted) abort()
+    config.signal = controller.signal
+    config._restartNetwork = request
     const token = getAuthToken()
     if (token) {
       //请求携带自定义token
@@ -29,13 +69,19 @@ axios.interceptors.request.use(
     return config
   },
   (error) => {
-    console.log(error)
+    return Promise.reject(error)
   }
 )
 
 // 响应拦截器
 axios.interceptors.response.use(
   (success) => {
+    releaseBusinessRequest(success.config)
+    if (isBusinessNetworkFrozen() ||
+        success.config?._restartNetwork?.controller.signal.aborted ||
+        (success.config?._restartNetwork && success.config._restartNetwork.epoch !== businessNetworkEpoch())) {
+      return Promise.reject(recoveryCancellation())
+    }
     const { status, data } = success
     // 业务逻辑错误
     if (status == 200) {
@@ -52,6 +98,13 @@ axios.interceptors.response.use(
     return success.data
   },
   (error) => {
+    releaseBusinessRequest(error.config)
+    const request = error.config?._restartNetwork
+    if (isBusinessNetworkFrozen() || request?.controller.signal.aborted ||
+        (request && request.epoch !== businessNetworkEpoch())) {
+      return Promise.reject(recoveryCancellation())
+    }
+    if (axios.isCancel(error)) return Promise.reject(error)
     const response = error.response
     const suppressToast = Boolean(error.config?.suppressErrorToast)
     if (!response) {

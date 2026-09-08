@@ -5,7 +5,7 @@
     :style="{ backgroundColor: 'var(--bg-color)' }"
   >
     <!-- 顶部插件类型选择 -->
-    <div class="type-selector-container flex justify-between items-center mb-6">
+    <div class="type-selector-container flex flex-wrap gap-3 justify-between items-center mb-6">
       <div
         class="type-selector rounded-xl shadow-md p-1 inline-flex"
         :style="{
@@ -46,6 +46,14 @@
 
       <!-- 安装依赖按钮 -->
       <CuteButton
+        @click="showArchiveDialog = true"
+        type="primary"
+        icon="download"
+        size="sm"
+      >
+        外部安装插件
+      </CuteButton>
+      <CuteButton
         @click="showInstallDependencyDialog = true"
         type="primary"
         icon="download"
@@ -57,6 +65,13 @@
         依赖管理
       </CuteButton>
     </div>
+
+    <PluginArchiveDialog
+      v-if="showArchiveDialog"
+      :visible="showArchiveDialog"
+      @close="showArchiveDialog = false"
+      @changed="archiveChanged"
+    />
 
     <!-- 过滤标签区域 -->
     <div
@@ -447,6 +462,7 @@
 
 <script>
 import PluginListTemplate from "@/components/plugin/PluginListTemplate.vue"
+import PluginArchiveDialog from "@/components/plugin/PluginArchiveDialog.vue"
 import CuteButton from "@/components/ui/CuteButton.vue"
 import NeonDialog from "@/components/ui/NeonDialog.vue"
 import NeonInput from "@/components/ui/NeonInput.vue"
@@ -455,6 +471,7 @@ export default {
   name: "PluginList",
   components: {
     PluginListTemplate,
+    PluginArchiveDialog,
     NeonDialog,
     NeonInput,
     CuteButton,
@@ -482,6 +499,7 @@ export default {
       renameMenuTypeName: "",
       oldRenameMenuTypeName: "",
       showInstallDependencyDialog: false,
+      showArchiveDialog: false,
       dependencyName: "",
       installResult: "",
       dependencyOperation: "install",
@@ -493,6 +511,7 @@ export default {
     },
   },
   mounted() {
+    this.showArchiveDialog = this.$route.query.archives === "1"
     window.addEventListener("resize", this.handleResize)
     this.getPluginCount()
     this.getPluginMenuType()
@@ -502,6 +521,10 @@ export default {
     window.removeEventListener("resize", this.handleResize)
   },
   methods: {
+    archiveChanged() {
+      this.pltKey++
+      this.getPluginCount()
+    },
     handleResize() {
       if (this.$isMobile()) {
         this.pluginListHeight =

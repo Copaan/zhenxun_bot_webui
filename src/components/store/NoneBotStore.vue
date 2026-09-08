@@ -514,7 +514,17 @@ export default {
       try {
         const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair`, { expected_fingerprint: environment.fingerprint, confirmed: true })
         if (!response.suc) throw new Error(response.info || "依赖修复请求失败")
-        startRestartRecovery({ bootId: response.data.boot_id, accessUrls: response.data.access_urls || [], accessTargets: response.data.access_targets || [], policy: "preserve", returnRoute: this.$route.path, message: "正在同步锁定依赖并启动新的真寻进程。" })
+        startRestartRecovery({
+          bootId: response.data.boot_id,
+          launcherBootId: response.data.launcher_boot_id,
+          restartId: response.data.restart_id,
+          accessUrls: response.data.target_access_urls ?? response.data.access_urls ?? [],
+          accessTargets: response.data.target_access_targets ?? response.data.access_targets ?? [],
+          preferredUrl: response.data.preferred_url,
+          policy: "preserve",
+          returnRoute: this.$route.path,
+          message: "正在同步锁定依赖并启动新的真寻进程。",
+        })
       } catch (error) { this.$message.error(error.response?.data?.detail || error.message || "依赖修复请求失败") }
       finally { this.repairing = false }
     },

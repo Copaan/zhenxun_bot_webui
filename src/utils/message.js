@@ -1,8 +1,10 @@
 import { Message, Notification } from 'element-ui'
+import { isBusinessNetworkFrozen } from './restart-network'
 const showMessage = Symbol('showMessage')
 
 class KawaiiMessage {
   [showMessage](type, options, single) {
+    if (isBusinessNetworkFrozen()) return
     // 默认添加可爱前缀
     if (typeof options === 'string') {
       options = {
@@ -56,6 +58,7 @@ const showNotify = Symbol('showNotify')
 
 class KawaiiNotify {
   [showNotify](type, options, single) {
+    if (isBusinessNetworkFrozen()) return
     // 默认添加可爱前缀
     if (typeof options === 'string') {
       options = {

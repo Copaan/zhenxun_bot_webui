@@ -7,6 +7,7 @@ import {
   handleAuthenticatedWebSocketClose,
   safeWebSocketSend,
 } from "./create-websocket"
+import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 
 var ws = null
 var heartbeatInterval = null
@@ -27,7 +28,7 @@ function stopHeartbeat() {
 }
 
 function scheduleReconnect(context) {
-  if (!reconnectEnabled || reconnectTimer) return
+  if (isBusinessNetworkFrozen() || !reconnectEnabled || reconnectTimer) return
   emitWebSocketState("chat", "reconnecting")
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
@@ -36,6 +37,7 @@ function scheduleReconnect(context) {
 }
 
 async function chatWebsocketOnmessage(event) {
+  if (isBusinessNetworkFrozen()) return
   const data = JSON.parse(event.data)
   const botInfo = vue.$store.state.botInfo
   if (!botInfo?.self_id || !Array.isArray(data.message)) return
@@ -63,12 +65,12 @@ async function chatWebsocketOnmessage(event) {
   }
 }
 
-export default {
+const chatWebSocket = {
   ws: null,
   //发送ws方法
   sendMessage: function (botInfo, groupId, userId, msg) {
     return new Promise((resolve, reject) => {
-      if (!msg || !botInfo?.self_id) {
+      if (isBusinessNetworkFrozen() || !msg || !botInfo?.self_id) {
         return resolve()
       }
 
@@ -112,19 +114,25 @@ export default {
   },
   //初始化ws
   initWebSocket: function () {
+    if (isBusinessNetworkFrozen()) return
     reconnectEnabled = true
     if (!ws) {
       emitWebSocketState("chat", "connecting")
       const websocket = createAuthenticatedWebSocket("/zhenxun/socket/chat")
+      if (!websocket) return
       ws = websocket
       this.ws = websocket
       startHeartbeat()
       websocket.onopen = () => {
+        if (isBusinessNetworkFrozen() || ws !== websocket) return
         console.log("CHAT WebSocket 已连接...")
         emitWebSocketState("chat", "connected")
       }
-      websocket.onmessage = chatWebsocketOnmessage
+      websocket.onmessage = (event) => {
+        if (!isBusinessNetworkFrozen() && ws === websocket) return chatWebsocketOnmessage(event)
+      }
       websocket.onclose = (event) => {
+        if (ws !== websocket) return
         if (ws === websocket) {
           ws = null
           this.ws = null
@@ -156,8 +164,17 @@ export default {
       reconnectTimer = null
     }
     stopHeartbeat()
-    if (ws && ws.readyState <= WebSocket.OPEN) {
-      ws.close()
+    const websocket = ws
+    ws = null
+    this.ws = null
+    if (websocket && websocket.readyState <= WebSocket.OPEN) {
+      websocket.close()
     }
   },
 }
+
+onBusinessNetworkChange((frozen) => {
+  if (frozen) chatWebSocket.closeWebSocket()
+})
+
+export default chatWebSocket

@@ -486,8 +486,8 @@
             <div class="startup-report-row">
               <span>HTTP兼容入口</span>
               <strong>
-                {{ lifecycleStatus.http_sidecar.mode }} /
-                {{ lifecycleStatus.http_sidecar.state || "未知" }}
+                {{ httpModeLabel(lifecycleStatus.http_sidecar.mode) }} /
+                {{ httpStateLabel(lifecycleStatus.http_sidecar.state) }}
               </strong>
             </div>
             <div class="startup-report-row">
@@ -510,7 +510,22 @@
             </div>
             <div v-if="lifecycleStatus.http_sidecar.drain_timed_out" class="startup-failures">HTTP边车排空超时</div>
             <div v-if="lifecycleStatus.http_sidecar.last_error" class="startup-failures">
-              HTTP兼容入口：{{ lifecycleStatus.http_sidecar.last_error }}
+              HTTP兼容入口：{{ httpErrorLabel(lifecycleStatus.http_sidecar.error_code || lifecycleStatus.http_sidecar.last_error) }}
+              ({{ lifecycleStatus.http_sidecar.stage || '-' }} / errno {{ lifecycleStatus.http_sidecar.errno ?? '-' }})
+            </div>
+            <div v-if="lifecycleStatus.http_sidecar.retry_in_seconds" class="startup-report-row">
+              <span>HTTP重试次数 / 间隔</span>
+              <strong>{{ lifecycleStatus.http_sidecar.retry_count || 0 }} / {{ lifecycleStatus.http_sidecar.retry_in_seconds }} s</strong>
+            </div>
+            <div v-if="lifecycleStatus.http_sidecar.first_error" class="startup-failures">
+              HTTP首次错误：{{ lifecycleStatus.http_sidecar.first_error }}；最近错误：{{ lifecycleStatus.http_sidecar.latest_error || '-' }}
+            </div>
+            <div v-if="lifecycleStatus.http_sidecar.total_retries" class="startup-report-row">
+              <span>HTTP累计重试</span>
+              <strong>{{ lifecycleStatus.http_sidecar.total_retries }}</strong>
+            </div>
+            <div v-if="lifecycleStatus.http_sidecar.unverified_child_diagnostic" class="startup-failures">
+              未验证的HTTP子进程诊断：{{ httpErrorLabel(lifecycleStatus.http_sidecar.unverified_child_diagnostic.error_code) }}
             </div>
             <div v-if="lifecycleStatus.http_sidecar.mode === 'serve'" class="startup-failures">
               HTTP兼容入口使用明文传输，请优先通过HTTPS管理真寻。
@@ -694,6 +709,7 @@
 <script>
 import AccountSecurityDialog from "@/components/account/AccountSecurityDialog"
 import NetworkStatus from "@/components/system/NetworkStatus"
+import { httpModeLabel, httpStateLabel, httpErrorLabel } from "@/utils/http-diagnostics"
 import BotRequiredState from "@/components/common/BotRequiredState"
 import PluginOperationDialog from "@/components/store/PluginOperationDialog"
 import logoUrl from "@/assets/image/logo.png"
@@ -702,6 +718,7 @@ import { clearCookie } from "@/utils/api"
 import { getHeaderHeight } from "@/utils/utils"
 import { hasDirtyState } from "@/utils/dirty-state"
 import { startRestartRecovery } from "@/utils/restart-recovery"
+import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 export default {
   name: "MainHome",
   components: { AccountSecurityDialog, BotRequiredState, PluginOperationDialog, NetworkStatus },
@@ -910,6 +927,7 @@ export default {
     this.getBotInfo()
   },
   mounted() {
+    this._stopNetworkWatch = onBusinessNetworkChange(this.handleRecoveryNetwork)
     this.getMenus()
     this.loadRestartStatus()
     this.loadStartupStatus()
@@ -925,6 +943,7 @@ export default {
     this.applyScreenState(true)
   },
   beforeDestroy() {
+    this._stopNetworkWatch?.()
     window.removeEventListener("resize", this.handleResize)
     window.removeEventListener("zhenxun-websocket-state", this.handleSocketState)
     window.removeEventListener("zhenxun-auth-expired", this.closeSockets)
@@ -933,6 +952,16 @@ export default {
   },
   inject: ["setAppTheme"],
   methods: {
+    httpModeLabel, httpStateLabel, httpErrorLabel,
+    handleRecoveryNetwork(frozen) {
+      if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
+      this.startupPollTimer = null
+      if (!frozen && !this._isDestroyed && !this._isBeingDestroyed) {
+        this.loadStartupStatus()
+        this.loadRestartStatus()
+        this.$store.dispatch("initStatusSocket")
+      }
+    },
     startupStageLabel(stage) {
       return { management: "管理阶段", runtime: "运行时", warmup: "预热阶段" }[stage] || "启动阶段"
     },
@@ -973,16 +1002,21 @@ export default {
     },
     async loadStartupStatus() {
       if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
+      this.startupPollTimer = null
+      if (isBusinessNetworkFrozen() || this._isDestroyed || this._isBeingDestroyed) return
+      const epoch = businessNetworkEpoch()
       try {
         const response = await this.getRequest(`${this.$root.prefix}/system/startup/status`, {}, { suppressErrorToast: true })
+        if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
         if (response?.suc && response.data) this.startupStatus = response.data
         if (this.startupDrawerVisible && response?.suc && response.data) {
           this.startupReport = { ...this.startupReport, ...response.data }
         }
       } catch (error) {
+        if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
         this.startupStatus = { state: "failed", stages: {}, errors: [{ code: "status_unavailable" }] }
       }
-      if (this._isDestroyed || this._isBeingDestroyed) return
+      if (isBusinessNetworkFrozen() || this._isDestroyed || this._isBeingDestroyed) return
       const settled = ["warmup_ready", "degraded", "failed"].includes(this.startupStatus.state)
       this.startupPollTimer = window.setTimeout(this.loadStartupStatus, settled ? 10000 : 1200)
     },
@@ -1073,12 +1107,16 @@ export default {
       }
     },
     async loadRestartStatus() {
+      if (isBusinessNetworkFrozen()) return
+      const epoch = businessNetworkEpoch()
       try {
         const response = await this.getRequest(`${this.$root.prefix}/system/restart/status`, {}, { suppressErrorToast: true })
+        if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
         this.restartAvailable = Boolean(response && response.suc && response.data.launcher_managed)
         this.pendingRestartCount = Number(response?.data?.pending_count || 0)
         this.pendingRestartReasons = response?.data?.pending_reasons || []
       } catch (error) {
+        if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
         this.restartAvailable = false
         this.pendingRestartCount = 0
         this.pendingRestartReasons = []
@@ -1096,7 +1134,16 @@ export default {
       try {
         const response = await this.postRequest(`${this.$root.prefix}/system/restart`, {})
         if (!response || !response.suc) throw new Error(response && response.info)
-        startRestartRecovery({ bootId: response.data.boot_id, accessUrls: response.data.access_urls, accessTargets: response.data.access_targets, preferredUrl: response.data.preferred_url, returnRoute: this.$route.path, message: "正在等待 launcher 启动新的真寻进程。" })
+        startRestartRecovery({
+          bootId: response.data.boot_id,
+          launcherBootId: response.data.launcher_boot_id,
+          restartId: response.data.restart_id,
+          accessUrls: response.data.target_access_urls ?? response.data.access_urls,
+          accessTargets: response.data.target_access_targets ?? response.data.access_targets,
+          preferredUrl: response.data.preferred_url,
+          returnRoute: this.$route.path,
+          message: "正在等待 launcher 启动新的真寻进程。",
+        })
       } catch (error) {
         this.$message.error(error.response?.data?.detail || error.message || "重启请求失败。")
       } finally {

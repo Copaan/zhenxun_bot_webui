@@ -14,7 +14,7 @@ export async function confirmRestart(vm, message) {
   }
 }
 
-export async function requestRestartWithRecovery(vm, { request, recovery }) {
+export async function requestRestartWithRecovery(vm, { request, recovery = {} }) {
   const loading = vm.$loading({
     lock: true,
     text: "正在提交重启请求...",
@@ -25,17 +25,17 @@ export async function requestRestartWithRecovery(vm, { request, recovery }) {
     if (!response || !response.suc) {
       throw new Error((response && response.info) || "重启请求未被接受。")
     }
+    const data = response.data || {}
+    const returnedUrls = data.target_access_urls ?? data.access_urls
+    const returnedTargets = data.target_access_targets ?? data.access_targets
+    const authoritative = Array.isArray(returnedUrls) || Array.isArray(returnedTargets)
     startRestartRecovery({
-      bootId: response.data.boot_id,
-      accessUrls:
-        recovery.accessUrls?.length
-          ? recovery.accessUrls
-          : response.data.access_urls || [],
-      accessTargets:
-        recovery.accessTargets?.length
-          ? recovery.accessTargets
-          : response.data.access_targets || [],
-      preferredUrl: recovery.preferredUrl || response.data.preferred_url || "",
+      bootId: data.boot_id,
+      launcherBootId: data.launcher_boot_id,
+      restartId: data.restart_id,
+      accessUrls: authoritative ? returnedUrls || [] : recovery.accessUrls || [],
+      accessTargets: authoritative ? returnedTargets || [] : recovery.accessTargets || [],
+      preferredUrl: authoritative ? data.preferred_url || "" : recovery.preferredUrl || "",
       policy: recovery.policy || "preserve",
       returnRoute: recovery.returnRoute,
       message: recovery.message,
