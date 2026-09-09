@@ -130,6 +130,10 @@ const errors = {
   archive_module_invalid: "插件模块名不是有效的 Python 标识符。",
   archive_package_name_missing: "无法确定插件包名，请保留插件所在目录。",
   archive_multiple_plugins: "检测到多个候选插件，请只上传一个插件。",
+  archive_package_declaration_invalid: "打包声明中的插件路径无效或不存在，请检查 pyproject.toml。",
+  archive_poetry_dependency_unsupported: "Poetry 依赖包含不受支持的路径、VCS、下载地址或自定义安装源，请提供静态版本声明。",
+  archive_poetry_constraint_unsupported: "Poetry 版本约束无法安全转换，请改为标准版本范围。",
+  archive_poetry_platform_unsupported: "Poetry 平台限制不受支持，请使用标准环境标记。",
   archive_plugin_not_identified: "未识别到单个 Python 插件文件或包。",
   archive_wrapper_limit: "归档目录嵌套过深，请保留单层包装目录或 src 目录。",
   archive_python_invalid: "候选插件包含无法解析的 Python 源码。",
@@ -206,8 +210,10 @@ export default {
   methods: {
     mib(value) { return (value / 1024 / 1024).toFixed(1) },
     fail(error) {
-      const code = error.response?.data?.detail
+      const detail = error.response?.data?.detail
+      const code = detail?.code || detail
       this.error = errors[code] || (error.response?.status === 401 ? "登录会话已失效，请重新登录。" : "归档操作失败，请重新预检后重试。")
+      if (Array.isArray(detail?.candidates)) this.error += ` 候选路径：${detail.candidates.join("、")}`
     },
     check(response) {
       if (!response?.suc) throw new Error(response?.info || "归档请求失败")

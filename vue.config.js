@@ -48,8 +48,18 @@ module.exports = {
     },
   },
   chainWebpack: (config) => {
+    config.entry("maintenance").add(path.join(__dirname, "src/migration-maintenance.js"))
+    config.plugin("html-maintenance").use(require("html-webpack-plugin"), [{
+      template: path.join(__dirname, "public/index.html"),
+      filename: "maintenance.html",
+      title: "真寻 · 迁移维护",
+      templateParameters: { BASE_URL: "/" },
+      chunks: ["chunk-vendors", "maintenance"],
+      inject: true,
+    }])
     config.plugin("html").tap((args) => {
       args[0].title = "真寻酱的后台捏"
+      args[0].chunks = ["chunk-vendors", "app"]
       return args
     })
 

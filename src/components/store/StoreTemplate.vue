@@ -9,6 +9,11 @@
     </header>
 
     <div class="store-toolbar">
+      <el-select v-model="downloadSource" aria-label="下载源" :disabled="pluginOperation.active" @change="saveDownloadSource">
+        <el-option label="自动：阿里优先，GitHub 后备" value="auto" />
+        <el-option label="仅阿里" value="ali" />
+        <el-option label="仅 GitHub" value="git" />
+      </el-select>
       <el-input v-model.trim="search" clearable prefix-icon="el-icon-search" placeholder="搜索名称、模块或作者" />
       <el-select v-model="statusFilter" aria-label="安装状态">
         <el-option label="全部状态" value="all" />
@@ -79,6 +84,7 @@
                 <el-button v-if="repositoryUrl(plugin)" class="icon-action" icon="el-icon-link" circle @click="openRepository(plugin)" />
               </el-tooltip>
               <span class="action-spacer"></span>
+            <span v-if="capability === 'ai_chat' && plugin.installed" class="chat-switch">当前启用 <el-switch :value="chatEnabled(plugin)" :disabled="switchSaving || switchLoading || !switchRevision" @change="setChatEnabled(plugin, $event)" /></span>
               <el-button v-if="capability === 'ai_chat' && plugin.installed" class="plugin-config-action" type="primary" plain size="small" icon="el-icon-setting" @click="openPluginConfiguration(plugin)">插件配置</el-button>
               <el-tooltip v-if="plugin.installed && plugin.reload_support === 'hot_reloadable'" content="热重载插件" placement="top">
                 <el-button class="icon-action" icon="el-icon-refresh" circle :loading="actionId === (plugin.store_key || plugin.id) && actionType === 'reload'" @click="runAction('reload', plugin)" />
@@ -128,7 +134,9 @@ export default {
     embedded: { type: Boolean, default: false },
   },
   data() {
-    return { plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", page: 1, pageSize: 18, actionId: null, actionType: "", drawerVisible: false, selectedPlugin: null, configModule: "" }
+    let source = "auto"
+    try { source = localStorage.getItem("zhenxun_plugin_download_source") || "auto" } catch (_) { /* Storage may be disabled. */ }
+    return { chatSwitches: {}, switchRevision: "", switchSaving: false, switchLoading: false, switchSequence: 0, downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", page: 1, pageSize: 18, actionId: null, actionType: "", drawerVisible: false, selectedPlugin: null, configModule: "" }
   },
   computed: {
     pluginOperation() { return this.$store.state.pluginOperation },
@@ -151,6 +159,36 @@ export default {
   watch: { search() { this.page = 1 }, statusFilter() { this.page = 1 }, typeFilter() { this.page = 1 }, sortBy() { this.page = 1 } },
   mounted() { this.loadPlugins() },
   methods: {
+    chatEnabled(plugin) {
+      const normalize = value => String(value || "").split(":")[0].replace(/^zhenxun\.(?:builtin_plugins|plugins)\./, "")
+      const identity = normalize(plugin.runtime_module || plugin.module)
+      return !Object.entries(this.chatSwitches).some(([name, enabled]) => enabled === false && (identity === normalize(name) || identity.startsWith(`${normalize(name)}.`)))
+    },
+    async loadChatSwitches() {
+      const sequence = ++this.switchSequence
+      this.switchLoading = true
+      try {
+        const response = await this.getRequest(`${this.$root.prefix}/ai/chat-plugins/switches`, {}, { authFailureMode: "local" })
+        if (sequence !== this.switchSequence) return
+        if (!response.suc) throw new Error(response.info)
+        this.chatSwitches = response.data.switches || {}; this.switchRevision = response.data.revision
+      } finally { if (sequence === this.switchSequence) this.switchLoading = false }
+    },
+    async setChatEnabled(plugin, enabled) {
+      if (this.switchSaving || this.switchLoading) return
+      this.switchSequence += 1
+      this.switchSaving = true
+      try {
+        const response = await this.putRequest(`${this.$root.prefix}/ai/chat-plugins/switches`, { expected_revision: this.switchRevision, module: plugin.module, enabled }, { authFailureMode: "local" })
+        if (!response.suc) throw new Error(response.info)
+        this.chatSwitches = response.data.switches; this.switchRevision = response.data.revision; this.$message.success(response.info)
+      } catch (error) {
+        if (error.response?.status === 401) this.$emit("session-expired")
+        if (error.response?.status === 409) await this.loadChatSwitches().catch(() => {})
+        this.$message.error(error.response?.status === 409 ? "配置已变化，请检查更新后重新操作。" : error.message || "开关保存失败")
+      } finally { this.switchSaving = false }
+    },
+    saveDownloadSource() { try { localStorage.setItem("zhenxun_plugin_download_source", this.downloadSource) } catch (_) { /* Optional preference. */ } },
     newOperationId() {
       const bytes = new Uint8Array(16)
       window.crypto.getRandomValues(bytes)
@@ -206,6 +244,7 @@ export default {
         const response = await this.getRequest(`${this.$root.prefix}/store/get_plugin_store`, { refresh })
         if (!response.suc) throw new Error(response.info || "插件商店加载失败")
         this.plugins = Array.isArray(response.data.plugin_list) ? response.data.plugin_list : []
+        if (this.capability === "ai_chat") await this.loadChatSwitches()
       } catch (error) {
         this.plugins = []
         this.error = error.response?.data?.detail || error.message || "插件商店暂时不可用。"
@@ -221,7 +260,9 @@ export default {
         this.$message.error("目录中的插件路径已失效，请等待目录维护者修复。")
         return
       }
-      const confirmed = await this.$cuteConfirm({ title: `${labels[action]}插件`, message: `确认${labels[action]}“${plugin.name}”？`, confirmButtonText: "确认", cancelButtonText: "取消", type: action === "remove" ? "warning" : "info" })
+      const requestedSource = this.downloadSource
+      const sourceLabel = { auto: "自动（阿里优先，GitHub 后备）", ali: "仅阿里", git: "仅 GitHub" }[requestedSource]
+      const confirmed = await this.$cuteConfirm({ title: `${labels[action]}插件`, message: `确认${labels[action]}“${plugin.name}”？${["install", "update"].includes(action) ? ` 下载源：${sourceLabel}` : ""}`, confirmButtonText: "确认", cancelButtonText: "取消", type: action === "remove" ? "warning" : "info" })
       if (!confirmed) return
       this.actionId = plugin.store_key || plugin.id
       this.actionType = action
@@ -248,6 +289,7 @@ export default {
         const payload = action === "reload"
           ? { store_key: plugin.store_key, module: plugin.runtime_module || plugin.module, operation_id: operationId }
           : { store_key: plugin.store_key, id: plugin.id, operation_id: operationId }
+        if (["install", "update"].includes(action)) payload.download_source = requestedSource
         let response = await this.postRequest(`${this.$root.prefix}/store/${action}_plugin`, payload, { suppressErrorToast: true })
         if (!response.suc && ["install", "update"].includes(action) && String(response.info || "").includes("source_build_confirmation_required")) {
           const sourceConfirmed = await this.$cuteConfirm({
@@ -275,7 +317,7 @@ export default {
         this.$store.commit("FINISH_PLUGIN_OPERATION", {
           status: operation.status,
           title: operation.status === "error" ? `插件${labels[action]}后应用失败` : `插件${labels[action]}完成`,
-          message: operation.message,
+          message: [operation.message, response.data?.actual_download_source ? `下载源：${sourceLabel}；实际来源：${response.data.actual_download_source}` : ""].filter(Boolean).join("\n"),
           applyMode: operation.applyMode,
           restartAvailable: operation.restartAvailable,
           accessUrls: operation.accessUrls,

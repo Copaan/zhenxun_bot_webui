@@ -78,7 +78,7 @@
           <p>使用手机 QQ 扫码，选择或创建机器人。完成后真寻会保存凭据，并通过官方 WebSocket 长连接接收消息。</p>
           <ul><li>无需填写 AppID、Secret 或 Gateway 地址</li><li>凭据仅由 QQ 官方服务与当前真寻实例处理</li></ul>
         </div>
-        <el-button type="primary" icon="el-icon-full-screen" :loading="registration.starting" @click="startRegistration">扫码接入</el-button>
+        <el-button type="primary" icon="el-icon-full-screen" aria-label="扫码接入" :loading="registration.starting" @click="startRegistration">扫码接入</el-button>
       </div>
 
       <div v-else class="manual-settings">
@@ -144,7 +144,7 @@ export default {
   data() {
     return {
       selectedPlatform: "qq_official", loading: false, saving: false, statusLoading: false,
-      statusConfirmed: false, statusSequence: 0, configurationSequence: 0,
+      statusConfirmed: false, statusSequence: 0, configurationSequence: 0, registrationSequence: 0, registrationPolling: "",
       status: { onebot_v11_connected: false, qq_official_enabled: false, qq_official_connected: false, qq_webhook_mode: "external", qq_webhook_callback_url: null, connections: [], qq_bots: [], onebot_v11_reverse_ws_path: "/onebot/v11/ws", qq_webhook_path: "/qq/webhook" },
       configuration: { revision: "", launcher_managed: false, onebot: { has_access_token: false }, qq: { bots: [] } },
       onebotToken: "", onebotHost: "", clearOnebotToken: false, qqSetupMode: "scan", logoUrl, registration: emptyRegistration(), registrationTimer: null,
@@ -187,7 +187,7 @@ export default {
     registrationDescription() { if (this.registration.status === "completed") return this.registration.restartAvailable ? "配置已安全保存。可以立即重启，也可以稍后从顶部重启真寻。" : "配置已安全保存，请手动重启真寻后连接机器人。"; if (this.registration.status === "expired") return "请重新生成二维码后再扫描。"; if (this.registration.status === "error") return "可以重试当前操作或重新生成二维码。"; return "使用手机 QQ 扫描二维码，并按页面提示选择或创建机器人。" },
   },
   async mounted() { await Promise.all([this.loadConfiguration(), this.loadStatus()]) },
-  beforeDestroy() { this.statusSequence++; this.configurationSequence++; this.clearRegistrationTimer(); clearDirtyState("protocol-configuration") },
+  beforeDestroy() { this.statusSequence++; this.configurationSequence++; this.registrationSequence++; this.clearRegistrationTimer(); void this.cancelRegistrationSession(); clearDirtyState("protocol-configuration") },
   watch: {
     qqForm: { deep: true, handler() { this.updateDirtyState() } },
     onebotToken() { this.updateDirtyState() },
@@ -219,19 +219,83 @@ export default {
     updateDirtyState() { if (this.originalProtocol) setDirtyState("protocol-configuration", this.protocolSnapshot() !== this.originalProtocol) },
     clearRegistrationTimer() { if (this.registrationTimer) window.clearTimeout(this.registrationTimer); this.registrationTimer = null },
     async startRegistration() {
-      this.clearRegistrationTimer(); if (this.registration.registrationId) await this.cancelRegistrationSession(); this.registration = { ...emptyRegistration(), visible: true, starting: true, status: "starting" }
-      try { const response = await this.postRequest(`${this.$root.prefix}/protocol/qq/registration/start`, {}, { suppressErrorToast: true }); if (!response || !response.suc) throw new Error(response && response.info); const QRModule = await import(/* webpackChunkName: "qrcode" */ "qrcode"); const QRCode = QRModule.default || QRModule; const qrDataUrl = await QRCode.toDataURL(response.data.qr_url, { width: 260, margin: 1, errorCorrectionLevel: "M" }); this.registration = { visible: true, starting: false, registrationId: response.data.registration_id, qrDataUrl, qrUrl: response.data.qr_url, status: "pending", error: "", interval: response.data.interval || 2, expiresAt: Date.now() + (response.data.expires_in || 600) * 1000 }; this.scheduleRegistrationPoll(0) }
-      catch (error) { this.registration.starting = false; this.registration.status = "error"; this.registration.error = apiErrorDetail(error, "二维码生成失败，请稍后重试。") }
+      const sequence = ++this.registrationSequence
+      this.clearRegistrationTimer()
+      const oldId = this.registration.registrationId
+      this.registration = { ...emptyRegistration(), visible: true, starting: true, status: "starting" }
+      let createdId = ""
+      try {
+        const cancelled = await this.cancelRegistrationSession(oldId)
+        if (sequence !== this.registrationSequence) return
+        if (cancelled?.status === "completed") { this.completeRegistration(cancelled); return }
+        const response = await this.postRequest(`${this.$root.prefix}/protocol/qq/registration/start`, {}, { suppressErrorToast: true })
+        if (!response?.suc) throw new Error(response?.info)
+        createdId = response.data.registration_id
+        if (sequence !== this.registrationSequence) { await this.cancelRegistrationSession(createdId); return }
+        this.registration.registrationId = createdId
+        const QRModule = await import(/* webpackChunkName: "qrcode" */ "qrcode")
+        const qrDataUrl = await (QRModule.default || QRModule).toDataURL(response.data.qr_url, { width: 260, margin: 1, errorCorrectionLevel: "M" })
+        if (sequence !== this.registrationSequence) { await this.cancelRegistrationSession(createdId); return }
+        this.registration = { ...emptyRegistration(), visible: true, registrationId: createdId, qrDataUrl, qrUrl: response.data.qr_url, status: "pending", interval: response.data.interval || 2, expiresAt: Date.now() + (response.data.expires_in || 600) * 1000 }
+        this.scheduleRegistrationPoll(0)
+      } catch (error) {
+        if (createdId) await this.cancelRegistrationSession(createdId)
+        if (sequence === this.registrationSequence) this.registrationError(error, "二维码生成失败，请稍后重试。")
+      }
     },
-    scheduleRegistrationPoll(delay) { this.clearRegistrationTimer(); this.registrationTimer = window.setTimeout(() => this.pollRegistration(), delay == null ? this.registration.interval * 1000 : delay) },
+    scheduleRegistrationPoll(delay) {
+      this.clearRegistrationTimer()
+      const sequence = this.registrationSequence
+      this.registrationTimer = window.setTimeout(() => { if (sequence === this.registrationSequence) void this.pollRegistration() }, delay == null ? this.registration.interval * 1000 : delay)
+    },
+    registrationError(error, fallback) {
+      const code = error?.response?.data?.detail?.code
+      this.clearRegistrationTimer()
+      this.registration.starting = false
+      this.registration.status = ["registration_expired", "registration_cancelled"].includes(code) ? "expired" : "error"
+      this.registration.qrDataUrl = ""; this.registration.qrUrl = ""
+      this.registration.error = apiErrorDetail(error, fallback)
+    },
+    completeRegistration(data) {
+      this.clearRegistrationTimer()
+      this.registration = { ...this.registration, starting: false, status: "completed", registrationId: "", qrDataUrl: "", qrUrl: "", error: "", bot: data.bot || {}, restartAvailable: Boolean(data.restart_available), accessUrls: data.access_urls || [], accessTargets: data.access_targets || [] }
+      this.configuration.revision = data.revision
+      notifyRestartStatusChanged()
+      void this.loadConfiguration()
+    },
     async pollRegistration() {
-      if (!this.registration.registrationId || this.registration.status !== "pending") return
-      if (Date.now() >= this.registration.expiresAt) { this.registration.status = "expired"; return }
-      try { const response = await this.postRequest(`${this.$root.prefix}/protocol/qq/registration/${encodeURIComponent(this.registration.registrationId)}/poll`, {}, { suppressErrorToast: true }); if (!response || !response.suc) throw new Error(response && response.info); if (response.data.status === "expired") { this.registration.status = "expired"; return } if (response.data.status !== "completed") { this.scheduleRegistrationPoll((response.data.retry_after || this.registration.interval) * 1000); return } this.registration = { ...this.registration, status: "completed", registrationId: "", qrDataUrl: "", qrUrl: "", bot: response.data.bot || {}, restartAvailable: Boolean(response.data.restart_available), accessUrls: response.data.access_urls || [], accessTargets: response.data.access_targets || [] }; this.configuration.revision = response.data.revision; notifyRestartStatusChanged(); await this.loadConfiguration() }
-      catch (error) { this.registration.status = "error"; this.registration.error = apiErrorDetail(error, "扫码状态查询失败，请重试。") }
+      const id = this.registration.registrationId
+      const sequence = this.registrationSequence
+      if (!id || this.registration.status !== "pending" || this.registrationPolling === id) return
+      const current = () => sequence === this.registrationSequence && id === this.registration.registrationId
+      const expire = () => { this.clearRegistrationTimer(); this.registration.status = "expired"; this.registration.qrDataUrl = ""; this.registration.qrUrl = "" }
+      if (Date.now() >= this.registration.expiresAt) { expire(); return }
+      this.registrationPolling = id
+      try {
+        const response = await this.postRequest(`${this.$root.prefix}/protocol/qq/registration/${encodeURIComponent(id)}/poll`, {}, { suppressErrorToast: true })
+        if (!current()) return
+        if (!response?.suc) throw new Error(response?.info)
+        if (response.data.status === "expired") { expire(); return }
+        if (response.data.status === "completed") { this.completeRegistration(response.data); return }
+        this.scheduleRegistrationPoll((response.data.retry_after || this.registration.interval) * 1000)
+      } catch (error) { if (current()) this.registrationError(error, "扫码状态查询失败，请重新生成。") }
+      finally { if (this.registrationPolling === id) this.registrationPolling = "" }
     },
-    async cancelRegistrationSession() { const id = this.registration.registrationId; this.registration.registrationId = ""; if (!id) return; try { await this.deleteRequest(`${this.$root.prefix}/protocol/qq/registration/${encodeURIComponent(id)}`, {}, { suppressErrorToast: true }) } catch (error) { /* 服务端会自动清理过期会话。 */ } },
-    async closeRegistration(done) { this.clearRegistrationTimer(); await this.cancelRegistrationSession(); this.registration.visible = false; if (typeof done === "function") done() },
+    async cancelRegistrationSession(id = this.registration.registrationId) {
+      if (this.registration.registrationId === id) this.registration.registrationId = ""
+      if (!id) return
+      try { const response = await this.deleteRequest(`${this.$root.prefix}/protocol/qq/registration/${encodeURIComponent(id)}`, {}, { suppressErrorToast: true }); return response?.data }
+      catch (error) { /* Expired sessions are also cleared by the server TTL. */ }
+    },
+    async closeRegistration(done) {
+      const sequence = ++this.registrationSequence
+      this.clearRegistrationTimer()
+      this.registration.visible = false
+      this.registration.qrDataUrl = ""; this.registration.qrUrl = ""
+      if (typeof done === "function") done()
+      const result = await this.cancelRegistrationSession()
+      if (sequence === this.registrationSequence && result?.status === "completed") { this.completeRegistration(result); this.$message.info("机器人配置已保存，取消未撤销本次接入。") }
+    },
     openRegistrationUrl() { if (this.registration.qrUrl) window.open(this.registration.qrUrl, "_blank", "noopener,noreferrer") },
     addBot() { this.qqForm.bots.push(emptyBot()) },
     async removeBot(bot, index) {

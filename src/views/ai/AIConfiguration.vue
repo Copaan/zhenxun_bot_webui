@@ -1,8 +1,15 @@
 <template>
   <div class="ai-page" v-loading="loading">
+    <section v-if="sessionExpired" class="configuration-warning" role="alert">
+      <p>登录已失效，草稿已保留。重新登录后可继续保存。</p>
+      <el-input v-model="loginUsername" placeholder="管理员账号" autocomplete="username" />
+      <el-input v-model="loginPassword" placeholder="密码" show-password autocomplete="current-password" />
+      <el-button :loading="loggingIn" @click="relogin">重新登录</el-button>
+    </section>
     <header class="page-header">
       <div><h1>AI 配置</h1><p>管理模型服务商、任务路由和运行策略</p></div>
       <div class="header-status">
+        <el-button :disabled="Boolean(saving) || !validationIssues.length" @click="previewRepair">修复失效引用</el-button>
         <el-tag size="small" :type="runtime.hot_reload_available ? 'success' : 'warning'">{{ runtime.hot_reload_available ? "运行时热加载可用" : "运行时状态待确认" }}</el-tag>
         <el-tag v-if="dirtyCount" size="small" type="warning">{{ dirtyCount }} 项未保存</el-tag>
         <el-button icon="el-icon-refresh" @click="loadConfiguration">重新加载</el-button>
@@ -110,7 +117,7 @@
 
       <el-tab-pane label="默认模型" name="default_models">
         <section class="settings-section"><div class="section-title"><div><h2>默认任务模型</h2><p>只显示适合对应任务的已配置模型和路由组。</p></div></div>
-          <el-form label-position="top" class="default-grid"><el-form-item v-for="task in defaultTasks" :key="task.key" :label="task.label" :error="operationError(`default_models.${task.key}`)"><el-select v-model="sectionDrafts.default_models[task.key]" clearable filterable class="full-control" @change="markSectionDirty('default_models')"><el-option-group label="模型"><el-option v-for="model in modelsForTask(task.key)" :key="model.fullName" :label="model.fullName" :value="model.fullName" /></el-option-group><el-option-group label="路由组"><el-option v-for="group in groupNames" :key="group" :label="group" :value="group" /></el-option-group></el-select></el-form-item></el-form>
+          <el-form label-position="top" class="default-grid"><el-form-item v-for="task in defaultTasks" :key="task.key" :label="task.label" :error="operationError(`default_models.${task.key}`)"><el-select v-model="sectionDrafts.default_models[task.key]" clearable filterable placeholder="未配置" class="full-control" @change="markSectionDirty('default_models')"><el-option label="未配置" :value="''" /><el-option-group label="模型"><el-option v-for="model in modelsForTask(task.key)" :key="model.fullName" :label="model.fullName" :value="model.fullName" /></el-option-group><el-option-group label="路由组"><el-option v-for="group in groupNames" :key="group" :label="group" :value="group" /></el-option-group></el-select><el-button type="text" :disabled="!sectionDrafts.default_models[task.key]" @click="$set(sectionDrafts.default_models, task.key, null); markSectionDirty('default_models')">清除</el-button></el-form-item></el-form>
         </section><SectionAction :dirty="isSectionDirty('default_models')" :saving="saving === 'default_models'" effect="保存后立即热加载" @reset="resetSection('default_models')" @save="saveSection('default_models')" />
       </el-tab-pane>
 
@@ -176,7 +183,7 @@
       </el-tab-pane>
 
       <el-tab-pane label="AI聊天" name="chat_plugins">
-        <StoreTemplate capability="ai_chat" embedded />
+        <StoreTemplate ref="chatStore" capability="ai_chat" embedded @session-expired="sessionExpired = true; aiEpoch += 1" />
       </el-tab-pane>
 
       <el-tab-pane v-for="tab in schemaTabs" :key="tab.name" :label="tab.label" :name="tab.name">
@@ -185,6 +192,13 @@
         </section><SectionAction :dirty="isSectionDirty(tab.name)" :saving="saving === tab.name" :invalid="sectionInvalid(tab.name)" :effect="tab.effect" @reset="resetSection(tab.name)" @save="saveSection(tab.name)" />
       </el-tab-pane>
     </el-tabs>
+
+    <el-dialog title="修复失效引用" :visible.sync="repairVisible" width="min(720px, 94vw)" append-to-body>
+      <p>保留服务商、密钥和有效路由。只清除以下失效引用；已有草稿会保留。</p>
+      <div v-for="(change, index) in repairPreview.changes || []" :key="index" class="repair-change"><code>{{ change.path }}</code><p>{{ JSON.stringify(change.before) }} → {{ JSON.stringify(change.after) }}</p></div>
+      <el-alert v-if="(repairPreview.remaining_issues || []).length" type="warning" :closable="false" title="仍有需要手动处理的项目"><p v-for="(issue, index) in repairPreview.remaining_issues" :key="index">{{ issue.message }}</p></el-alert>
+      <span slot="footer"><el-button @click="repairVisible = false">取消</el-button><el-button type="primary" :loading="saving === 'repair'" :disabled="!(repairPreview.changes || []).length || Boolean(saving)" @click="applyRepair">确认修复</el-button></span>
+    </el-dialog>
 
     <el-dialog :title="modelEditIndex == null ? '添加模型' : '编辑模型'" :visible.sync="modelDialog" width="min(620px, 92vw)" append-to-body>
       <el-form label-position="top" class="model-form"><el-form-item label="模型名称"><el-input v-model="modelDraft.model_name" /></el-form-item><el-form-item label="启用"><el-switch v-model="modelDraft.is_available" /></el-form-item><el-form-item label="任务类型"><el-select v-model="modelDraft.task_type" clearable class="full-control"><el-option label="自动识别" :value="null" /><el-option label="图像生成" value="image_generation" /><el-option label="Embedding" value="embedding" /><el-option label="Rerank" value="rerank" /><el-option label="TTS" value="tts" /></el-select></el-form-item><el-form-item label="最大输入 Token"><el-input-number v-model="modelDraft.max_input_tokens" :min="1" controls-position="right" class="full-control" /></el-form-item><el-form-item label="最大输出 Token"><el-input-number v-model="modelDraft.max_output_tokens" :min="1" controls-position="right" class="full-control" /></el-form-item><el-form-item label="推理强度"><el-select v-model="modelDraft.reasoning_effort" clearable class="full-control"><el-option v-for="item in ['none','low','medium','high','xhigh']" :key="item" :label="item" :value="item" /></el-select></el-form-item></el-form>
@@ -205,6 +219,8 @@ import StoreTemplate from "@/components/store/StoreTemplate.vue"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
+import { localLogin } from "@/utils/local-login"
+import { removeRoutingGroup } from "@/utils/ai-routing"
 
 const clone = (value) => JSON.parse(JSON.stringify(value ?? null))
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -226,6 +242,7 @@ export default {
   components: { SchemaForm, StoreTemplate, SectionAction },
   data() {
     return {
+      repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
       loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, apiTypes: [], defaultApiBases: {}, discoveryApiTypes: [], effects: {}, runtime: {}, providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
       providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, sandbox: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
       discovering: false, discoveryDialog: false, discoveredModels: [], selectedDiscovered: [], discoverySearch: "", providerProbeResults: {}, modelDialog: false, modelDraft: emptyModel(), modelEditIndex: null,
@@ -269,16 +286,63 @@ export default {
     },
     hasGroupErrors() { return this.groupNameErrors.some(Boolean) || this.groupRows.some((group) => Boolean(this.groupIssue(group))) },
   },
+  watch: {
+    activeSection(value) {
+      if (value === "chat_plugins") this.$nextTick(() => this.$refs.chatStore?.loadChatSwitches().catch(error => { if (error.response?.status === 401) this.sessionExpired = true }))
+    },
+  },
   mounted() { this.loadConfiguration() },
   beforeDestroy() { clearDirtyState("ai-configuration") },
   methods: {
+    async aiRequest(method, url, data = {}, options = {}) {
+      const epoch = this.aiEpoch
+      try {
+        const response = await this[`${method}Request`](url, data, { ...options, authFailureMode: "local" })
+        if (epoch !== this.aiEpoch) throw new Error("响应已过期，草稿已保留，请重试。")
+        return response
+      } catch (error) {
+        if (error.response?.status === 401) { this.sessionExpired = true; this.aiEpoch += 1 }
+        throw error
+      }
+    },
+    aiGet(...args) { return this.aiRequest("get", ...args) },
+    aiPost(...args) { return this.aiRequest("post", ...args) },
+    aiPut(...args) { return this.aiRequest("put", ...args) },
+    async relogin() {
+      if (this.loggingIn) return
+      this.loggingIn = true
+      try { await localLogin(this.loginUsername, this.loginPassword); this.aiEpoch += 1; this.sessionExpired = false; this.$message.success("已重新登录，草稿保持不变。") }
+      catch (error) { this.$message.error(error.message) }
+      finally { this.loginPassword = ""; this.loggingIn = false }
+    },
+    async previewRepair() {
+      if (this.saving) return
+      this.saving = "repair-preview"
+      try {
+        const response = await this.aiPost(`${this.$root.prefix}/ai/configuration/repair-references/preview`, { expected_revision: this.revision })
+        if (!response.suc) throw new Error(response.info)
+        this.repairPreview = response.data; this.repairVisible = true
+      } catch (error) { this.captureOperationError(error, "修复预览失败，草稿已保留。") }
+      finally { this.saving = "" }
+    },
+    async applyRepair() {
+      if (this.saving) return
+      this.saving = "repair"
+      try {
+        const response = await this.aiPost(`${this.$root.prefix}/ai/configuration/repair-references/apply`, { expected_revision: this.repairPreview.revision })
+        if (!response.suc) throw new Error(response.info)
+        if (response.data?.apply_mode !== "failed") { this.applySavedConfiguration(response.data, this.selectedProviderName, {}); this.repairVisible = false }
+        await this.handleAiApply(response)
+      } catch (error) { this.captureOperationError(error, "修复失败，草稿已保留。") }
+      finally { this.saving = "" }
+    },
     async loadConfiguration() {
       if (this.loading || this.saving) return
       if (this.dirtyCount && !(await this.confirmDiscard())) return
       this.loading = true
       this.loadError = ""
       try {
-        const response = await this.getRequest(`${this.$root.prefix}/ai/configuration`, {}, { suppressErrorToast: true })
+        const response = await this.aiGet(`${this.$root.prefix}/ai/configuration`, {}, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
         this.applyConfiguration(response.data)
         await this.loadPersona()
@@ -310,7 +374,8 @@ export default {
       this.applyConfiguration(data, preferredName)
       Object.keys(dirtySections).forEach((name) => {
         const current = name === "model_groups" ? rows : sections[name]
-        if (dirtySections[name] && (submitted.section !== name || JSON.stringify(current) !== submitted.value)) {
+        const savedValue = submitted.sections?.[name] ?? (submitted.section === name ? submitted.value : undefined)
+        if (dirtySections[name] && JSON.stringify(current) !== savedValue) {
           this.$set(this.sectionDrafts, name, sections[name])
           this.$set(this.dirtySections, name, true)
           this.$set(this.invalidSections, name, invalidSections[name] || [])
@@ -360,7 +425,7 @@ export default {
         const submitted = { provider: JSON.stringify(fields), models: includeModels || fields.isNew ? JSON.stringify(models) : undefined }
         const path = this.providerDraft.isNew ? "/ai/providers" : `/ai/providers/${encodeURIComponent(this.selectedProviderName)}`
         const payload = this.providerPayload({ includeModels })
-        const response = this.providerDraft.isNew ? await this.postRequest(`${this.$root.prefix}${path}`, payload) : await this.putRequest(`${this.$root.prefix}${path}`, payload)
+        const response = this.providerDraft.isNew ? await this.aiPost(`${this.$root.prefix}${path}`, payload) : await this.aiPut(`${this.$root.prefix}${path}`, payload)
         if (!response.suc) throw new Error(response.info)
         if (response.data?.apply_mode === "failed") { await this.handleAiApply(response); return false }
         this.applySavedConfiguration(response.data, payload.name, submitted); await this.handleAiApply(response)
@@ -379,7 +444,7 @@ export default {
       const resultKey = this.selectedProviderName || "__new__"
       try {
         const temporaryKey = this.providerDraft.api_key_slots.find((slot) => slot.value)?.value || null
-        const response = await this.postRequest(`${this.$root.prefix}/ai/providers/discover`, { expected_revision: this.revision, provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base, api_key: temporaryKey }, { suppressErrorToast: true })
+        const response = await this.aiPost(`${this.$root.prefix}/ai/providers/discover`, { expected_revision: this.revision, provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base, api_key: temporaryKey }, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
         this.$set(this.providerProbeResults, resultKey, { success: true, message: `连接成功，发现 ${response.data.models?.length || 0} 个模型，耗时 ${response.data.latency_ms || 0} ms。` })
         this.discoveredModels = response.data.models || []; this.selectedDiscovered = []; this.discoveryDialog = true
@@ -422,7 +487,7 @@ export default {
     confirmModel() { if (!this.modelDraft.model_name.trim()) return this.$message.warning("请填写模型名称。"); const value = { ...this.modelDraft, model_name: this.modelDraft.model_name.trim() }; delete value.capabilities; if (this.modelEditIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.modelEditIndex, 1, value); this.modelsDirty = true; this.invalidateProbeResults(); this.modelDialog = false; this.syncDirty() },
     modelIndex(model) { return this.providerDraft.models.findIndex((item) => item === model || item.model_name === model.model_name) },
     deleteModel(model) { const actual = this.modelIndex(model); if (actual < 0) return; this.providerDraft.models.splice(actual, 1); this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty() },
-    async saveModels() { if (this.saving) return; this.saving = "models"; try { const submitted = { models: JSON.stringify(this.providerDraft.models) }; const models = this.providerDraft.models.map(({ capabilities, ...model }) => model); const response = await this.putRequest(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}/models`, { expected_revision: this.revision, models }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "模型列表保存失败。") } finally { this.saving = "" } },
+    async saveModels() { if (this.saving) return; this.saving = "models"; try { const submitted = { models: JSON.stringify(this.providerDraft.models) }; const models = this.providerDraft.models.map(({ capabilities, ...model }) => model); const response = await this.aiPut(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}/models`, { expected_revision: this.revision, models }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "模型列表保存失败。") } finally { this.saving = "" } },
     capabilityTags(model) { const caps = model.capabilities || {}; const result = []; if (caps.is_embedding_model) result.push("Embedding"); if (caps.is_rerank_model) result.push("Rerank"); if ((caps.output_modalities || []).includes("image")) result.push("图像"); if ((caps.output_modalities || []).includes("audio")) result.push("语音"); if (caps.supports_tool_calling) result.push("工具"); return result.slice(0, 3) },
     modelTask(model) { const caps = model.capabilities || {}; if (caps.is_embedding_model || model.task_type === "embedding") return "embedding"; if (caps.is_rerank_model || model.task_type === "rerank") return "rerank"; if ((caps.output_modalities || []).includes("image") || model.task_type === "image_generation") return "image"; if ((caps.output_modalities || []).includes("audio") || model.task_type === "tts") return "tts"; return "chat" },
     async testModel(model) {
@@ -433,7 +498,7 @@ export default {
       try {
         const temporaryKey = this.providerDraft.api_key_slots.find((slot) => String(slot.value || "").trim())?.value || null
         const { capabilities, ...modelConfig } = model
-        const response = await this.postRequest(`${this.$root.prefix}/ai/models/test`, {
+        const response = await this.aiPost(`${this.$root.prefix}/ai/models/test`, {
           expected_revision: this.revision,
           model: `${providerName}/${model.model_name}`,
           provider_name: providerName,
@@ -452,7 +517,7 @@ export default {
     async loadPersona() {
       this.personaLoading = true
       try {
-        const response = await this.getRequest(`${this.$root.prefix}/ai/personas/default`, {}, { suppressErrorToast: true })
+        const response = await this.aiGet(`${this.$root.prefix}/ai/personas/default`, {}, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
         this.personaAvailable = Boolean(response.data?.available)
         if (!this.personaAvailable) { this.personaRevision = ""; this.personaOriginal = null; this.personaDirty = false; return }
@@ -480,7 +545,7 @@ export default {
       if (!this.personaDraft.name.trim() || !this.personaDraft.prompt.trim()) return
       this.personaSaving = true
       try {
-        const response = await this.putRequest(`${this.$root.prefix}/ai/personas/default`, { expected_revision: this.personaRevision, ...this.personaSnapshot() })
+        const response = await this.aiPut(`${this.$root.prefix}/ai/personas/default`, { expected_revision: this.personaRevision, ...this.personaSnapshot() })
         if (!response.suc) throw new Error(response.info)
         this.personaRevision = response.data.revision; this.personaDraft = clone(response.data.persona)
         this.personaToneText = (this.personaDraft.tone_examples || []).join("\n"); this.personaDialogueText = (this.personaDraft.preset_dialogues || []).join("\n\n")
@@ -530,11 +595,24 @@ export default {
     resetSection(name) { this.$set(this.sectionDrafts, name, clone(this.originalSections[name])); if (name === "model_groups") { this.groupRows = this.groupsToRows(this.sectionDrafts.model_groups); this.selectedRouteGroupId = this.groupRows[0]?.clientId || ""; this.routingIssues = [] } this.$set(this.dirtySections, name, false); this.syncDirty() },
     setSectionValidity(name, paths) { this.$set(this.invalidSections, name, paths || []) },
     sectionInvalid(name) { return Boolean(this.invalidSections[name]?.length) },
-    async saveSection(name, value = this.sectionDrafts[name]) { if (this.sectionInvalid(name) || (this.saving && this.saving !== "model_groups")) return; this.saving = name; try { const submitted = { section: name, value: JSON.stringify(name === "model_groups" ? this.groupRows : this.sectionDrafts[name]) }; const response = await this.putRequest(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
+    async saveSection(name, value = this.sectionDrafts[name]) { if (this.sectionInvalid(name) || (this.saving && this.saving !== "model_groups")) return; this.saving = name; try { const submitted = { section: name, value: JSON.stringify(name === "model_groups" ? this.groupRows : this.sectionDrafts[name]) }; const response = await this.aiPut(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
     groupsToRows(groups) { const names = new Set(Object.keys(groups || {})); return Object.entries(groups || {}).map(([name, targets]) => ({ name, targets: targets.map((value) => ({ kind: names.has(value) ? "group" : "model", value, clientId: uid() })), clientId: uid() })) },
     addGroup() { const group = { name: "", targets: [], clientId: uid() }; this.groupRows.push(group); this.selectedRouteGroupId = group.clientId; this.markGroupsDirty() },
     removeGroup(index) { this.groupRows.splice(index, 1); this.markGroupsDirty() },
-    removeSelectedGroup() { const index = this.groupRows.findIndex((item) => item.clientId === this.selectedRouteGroupId); if (index < 0) return; this.groupRows.splice(index, 1); this.selectedRouteGroupId = this.groupRows[Math.max(0, index - 1)]?.clientId || ""; this.markGroupsDirty() },
+    async removeSelectedGroup() {
+      const index = this.groupRows.findIndex(item => item.clientId === this.selectedRouteGroupId)
+      if (index < 0 || this.saving) return
+      const name = this.groupRows[index].name.trim()
+      const change = removeRoutingGroup(this.groupRows, this.sectionDrafts.default_models, name)
+      if (change.tasks.length || change.affected.length || change.removed.length > 1) {
+        try { await this.$confirm(`将删除路由组 ${change.removed.join("、")}，清除默认任务 ${change.tasks.join("、") || "无"} 及路由组 ${change.affected.join("、") || "无"} 的引用，保存时一起应用。`, "删除引用确认", { type: "warning" }) } catch (_) { return }
+      }
+      this.groupRows = change.rows
+      change.tasks.forEach(task => this.$set(this.sectionDrafts.default_models, task, null))
+      if (change.tasks.length) this.$set(this.dirtySections, "default_models", true)
+      this.selectedRouteGroupId = this.groupRows[Math.max(0, index - 1)]?.clientId || ""
+      this.markGroupsDirty()
+    },
     markGroupsDirty() { this.routingIssues = []; this.$set(this.dirtySections, "model_groups", true); this.syncDirty() },
     targetOptions(kind, currentGroup) { if (kind === "group") return this.groupRows.filter((item) => item.clientId !== currentGroup.clientId && item.name.trim()).map((item) => ({ label: item.name.trim(), value: item.name.trim(), tag: "路由组" })); return this.allModels.filter((item) => item.is_available).map((item) => ({ label: item.fullName, value: item.fullName, tag: this.modelTask(item) })) },
     changeTargetKind(target) { target.value = ""; this.markGroupsDirty() },
@@ -562,16 +640,22 @@ export default {
       const value = this.groupRows.map((item) => ({ name: item.name.trim(), targets: item.targets.map((target) => target.value.trim()) }))
       this.saving = "model_groups"
       try {
-        const validation = await this.postRequest(`${this.$root.prefix}/ai/configuration/validate-routing`, { value })
+        const defaults = clone(this.sectionDrafts.default_models)
+        const submitted = { sections: { model_groups: JSON.stringify(this.groupRows), default_models: JSON.stringify(defaults) } }
+        const expectedRevision = this.revision
+        const validation = await this.aiPost(`${this.$root.prefix}/ai/configuration/validate-routing`, { value, default_models: defaults, expected_revision: expectedRevision })
         this.routingIssues = validation.data?.issues || []
         if (!validation.suc || !validation.data?.valid) { this.$message.warning("模型路由校验未通过。"); return }
-        await this.saveSection("model_groups", value)
+        const response = await this.aiPut(`${this.$root.prefix}/ai/configuration/routing`, { expected_revision: expectedRevision, model_groups: value, default_models: defaults })
+        if (!response.suc) throw new Error(response.info)
+        if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted)
+        await this.handleAiApply(response)
       } catch (error) { this.captureOperationError(error, "模型路由校验失败。") }
       finally { if (this.saving === "model_groups") this.saving = "" }
     },
     modelsForTask(task) { return this.allModels.filter((model) => { const caps = model.capabilities || {}; if (!model.is_available) return false; if (task === "embedding") return caps.is_embedding_model || model.task_type === "embedding"; if (task === "rerank") return caps.is_rerank_model || model.task_type === "rerank"; if (task === "image") return (caps.output_modalities || []).includes("image") || model.task_type === "image_generation"; if (task === "tts") return (caps.output_modalities || []).includes("audio") || model.task_type === "tts"; return !caps.is_embedding_model && !caps.is_rerank_model && ((caps.output_modalities || ["text"]).includes("text")) }) },
     captureOperationError(error, fallback) { this.operationIssues = apiErrorIssues(error); this.$message.error(apiErrorDetail(error, fallback)) },
-    handleAiApply(response) { return handleApplyResult(this, response, { restartPrompt: "AI 启动期配置已保存，需要重启后生效。", restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}), returnRoute: "/ai", recoveryMessage: "AI 启动期配置将在新进程中生效。" }) },
+    handleAiApply(response) { return handleApplyResult(this, response, { restartPrompt: "AI 启动期配置已保存，需要重启后生效。", restartRequest: () => this.aiPost(`${this.$root.prefix}/system/configuration/restart`, {}), returnRoute: "/ai", recoveryMessage: "AI 启动期配置将在新进程中生效。" }) },
     operationError(path) {
       const expected = path.toLowerCase()
       return this.operationIssues.find((issue) => {

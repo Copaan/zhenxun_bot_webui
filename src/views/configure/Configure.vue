@@ -1,6 +1,7 @@
 <template>
   <div class="base">
     <div class="base-info">
+      <MigrationBootstrap />
       <SettingForm />
     </div>
   </div>
@@ -8,12 +9,13 @@
 
 <script>
 import SettingForm from "@/components/configure/SettingForm.vue"
+import MigrationBootstrap from "@/views/about/MigrationBootstrap.vue"
 export default {
   name: "MainCommand",
   data() {
     return {}
   },
-  components: { SettingForm },
+  components: { SettingForm, MigrationBootstrap },
 }
 </script>
 
@@ -23,7 +25,7 @@ export default {
   height: 100%;
   min-height: 0;
   width: 100%;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .base-info {

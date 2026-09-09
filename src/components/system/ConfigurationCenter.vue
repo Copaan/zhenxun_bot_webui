@@ -9,6 +9,10 @@
     </div>
 
     <NetworkStatus :status="networkStatus" />
+    <div class="action-bar">
+      <span>本体受管网络代理由独立策略管理，不影响系统代理或第三方自建客户端。</span>
+      <el-button icon="el-icon-connection" @click="$router.push('/network-proxy', () => {}, (error) => $message.error(error.message))">网络代理设置</el-button>
+    </div>
     <el-tabs v-model="section">
       <el-tab-pane label="环境配置" name="env">
         <el-form label-position="top" class="env-form">
@@ -137,7 +141,6 @@ export default {
         { key: "WEBUI_HTTP_MODE", label: "HTTP兼容入口", type: "http-mode", dependsOn: "WEBUI_HTTPS_ENABLED", launcherOnly: true, options: [{ value: "serve", label: "完整访问" }, { value: "redirect", label: "跳转HTTPS" }, { value: "disabled", label: "关闭" }], help: "完整访问由launcher边车代理API、静态资源和WebSocket；边车异常不会中断HTTPS和Bot。" },
         { key: "WEBUI_HTTP_REDIRECT_PORT", label: "HTTP兼容端口", type: "number", dependsOn: "WEBUI_HTTPS_ENABLED", httpModeRequired: true, launcherOnly: true, placeholder: "80", help: "默认80；端口冲突时HTTPS继续运行，HTTP入口进入降级并自动重试。" },
         { key: "LOG_LEVEL", label: "日志等级", placeholder: "INFO", help: "常用值为 DEBUG、INFO、WARNING。" },
-        { key: "SYSTEM_PROXY", label: "系统代理", placeholder: "http://127.0.0.1:7890", help: "留空表示不使用代理。" },
         { key: "NICKNAME", label: "机器人昵称", placeholder: "[\"真寻\"]", help: "使用 dotenv 支持的列表格式。" },
         { key: "SELF_NICKNAME", label: "回复昵称", placeholder: "真寻", help: "回复消息中使用的自称。" },
         { key: "COMMAND_START", label: "命令前缀", placeholder: "[\"/\"]", help: "支持多个命令前缀。" },

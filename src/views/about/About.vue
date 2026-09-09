@@ -100,6 +100,8 @@
       </div>
     </section>
 
+    <MigrationPanel />
+
     <section class="about-content">
       <article>
         <h2>项目介绍</h2>
@@ -128,6 +130,7 @@
 import logoUrl from "@/assets/image/logo.png"
 import { hasDirtyState } from "@/utils/dirty-state"
 import { requestRestartWithRecovery } from "@/utils/restart-flow"
+import MigrationPanel from "./MigrationPanel.vue"
 
 const COMPONENT_META = {
   bot: { name: "真寻本体", icon: "el-icon-cpu" },
@@ -137,6 +140,7 @@ const COMPONENT_META = {
 
 export default {
   name: "AboutPage",
+  components: { MigrationPanel },
   data() {
     return {
       logoUrl, checking: false, updateInfo: null, updateError: "",

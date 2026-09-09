@@ -60,7 +60,7 @@
                   <i class="el-icon-switch-button"></i>
                 </div>
                 <div class="setting-content">
-                  <div class="setting-label">默认开关</div>
+                  <div class="setting-label" title="仅决定加入新群时的初始状态，不改变现有群或私聊的启用状态">新群默认启用</div>
                   <div class="setting-control">
                     <MySwitch v-model="updateData.default_status" />
                   </div>
