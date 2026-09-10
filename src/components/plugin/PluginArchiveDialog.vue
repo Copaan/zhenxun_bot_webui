@@ -43,7 +43,7 @@
           <dt>压缩包 SHA-256</dt><dd class="archive-digest">{{ preflight.archive_digest }}</dd>
           <dt>归档内容</dt><dd>{{ preflight.entries }} 项 / {{ mib(preflight.expanded_bytes) }} MiB</dd>
           <dt>预检有效期</dt><dd>{{ new Date(preflight.expires_at * 1000).toLocaleString() }}</dd>
-          <dt>依赖安装策略</dt><dd>仅允许 wheel，不运行源码构建</dd>
+          <dt>依赖安装策略</dt><dd>{{ preflight.dependency_plan.source_build_confirmed ? "已授权可信安装源的依赖构建" : "优先 wheel；源码依赖需要单独确认" }}</dd>
           <dt>Python 版本要求</dt><dd>{{ (preflight.metadata.requires_python || []).join(", ") || "未声明" }}</dd>
         </dl>
         <ul v-if="dependencies.length" class="archive-dependencies">
@@ -51,7 +51,15 @@
             {{ item.name }}: {{ item.from ? `${item.from} -> ` : "" }}{{ item.to || item.version }}
           </li>
         </ul>
-        <p v-else>无需变更依赖版本。</p>
+        <p v-else-if="preflight.dependency_plan.status !== 'blocked'">无需变更依赖版本。</p>
+        <el-alert v-if="preflight.dependency_plan.diagnostic" type="warning" :closable="false"
+          :title="dependencyError(preflight.dependency_plan.diagnostic)"
+          :description="preflight.dependency_plan.diagnostic.detail" />
+        <div v-if="preflight.dependency_plan.status === 'blocked' && preflight.dependency_plan.diagnostic.source_build_available" class="archive-actions">
+          <el-checkbox v-model="sourceBuildTrusted" :disabled="busy">允许可信安装源的依赖执行源码构建；不执行上传包的安装脚本</el-checkbox>
+          <el-button :disabled="busy || expired || !sourceBuildTrusted" @click="resolveDependencies">确认并继续依赖预检</el-button>
+        </div>
+        <el-button v-if="preflight.dependency_plan.status === 'blocked'" :disabled="busy || expired" @click="resolveDependencies(false)">重试 wheel 依赖预检</el-button>
         <template v-if="!result">
           <el-checkbox v-if="preflight.replace_required" v-model="replace" :disabled="busy">
             确认替换上述目标路径中的现有插件
@@ -146,7 +154,12 @@ const errors = {
   archive_dependency_format_unsupported: "依赖声明格式不受支持，请提供静态 requirements 或 PEP 621 声明。",
   archive_setup_dependencies_unsupported: "不执行 setup.py 或 setup.cfg 推导依赖，请提供无构建脚本的静态归档。",
   archive_requirement_unsupported: "依赖包含不受支持的选项、URL 或 NoneBot 1 包。",
-  archive_wheel_dependencies_unresolved: "无法仅用 wheel 解析依赖，安装已阻止。",
+  archive_wheel_dependencies_unresolved: "依赖解析失败，请重新预检并查看具体原因。",
+  archive_dependency_plan_not_ready: "依赖预检尚未通过，请先解决显示的失败项。",
+  archive_source_build_not_applicable: "当前失败不是可通过源码构建解决的依赖问题。",
+  proxy_configuration_unavailable: "全局代理配置不可用，请先修复代理。",
+  installer_trusted_index_invalid: "可信安装源地址无效；远程安装源必须使用 HTTPS。",
+  proxy_installer_protocol_unsupported: "依赖安装器不支持当前代理协议。",
   archive_dependency_forbidden: "依赖计划包含不允许覆盖的环境管理包。",
   archive_dependency_conflict: "归档依赖与当前固定版本或其他已安装归档的依赖要求冲突。为避免破坏已有插件，已拒绝变更。",
   archive_dependency_receipt_incomplete: "已有归档安装记录缺少依赖根或固定版本证据，无法安全变更依赖。请先核对并修复安装记录；不会自动放行缺失的依赖证据。",
@@ -156,7 +169,7 @@ const errors = {
   core_dependency_conflict: "插件依赖与受保护的核心依赖冲突。",
   cross_store_dependency_conflict: "依赖与其他待生效商店操作冲突。",
   plugin_transaction_not_mutable: "当前事务不可修改，请先处理已有操作。",
-  archive_source_build_transaction_conflict: "当前存在允许源码构建的事务，不能混入归档安装。",
+  archive_source_build_transaction_conflict: "依赖构建授权缺失、安装源已变化或与现有事务冲突，请核对后重新预检。",
   archive_builtin_forbidden: "禁止覆盖或遮蔽内置插件。",
   archive_target_link: "安装目标包含符号链接或 Windows 目录联接，已拒绝操作。",
   archive_target_collision: "目标存在同名、大小写或文件与包类型冲突。",
@@ -185,7 +198,7 @@ export default {
   props: { visible: Boolean },
   data() {
     return {
-      file: null, preflight: null, busy: false, progress: null,
+      file: null, preflight: null, busy: false, progress: null, sourceBuildTrusted: false, sequence: 0,
       trusted: false, replace: false, error: "", result: null,
       installed: [], now: Date.now(), timer: null, actionIds: {},
     }
@@ -195,6 +208,7 @@ export default {
     expired() { return this.preflight && this.now >= this.preflight.expires_at * 1000 },
     canConfirm() {
       return this.preflight && !this.expired && !this.busy && this.trusted &&
+        this.preflight.dependency_plan.status !== "blocked" &&
         (!this.preflight.replace_required || this.replace)
     },
     dependencies() {
@@ -206,8 +220,36 @@ export default {
     this.refresh()
     this.timer = setInterval(() => { this.now = Date.now() }, 1000)
   },
-  beforeDestroy() { clearInterval(this.timer) },
+  beforeDestroy() { this.sequence++; clearInterval(this.timer) },
   methods: {
+    dependencyError(diagnostic) {
+      const messages = {
+        archive_dependency_network: "无法连接依赖安装源，请检查代理及网络。",
+        archive_dependency_proxy_auth: "代理认证失败。",
+        archive_dependency_index_auth: "依赖安装源拒绝访问，请检查认证及权限。",
+        archive_dependency_tls: "安装源 TLS 验证失败。",
+        archive_dependency_python: "当前 Python 版本不满足依赖要求。",
+        archive_dependency_conflict: "依赖版本与现有环境约束冲突。",
+        archive_dependency_source_required: "没有可用 wheel，可确认后尝试从可信源构建依赖。",
+        archive_dependency_disk_full: "磁盘空间不足。",
+      }
+      return messages[diagnostic.code] || "依赖解析未通过，请查看原因。"
+    },
+    async resolveDependencies(sourceBuild = true) {
+      sourceBuild = sourceBuild !== false
+      if (this.busy || (sourceBuild && !this.sourceBuildTrusted) || this.expired) return
+      const sequence = ++this.sequence
+      const id = this.preflight.preflight_id
+      this.busy = true
+      this.error = ""
+      try {
+        const resolved = this.check(await postRequest(`${this.base}/preflight/${id}/resolve`, {
+          archive_digest: this.preflight.archive_digest, confirm_dependency_source_build: sourceBuild,
+        }, { suppressErrorToast: true }))
+        if (sequence === this.sequence && this.preflight?.preflight_id === id) this.preflight = resolved
+      } catch (error) { if (sequence === this.sequence) this.fail(error) }
+      finally { if (sequence === this.sequence) this.busy = false }
+    },
     mib(value) { return (value / 1024 / 1024).toFixed(1) },
     fail(error) {
       const detail = error.response?.data?.detail
@@ -229,11 +271,12 @@ export default {
       }
     },
     async inspect() {
+      const sequence = ++this.sequence
       this.busy = true
       this.error = ""
       this.progress = 0
       try {
-        this.preflight = this.check(await postRequest(
+        const inspected = this.check(await postRequest(
           `${this.base}/preflight?filename=${encodeURIComponent(this.file.name)}`,
           this.file,
           {
@@ -245,22 +288,26 @@ export default {
             },
           }
         ))
-      } catch (error) { this.fail(error) }
-      finally { this.busy = false; this.progress = null }
+        if (sequence === this.sequence) this.preflight = inspected
+      } catch (error) { if (sequence === this.sequence) this.fail(error) }
+      finally { if (sequence === this.sequence) { this.busy = false; this.progress = null } }
     },
     async confirm() {
       if (!this.canConfirm) return
+      const sequence = ++this.sequence
       this.busy = true
       this.error = ""
       try {
-        this.result = this.check(await postRequest(`${this.base}/preflight/${this.preflight.preflight_id}/confirm`, {
+        const result = this.check(await postRequest(`${this.base}/preflight/${this.preflight.preflight_id}/confirm`, {
           archive_digest: this.preflight.archive_digest,
           replace: this.replace,
           confirm_third_party_code: this.trusted,
         }, { suppressErrorToast: true }))
+        if (sequence !== this.sequence) return
+        this.result = result
         this.$emit("changed")
-      } catch (error) { this.fail(error) }
-      finally { this.busy = false }
+      } catch (error) { if (sequence === this.sequence) this.fail(error) }
+      finally { if (sequence === this.sequence) this.busy = false }
     },
     async discard() {
       this.busy = true

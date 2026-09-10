@@ -11,6 +11,7 @@
       <dl><div><dt>模式</dt><dd>{{ runtime.current ? modeName(runtime.current.mode) : '未确认' }}</dd></div><div><dt>代理服务器</dt><dd>{{ runtime.current && runtime.current.url || '未配置' }}</dd></div><div><dt>活动请求引用 / 排空池</dt><dd>{{ runtime.active_requests || 0 }} / {{ runtime.retired_pools || 0 }}</dd></div></dl>
       <el-alert v-if="runtime.error_code" :title="errorText(runtime.error_code)" type="warning" :closable="false" />
       <div class="route-counts"><span v-for="(value, key) in runtime.route_counts" :key="key">{{ routeName(key) }} <strong>{{ value }}</strong></span></div>
+      <div class="route-counts"><span v-for="(value, key) in runtime.clients" :key="`client-${key}`">{{ key }} <strong>{{ value === 'enabled' ? '已接管' : value === 'not_installed' ? '未安装' : value }}</strong></span></div>
     </section>
     <el-form v-if="revision" label-position="top" :disabled="busy" class="proxy-form">
       <section>
@@ -45,7 +46,7 @@
       </section>
       <section><h2>直连例外</h2><el-form-item label="主机、域名后缀或 CIDR（每行一项）"><el-input v-model="draft.bypassText" type="textarea" :rows="5" spellcheck="false" /></el-form-item><p class="scope-note">域名后缀使用 .example.com；普通域名不因解析到私网而自动绕过。localhost 与回环地址始终直连。</p></section>
     </el-form>
-    <section class="coverage"><h2>覆盖范围</h2><p>本体受管 HTTP 请求、共享 AI HTTP 调用、仓库 HTTP 下载、插件商店 Git 下载及更新检查。商店下载属于本体管理请求。</p><p>不接管第三方自建客户端、浏览器、自行运行的 Git / pip / uv、其他子进程或原始 Socket；不修改系统代理环境变量。测试成功不代表所有插件均受控。</p></section>
+    <section class="coverage"><h2>覆盖范围</h2><p>本体 HTTP、AI、仓库下载、插件商店 Git 和受管依赖安装，以及第三方 requests、HTTPX、aiohttp 和 yt-dlp 内置 HTTP 下载。商店与安装源下载属于本体管理请求。</p><p>不接管自定义 transport / connector、外部下载器、浏览器、自行运行的 Git / pip / uv、其他子进程或原始 Socket。aiohttp 当前支持 HTTP(S) 代理，SOCKS 明确阻断。不修改系统代理环境变量，测试结果按客户端分别显示。</p></section>
     <div v-if="probeResult" class="probe-result" role="status"><el-tag :type="probeResult.ok ? 'success' : 'danger'">{{ probeResult.ok ? '测试成功' : '测试失败' }}</el-tag><span>{{ errorText(probeResult.code) }} · {{ probeResult.duration_ms }} ms<span v-if="probeResult.stage"> · {{ { authentication: '认证阶段', target: '目标响应阶段', connection: '连接阶段', cleanup: '资源清理阶段' }[probeResult.stage] || '未确认阶段' }}</span></span></div>
     <footer class="proxy-actions"><span>新请求立即生效；进行中的传输继续使用原策略。</span><div><el-button icon="el-icon-position" :loading="probing" :disabled="busy || !revision || !draft.url" @click="probe">测试代理</el-button><el-button type="primary" icon="el-icon-check" :loading="saving" :disabled="busy || !revision || !dirty" @click="save">保存策略</el-button></div></footer>
   </main>

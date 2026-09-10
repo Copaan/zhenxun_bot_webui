@@ -407,7 +407,14 @@
           <span>Bot 事件入口</span>
           <strong>{{ startupReport.accepts_bot_events ? "开放" : "关闭" }}</strong>
         </div>
-        <div v-if="startupReport.current_operation" class="startup-current-operation">
+        <section v-if="startupReport.running_operations?.length" class="startup-report-section">
+          <h3>正在并行准备</h3>
+          <div v-for="operation in startupReport.running_operations" :key="operation.component_id" class="startup-report-row">
+            <span>{{ operationLabel(operation) }}</span>
+            <strong>进行中</strong>
+          </div>
+        </section>
+        <div v-else-if="startupReport.current_operation" class="startup-current-operation">
           <span>当前事务</span>
           <strong>{{ operationLabel(startupReport.current_operation) }}</strong>
         </div>
@@ -438,6 +445,10 @@
           </div>
           <div v-if="startupReport.load_plan.failed_plugins?.length" class="startup-failures">
             {{ startupReport.load_plan.failed_plugins.join("、") }}
+          </div>
+          <div class="startup-report-row">
+            <span>扫描缓存命中 / 重新分析</span>
+            <strong>{{ startupReport.load_plan.cache_hits || 0 }} / {{ startupReport.load_plan.scanned_files || 0 }}</strong>
           </div>
         </section>
         <section v-if="lifecycleStatus.component_count" class="startup-report-section">
@@ -1046,6 +1057,15 @@ export default {
       }
     },
     operationLabel(operation) {
+      const labels = {
+        "warmup:renderer": "浏览器与渲染准备",
+        "warmup:resources": "资源完整性检查",
+        "warmup:runtime_index": "运行索引准备",
+        "warmup:ai": "AI 服务准备",
+        "warmup:ai_sandbox": "AI 沙箱准备",
+        "runtime:legacy_data": "旧业务数据修复"
+      }
+      if (labels[operation.name]) return labels[operation.name]
       const plugin = operation.details?.plugin_id
       if (plugin) return plugin
       return String(operation.name || "启动事务")
