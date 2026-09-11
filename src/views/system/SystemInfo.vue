@@ -3,6 +3,7 @@
     <header><h1>系统设置</h1><p>管理运行配置与项目文件</p></header>
     <el-tabs v-model="activeTab" class="system-tabs">
       <el-tab-pane label="配置中心" name="configuration"><ConfigurationCenter /></el-tab-pane>
+      <el-tab-pane label="消息队列" name="messages" lazy><MessageInbox /></el-tab-pane>
       <el-tab-pane label="文件管理" name="files" lazy><div class="file-panel"><FileTable class="h-full" /></div></el-tab-pane>
     </el-tabs>
   </div>
@@ -11,8 +12,9 @@
 <script>
 import ConfigurationCenter from "@/components/system/ConfigurationCenter.vue"
 import FileTable from "@/components/system/FileTable.vue"
+import MessageInbox from "@/components/system/MessageInbox.vue"
 
-export default { name: "SystemInfo", components: { ConfigurationCenter, FileTable }, data() { return { activeTab: "configuration" } } }
+export default { name: "SystemInfo", components: { ConfigurationCenter, FileTable, MessageInbox }, data() { return { activeTab: "configuration" } } }
 </script>
 
 <style scoped>

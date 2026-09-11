@@ -70,6 +70,67 @@ function component(request, login = async () => {}) {
   return instance
 }
 
+test('export tracks accepted job through disconnection without resubmitting', async () => {
+  let available = false, posts = 0
+  const i = component(async (url) => {
+    if (url === '/export/preview') return { total: 2, excluded_total: 1 }
+    if (url === '/export') { posts++; throw Error('connection reset') }
+    if (!available) throw Error('worker resuming')
+    if (url === '/capabilities') return { online_export: true, discovery: false }
+    if (url === '/tasks') return { items: [{ id: 'original', action: 'export', stage: 'resuming' }], total: 1 }
+    throw Error(url)
+  })
+  i.$confirm = async text => { assert.match(text, /重启原业务/) }
+  await i.exportInstance()
+  assert.equal(posts, 1)
+  assert.equal(i.exportTracking, true)
+  assert.ok(i.poll)
+  assert.ok(i.capability)
+  clearTimeout(i.poll)
+  available = true
+  await i.refresh()
+  assert.equal(i.jobs[0].id, 'original')
+  assert.equal(i.exportTracking, true)
+  assert.equal(i.error, '')
+  clearTimeout(i.poll)
+  await i.exportInstance()
+  assert.equal(posts, 1)
+})
+
+test('migration poll retries transient failures but stops at expired authentication', async () => {
+  let status = 503
+  const i = component(async () => { throw Object.assign(Error('unavailable'), { response: { status } }) })
+  await i.refresh()
+  assert.ok(i.poll)
+  clearTimeout(i.poll); i.poll = null
+  status = 401
+  await i.refresh()
+  assert.equal(i.authRequired, true)
+  assert.equal(i.poll, null)
+})
+
+test('late migration refresh cannot schedule polling after component is closed', async () => {
+  let reject
+  const i = component(() => new Promise((_resolve, fail) => { reject = fail }))
+  const pending = i.refresh()
+  i.readSequence++
+  reject(Error('connection reset'))
+  await pending
+  assert.equal(i.poll, undefined)
+})
+
+test('late export preview cannot confirm or submit after leaving the page', async () => {
+  let resolve, calls = 0
+  const i = component(() => { calls++; return new Promise(done => { resolve = done }) })
+  i.$confirm = async () => { throw Error('must not confirm') }
+  const pending = i.exportInstance()
+  i.exportSequence++
+  resolve({ total: 1, excluded_total: 0 })
+  await pending
+  assert.equal(calls, 1)
+  assert.equal(i.poll, undefined)
+})
+
 test('late inspection cannot overwrite a newer selection', async () => {
   let resolve
   const i = component(() => new Promise(done => { resolve = done }))

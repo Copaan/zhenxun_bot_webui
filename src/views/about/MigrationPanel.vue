@@ -5,6 +5,7 @@
       <el-button icon="el-icon-refresh" size="small" :loading="loading" @click="refresh">刷新状态</el-button>
     </header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
+    <el-alert v-if="exportTracking" title="正在跟踪导出任务：业务进程会短暂停止，创建快照后自动恢复，再压缩并校验迁移包。连接中断时将继续查询原任务，请勿重复提交。" type="info" :closable="false" show-icon />
     <el-form v-if="authRequired" label-position="top" class="migration-form" @submit.native.prevent="login">
       <p>会话已失效，草稿和任务记录仍保留。恢复提交后请使用确认的管理员重新登录。</p>
       <el-form-item label="当前管理员"><el-input v-model="loginUsername" autocomplete="off" /></el-form-item>
@@ -15,7 +16,7 @@
     <el-alert v-if="capability && capability.maintenance" title="实例维护中，迁移尚未完成。" type="info" :closable="false" show-icon />
     <el-alert v-if="capability && !capability.restore" :title="`当前运行条件暂不支持恢复：${(capability.restore_blockers || []).join('、')}。可先核验迁移包。`" type="warning" :closable="false" show-icon />
     <div class="migration-actions">
-      <el-button icon="el-icon-download" :disabled="!capability || !capability.online_export || busy" :loading="exportBusy" @click="exportInstance">导出实例</el-button>
+      <el-button icon="el-icon-download" :disabled="!capability || !capability.online_export || busy || exportTracking" :loading="exportBusy" @click="exportInstance">导出实例</el-button>
       <el-button icon="el-icon-upload2" :disabled="!capability || capability.upload === false || busy" @click="$refs.file.click()">选择迁移包</el-button>
       <input ref="file" class="migration-file-input" type="file" accept=".zx" @change="selectFile" />
     </div>
@@ -113,9 +114,9 @@ export default {
   name: "MigrationPanel",
   components: { MigrationRestoreWizard },
   props: { firstDeployment: Boolean },
-  data: () => ({ authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, downloading: null }),
+  data: () => ({ authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
   created() { this.sequence = 0; this.readSequence = 0; this.refresh() },
-  beforeDestroy() { this.sequence += 1; this.readSequence += 1; this.recoverySequence = (this.recoverySequence || 0) + 1; this.controller?.abort(); clearTimeout(this.poll); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
+  beforeDestroy() { this.sequence += 1; this.readSequence += 1; this.exportSequence = (this.exportSequence || 0) + 1; this.recoverySequence = (this.recoverySequence || 0) + 1; this.controller?.abort(); clearTimeout(this.poll); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
   watch: {
     recoveryUsername() { this.recoveryDirty() },
     recoveryPassword() { this.recoveryDirty() },
@@ -123,15 +124,27 @@ export default {
   },
   methods: {
     async exportInstance() {
-      if (this.exportBusy) return
+      if (this.exportBusy || this.exportTracking) return
+      const sequence = this.exportSequence = (this.exportSequence || 0) + 1
       this.exportBusy = true; this.error = ""
       try {
         const preview = await migrationRequest("/export/preview")
-        await this.$confirm(`将导出 ${preview.total} 个文件（另有 ${preview.excluded_total} 个排除项目）。明文包包含管理员凭据、数据库及插件代码；导出会短暂停止业务以建立一致快照。`, "确认导出实例", { type: "warning", confirmButtonText: "确认导出明文包" })
-        await migrationRequest("/export", { method: "post", data: { confirm_secrets: true, dependencies: true } })
+        if (sequence !== this.exportSequence) return
+        await this.$confirm(`将导出 ${preview.total} 个文件（另有 ${preview.excluded_total} 个排除项目）。明文包包含管理员凭据、数据库及插件代码；确认后会停止业务进程、建立一致快照并自动重启原业务，再打包校验。请等待任务完成后下载。`, "确认导出实例", { type: "warning", confirmButtonText: "确认导出明文包" })
+        if (sequence !== this.exportSequence) return
+        this.exportTracking = true
+        try {
+          await migrationRequest("/export", { method: "post", data: { confirm_secrets: true, dependencies: true } })
+        } catch (error) {
+          if (sequence !== this.exportSequence) return
+          if (error.response && error.response.status < 500) { this.exportTracking = false; throw error }
+          // The launcher may have accepted the request before the worker disconnected.
+          this.error = "提交结果暂未确认，正在查询原任务；不会自动重复导出。"
+        }
+        if (sequence !== this.exportSequence) return
         await this.refresh()
-      } catch (error) { if (error !== "cancel" && error !== "close") this.error = this.message(error) }
-      finally { this.exportBusy = false }
+      } catch (error) { if (sequence === this.exportSequence && error !== "cancel" && error !== "close") this.error = this.message(error) }
+      finally { if (sequence === this.exportSequence) this.exportBusy = false }
     },
     async downloadJob(job) {
       if (this.downloading) return
@@ -202,8 +215,14 @@ export default {
         const jobs = await migrationRequest("/tasks", { params: { offset: (this.jobPage - 1) * 20, limit: 20 } })
         if (sequence !== this.readSequence) return
         this.capability = capability; this.packages = packages.items; this.jobs = jobs.items; this.jobTotal = jobs.total
+        this.exportTracking = jobs.items.some((job) => job.action === "export" && !terminalMigrationStages.has(job.stage)); this.error = ""
         if (jobs.items.some((job) => !terminalMigrationStages.has(job.stage))) this.poll = setTimeout(() => this.refresh(), 5000)
-      } catch (error) { if (sequence === this.readSequence) { this.capability = null; this.error = this.message(error) } }
+      } catch (error) {
+        if (sequence === this.readSequence) {
+          this.error = this.message(error)
+          if (!error.response || error.response.status >= 500) this.poll = setTimeout(() => this.refresh(), 5000)
+        }
+      }
       finally { if (sequence === this.readSequence) this.loading = false }
     },
     async selectFile(event) {
