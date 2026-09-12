@@ -122,10 +122,10 @@
             <span><el-button size="small" disabled>不可安装</el-button></span>
           </el-tooltip>
           <el-dropdown v-else trigger="click" @command="startAnalysis($event, plugin)">
-            <el-button size="small">已托管<i class="el-icon-arrow-down el-icon--right" /></el-button>
+            <el-button size="small">已安装<i class="el-icon-arrow-down el-icon--right" /></el-button>
             <el-dropdown-menu slot="dropdown">
               <el-dropdown-item v-if="plugin.update_available" command="update">更新插件</el-dropdown-item>
-              <el-dropdown-item command="uninstall" divided>卸载</el-dropdown-item>
+              <el-dropdown-item command="uninstall">卸载</el-dropdown-item>
             </el-dropdown-menu>
           </el-dropdown>
         </div>
@@ -392,7 +392,7 @@ export default {
     stateTag(plugin) {
       if (plugin.apply_mode === "restart_pending") return { label: "等待重启", type: "warning" }
       const states = {
-        not_installed: { label: "未安装", type: "info" }, managed: { label: "已托管", type: "success" },
+        not_installed: { label: "未安装", type: "info" }, managed: { label: "已安装", type: "success" },
         update_available: { label: "可更新", type: "warning" }, external: { label: "外部安装", type: "info" },
         blocked: { label: "不可安装", type: "danger" }, failed: { label: "失败", type: "danger" },
       }

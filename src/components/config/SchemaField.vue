@@ -96,7 +96,7 @@
         resize="vertical"
         @input="$emit('input', $event)"
       />
-      <el-input v-else :value="value" :type="ui.secret ? 'password' : 'text'" :show-password="ui.secret" :autocomplete="ui.secret ? 'new-password' : 'off'" :placeholder="placeholder" @input="$emit('input', $event)" />
+      <el-input v-else :value="displayValue" :type="ui.secret ? 'password' : 'text'" :show-password="ui.secret" :autocomplete="ui.secret ? 'new-password' : 'off'" :placeholder="placeholder" @input="updateDisplayValue" />
     </template>
     <div v-if="fieldError" class="field-error">{{ fieldError }}</div>
   </div>
@@ -143,6 +143,7 @@ export default {
     numericStep() { return this.ui.step || (this.fieldType === "integer" ? 1 : 0.1) },
     multiline() { return /prompt|template|description/i.test(this.path) || this.ui.component === "textarea" },
     jsonValue() { return this.jsonDraft },
+    displayValue() { return this.value !== null && typeof this.value === "object" ? JSON.stringify(this.value, null, 2) : this.value },
     fieldError() {
       const path = this.path.replace(/\[(\d+)\]/g, ".$1").toLowerCase()
       const issue = this.issues.find((item) => {
@@ -229,6 +230,12 @@ export default {
         this.jsonError = true
         this.$emit("validity", { path: this.path, valid: false })
       }
+    },
+    updateDisplayValue(value) {
+      if (this.value !== null && typeof this.value === "object") {
+        try { this.$emit("input", JSON.parse(value)); return } catch (_) { /* Keep editing text until valid JSON. */ }
+      }
+      this.$emit("input", value)
     },
   },
 }

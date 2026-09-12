@@ -57,12 +57,14 @@
       <section v-if="account || editingPolicy" class="editor-pane">
         <div v-if="!editingPolicy" class="scope-toolbar">
           <el-radio-group :value="policyScope" @input="selectScope" size="small" :disabled="saving">
-            <el-radio-button label="account">账号默认</el-radio-button>
-            <el-radio-button label="group">单群设置</el-radio-button>
+            <el-radio-button label="account">账号设置</el-radio-button>
+            <el-radio-button label="group">群聊设置</el-radio-button>
+            <el-radio-button label="private">私聊设置</el-radio-button>
           </el-radio-group>
           <el-select v-if="policyScope === 'group'" :value="selectedGroupKey" @change="selectGroup" filterable placeholder="选择该 Bot 的已知群" :disabled="saving">
             <el-option v-for="group in groups" :key="groupKey(group)" :value="groupKey(group)" :label="`${group.group_name} (${group.group_id}${group.channel_id ? '/' + group.channel_id : ''})`" />
           </el-select>
+          <span v-if="policyScope === 'private'" class="scope-label">所有私聊</span>
         </div>
         <el-alert v-if="policyScope === 'group' && !groupAccount" title="暂无选中的群，请选择已知群；群连接同步或收到群消息后会更新关联。" type="info" :closable="false" />
         <div class="editor-heading">
@@ -107,7 +109,7 @@
           </el-form-item>
         </el-form>
 
-        <template v-if="policyScope === 'account' || groupAccount">
+        <template v-if="policyScope === 'account' || groupAccount || privateAccount">
         <div class="feature-toolbar">
           <el-radio-group v-model="activeKind" size="small">
             <el-radio-button label="plugins">插件</el-radio-button>
@@ -230,7 +232,7 @@ export default {
       loading: false, saving: false, dialogSaving: false, loadError: "",
       accounts: [], policies: [], catalog: { plugins: [], tasks: [] },
       selectedBotId: "", account: null, editingPolicy: null,
-      policyScope: "account", groups: [], groupAccount: null, selectedGroupKey: "", selectionRequest: 0, listRequest: 0, destroyed: false,
+      policyScope: "account", groups: [], groupAccount: null, selectedGroupKey: "", privateAccount: null, selectionRequest: 0, listRequest: 0, destroyed: false,
       draft: { plugins: [], tasks: [] }, baseline: { plugins: [], tasks: [] },
       detachPending: false, activeKind: "plugins", accountSearch: "", featureSearch: "", statusFilter: "all", selectedModules: [],
       createDialogVisible: false, policyDialogVisible: false, bindDialogVisible: false, copyDialogVisible: false,
@@ -240,9 +242,9 @@ export default {
   },
   computed: {
     dirty() { return Boolean(JSON.stringify(this.draft) !== JSON.stringify(this.baseline) || (this.editingPolicy && (this.editingPolicy.name !== this.editingPolicy.originalName || this.editingPolicy.description !== this.editingPolicy.originalDescription))) },
-    editorTitle() { return this.editingPolicy ? this.editingPolicy.name : (this.groupAccount?.group_name || this.account?.nickname || this.account?.runtime_bot_id || "账号设置") },
+    editorTitle() { return this.editingPolicy ? this.editingPolicy.name : this.policyScope === "private" ? "所有私聊" : (this.groupAccount?.group_name || this.account?.nickname || this.account?.runtime_bot_id || "账号设置") },
     filteredAccounts() { const q = this.accountSearch.trim().toLowerCase(); return q ? this.accounts.filter((x) => `${x.nickname} ${x.bot_id} ${x.runtime_bot_id}`.toLowerCase().includes(q)) : this.accounts },
-    currentFeatures() { const known = this.catalog[this.activeKind] || []; const target = this.groupAccount || this.account; const missing = target && !this.editingPolicy ? (this.activeKind === "plugins" ? target.missing_plugins : target.missing_tasks) || [] : []; return [...known, ...missing.filter((module) => !known.some((x) => x.module === module)).map((module) => ({ module, name: "已缺失模块", feature_type: "MISSING", load_status: false, global_status: false, missing: true }))] },
+    currentFeatures() { const known = this.catalog[this.activeKind] || []; const target = this.groupAccount || this.privateAccount || this.account; const missing = target && !this.editingPolicy ? (this.activeKind === "plugins" ? target.missing_plugins : target.missing_tasks) || [] : []; return [...known, ...missing.filter((module) => !known.some((x) => x.module === module)).map((module) => ({ module, name: "已缺失模块", feature_type: "MISSING", load_status: false, global_status: false, missing: true }))] },
     filteredFeatures() { const q = this.featureSearch.trim().toLowerCase(); return this.currentFeatures.filter((item) => { const matchText = !q || `${item.name} ${item.module} ${item.menu_type || ""}`.toLowerCase().includes(q); const enabled = this.isEnabled(item.module); const unavailable = !item.load_status || !item.global_status; const matchStatus = this.statusFilter === "all" || (this.statusFilter === "enabled" && enabled) || (this.statusFilter === "disabled" && !enabled) || (this.statusFilter === "unavailable" && unavailable); return matchText && matchStatus }) },
     allFilteredSelected() { return this.filteredFeatures.length > 0 && this.filteredFeatures.every((x) => this.selectedModules.includes(x.module)) },
     someFilteredSelected() { const count = this.filteredFeatures.filter((x) => this.selectedModules.includes(x.module)).length; return count > 0 && count < this.filteredFeatures.length },
@@ -267,8 +269,9 @@ export default {
     async confirmDiscard() { if (!this.dirty) return true; try { await this.$confirm("当前修改尚未保存，是否放弃？", "切换设置", { type: "warning" }); return true } catch (_) { return false } },
     async selectScope(scope) {
       if (this.saving || scope === this.policyScope || !await this.confirmDiscard()) return
-      this.selectionRequest++; this.policyScope = scope; this.groupAccount = null; this.selectedGroupKey = ""; this.setDraft(this.account)
+      this.selectionRequest++; this.policyScope = scope; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""; this.setDraft(this.account)
       if (scope === "account") return
+      if (scope === "private") { this.loadPrivatePolicy(); return }
       const request = ++this.selectionRequest
       this.loading = true
       try {
@@ -279,6 +282,18 @@ export default {
         if (this.groups.length) await this.selectGroup(this.groupKey(this.groups[0]))
       } catch (error) { if (request === this.selectionRequest) this.loadError = error.message || "群列表读取失败" }
       finally { if (!this.destroyed) this.loading = false }
+    },
+    async loadPrivatePolicy() {
+      if (!this.account) return
+      const request = ++this.selectionRequest
+      this.loading = true
+      try {
+        const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/private`)
+        if (request !== this.selectionRequest || this.destroyed) return
+        if (!resp.suc) throw new Error(resp.info)
+        this.privateAccount = resp.data; this.setDraft(resp.data)
+      } catch (error) { if (request === this.selectionRequest) this.loadError = error.message || "私聊设置读取失败" }
+      finally { if (request === this.selectionRequest) this.loading = false }
     },
     async selectGroup(key) {
       if (this.saving || key === this.selectedGroupKey || !await this.confirmDiscard()) return
@@ -318,7 +333,7 @@ export default {
       if (request !== this.selectionRequest || this.destroyed) return
       if (!resp.suc) throw new Error(resp.info)
       this.selectedBotId = botId; this.account = resp.data; this.editingPolicy = null; this.detachPending = false
-      this.policyScope = "account"; this.groups = []; this.groupAccount = null; this.selectedGroupKey = ""
+      this.policyScope = "account"; this.groups = []; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""
       this.draft = { plugins: sorted(resp.data.block_plugins), tasks: sorted(resp.data.block_tasks) }
       this.baseline = JSON.parse(JSON.stringify(this.draft)); this.selectedModules = []; clearDirtyState(SOURCE)
       if (this.$route.query.bot_id !== botId) this.navigate({ bot_id: botId })
@@ -335,10 +350,10 @@ export default {
     toggleFilteredSelection(value) { const values = new Set(this.selectedModules); this.filteredFeatures.forEach((x) => value ? values.add(x.module) : values.delete(x.module)); this.selectedModules = [...values] },
     setSelectedEnabled(enabled) { this.selectedModules.forEach((module) => this.setFeatureEnabled(module, enabled)); this.selectedModules = [] },
     typeLabel(item) { const map = { NORMAL: "普通", DEPENDANT: "依赖", ADMIN: "管理员", SUPERUSER: "超级用户", ADMIN_SUPER: "管理/超管", TASK: "被动", MISSING: "缺失" }; return map[item.feature_type] || item.feature_type },
-    effectiveLabel(item) { if (!item.load_status) return item.missing ? "模块缺失" : "未加载"; if (!item.global_status) return "全局关闭"; if (this.groupAccount) { const suffix = this.activeKind === "plugins" ? "plugins" : "tasks"; if ((this.groupAccount[`account_block_${suffix}`] || []).includes(item.module)) return "账号禁用"; if ((this.groupAccount[`group_block_${suffix}`] || []).includes(item.module)) return "原群禁用"; } return this.isEnabled(item.module) ? "可用" : (this.editingPolicy ? "策略禁用" : this.groupAccount ? "本群禁用" : "账号禁用") },
-    effectiveType(item) { if (!item.load_status || !item.global_status) return "info"; return this.effectiveLabel(item) === "可用" ? "success" : "danger" },
+    effectiveLabel(item) { if (!item.load_status) return item.missing ? "模块缺失" : "未加载"; if (!item.global_status) return "全局关闭"; const scoped = this.groupAccount || this.privateAccount; if (scoped) { const suffix = this.activeKind === "plugins" ? "plugins" : "tasks"; if ((scoped[`account_block_${suffix}`] || []).includes(item.module)) return "账号禁用"; if ((scoped[`group_block_${suffix}`] || scoped[`private_block_${suffix}`] || []).includes(item.module)) return "配置或命令禁用"; } return this.isEnabled(item.module) ? "当前启用" : (this.editingPolicy ? "策略禁用" : scoped ? "当前禁用" : "账号禁用") },
+    effectiveType(item) { if (!item.load_status || !item.global_status) return "info"; return ["可用", "当前启用"].includes(this.effectiveLabel(item)) ? "success" : "danger" },
     discardChanges() { if (this.saving) return; if (this.editingPolicy) { this.editingPolicy.name = this.editingPolicy.originalName; this.editingPolicy.description = this.editingPolicy.originalDescription } this.draft = JSON.parse(JSON.stringify(this.baseline)); this.detachPending = false },
-    async saveEditor() { if (this.saving || (this.policyScope === "group" && !this.groupAccount)) return; if (this.editingPolicy) return this.savePolicy(); this.saving = true; try { const target = this.groupAccount || this.account; const url = this.groupAccount ? this.groupUrl(target) : `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`; const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true }); if (this.destroyed) return; if (resp.suc) { this.$message.success(resp.info); if (this.groupAccount) { this.groupAccount = resp.data; this.setDraft(resp.data) } else await this.loadAll() } } catch (error) { if (error?.response?.status === 409) this.$message.warning("配置已变化，草稿已保留，请重新加载后比较"); else this.$message.error("保存失败，草稿已保留") } finally { this.saving = false } },
+    async saveEditor() { if (this.saving || (this.policyScope === "group" && !this.groupAccount) || (this.policyScope === "private" && !this.privateAccount)) return; if (this.editingPolicy) return this.savePolicy(); this.saving = true; try { const target = this.groupAccount || this.privateAccount || this.account; const url = this.groupAccount ? this.groupUrl(target) : this.privateAccount ? `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/private` : `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`; const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true }); if (this.destroyed) return; if (resp.suc) { this.$message.success(resp.info); if (this.groupAccount) { this.groupAccount = resp.data; this.setDraft(resp.data) } else if (this.privateAccount) { this.privateAccount = resp.data; this.setDraft(resp.data) } else await this.loadAll() } } catch (error) { if (error?.response?.status === 409) this.$message.warning("配置已变化，草稿已保留，请重新加载后比较"); else this.$message.error("保存失败，草稿已保留") } finally { this.saving = false } },
     openCreatePolicy() { if (!this.account) return; this.createForm = { name: "", description: "", bindCurrent: true }; this.createDialogVisible = true },
     async createPolicy() { if (!this.createForm.name.trim()) return this.$message.warning("请输入策略名称"); this.dialogSaving = true; try { const bind = this.createForm.bindCurrent ? [this.account.bot_id] : []; const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/policies`, { name: this.createForm.name, description: this.createForm.description, source_bot_id: this.account.bot_id, source_revision: this.account.revision, block_plugins: [], block_tasks: [], bind_bot_ids: bind, expected_revisions: bind.length ? { [this.account.bot_id]: this.account.revision } : {} }); if (resp.suc) { this.$message.success(resp.info); this.createDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
     async editPolicy(policy) { if (this.saving || !await this.confirmDiscard()) return; this.policyDialogVisible = false; this.editingPolicy = { ...policy, originalName: policy.name, originalDescription: policy.description }; this.draft = { plugins: sorted(policy.block_plugins), tasks: sorted(policy.block_tasks) }; this.baseline = JSON.parse(JSON.stringify(this.draft)); this.detachPending = false },

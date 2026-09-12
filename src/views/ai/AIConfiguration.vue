@@ -277,7 +277,7 @@ export default {
       if (!draftBase) return { code: "missing_base", label: "缺少 API 地址", type: "warning", reason: "请先填写 API 地址" }
       const hasSavedKey = this.providerDraft.api_key_slots.some((slot) => slot.existing_index != null)
       if (!temporaryKey && !hasSavedKey) return { code: "missing_credentials", label: "缺少有效凭据", type: "warning", reason: "请先填写有效 API Key" }
-      return { code: "ready", label: "支持自动发现", type: "success", reason: "" }
+      return { code: "ready", label: "可自动发现", type: "success", reason: "" }
     },
     selectedProbeResult() { return this.providerProbeResults[this.selectedProviderName || "__new__"] || null },
     groupNameErrors() {
@@ -459,7 +459,7 @@ export default {
       const probe = this.providerProbeResults[provider.name]
       if (probe) return probe.success ? { label: "最近验证成功", type: "success" } : { label: "最近验证失败", type: "danger" }
       const states = {
-        ready: { label: "支持自动发现", type: "success" },
+        ready: { label: "可自动发现", type: "success" },
         manual_only: { label: "仅手动添加", type: "info" },
         missing_credentials: { label: "缺少有效凭据", type: "warning" },
         missing_base: { label: "缺少 API 地址", type: "warning" },

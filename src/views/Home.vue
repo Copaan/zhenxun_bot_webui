@@ -848,7 +848,7 @@ export default {
     startupSummary() {
       const state = this.startupStatus.state || "starting"
       if (this.startupStatus.operating_mode === "setup_only") return { status: "warning", label: "等待配置", detail: "首次配置尚未完成，Bot运行时和数据库暂未启动" }
-      if (state === "warmup_ready") return { status: "ok", label: "全部就绪", detail: "运行时、渲染与AI预热均已完成" }
+      if (state === "warmup_ready") return { status: "ok", label: "服务正常", detail: "服务启动正常" }
       if (state === "runtime_ready") return { status: "warning", label: "服务预热", detail: "Bot运行时已就绪，渲染与AI服务正在预热" }
       if (state === "degraded") {
         const reason = (this.startupStatus.degraded_reasons || [])[0]

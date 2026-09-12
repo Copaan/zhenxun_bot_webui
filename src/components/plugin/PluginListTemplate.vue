@@ -81,10 +81,7 @@
           </div>
 
           <!-- 底部按钮区域 - 右侧横向排列 -->
-          <div
-            class="flex justify-end items-center mt-3 pt-2"
-            :style="{ borderTop: '1px solid var(--border-color-light)' }"
-          >
+          <div class="flex items-center mt-3 pt-2 plugin-actions">
             <NormalButton
               iconClass="readme"
               text="帮助"
@@ -93,31 +90,6 @@
               active-class="bg-blue-100 text-blue-600 hover:bg-blue-200 hover:text-blue-800"
               @click="openUsage(data)"
             />
-
-            <!-- 开关 -->
-            <div class="flex items-center" title="启用或停用命令响应，不会卸载插件或释放运行时资源" @click.stop>
-              <MySwitch
-                :value="data.status"
-                :disabled="!data.allow_switch"
-                @input="onSwitchChange(data, $event)"
-              />
-              <span
-                v-if="!data.allow_switch"
-                class="ml-2 text-xs"
-                :style="{ color: 'var(--text-color-secondary)' }"
-                >禁用</span
-              >
-              <span
-                v-else
-                class="ml-2 text-xs"
-                :style="{
-                  color: data.status
-                    ? 'var(--el-color-success)'
-                    : 'var(--el-color-danger)',
-                }"
-                >{{ data.status ? "开启" : "关闭" }}</span
-              >
-            </div>
 
             <!-- 配置按钮 -->
             <NormalButton
@@ -153,6 +125,10 @@
               :active-class="'bg-purple-100 text-purple-600 hover:bg-purple-200 hover:text-purple-800'"
               @click="uninstallPlugin(data)"
             />
+            <div class="plugin-switch flex items-center ml-auto" title="启用或停用命令响应，不会卸载插件或释放运行时资源" @click.stop>
+              <MySwitch :value="data.status" :disabled="!data.allow_switch" @input="onSwitchChange(data, $event)" />
+              <span class="ml-2 text-xs" :style="{ color: data.status ? 'var(--el-color-success)' : 'var(--el-color-danger)' }">{{ data.allow_switch ? (data.status ? "开启" : "关闭") : "禁用" }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -418,6 +394,11 @@ export default {
 /* 按钮区域 */
 .plugin-card .button-area {
   border-left: 1px dashed var(--border-color-light);
+}
+
+.plugin-card .plugin-switch {
+  order: 2;
+  margin-left: auto;
 }
 
 /* 移动端适配 */

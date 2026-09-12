@@ -10,11 +10,13 @@
       <el-select v-model="state" clearable placeholder="全部状态" @change="refresh">
         <el-option v-for="(label, key) in labels" :key="key" :label="label" :value="key" />
       </el-select>
-      <span>仅显示处理元数据，不展示消息正文</span>
+      <span>正文仅显示安全摘要，完整原始 payload 不展示</span>
     </div>
     <el-table :data="items" empty-text="暂无消息记录">
       <el-table-column prop="sequence" label="序号" width="80" />
       <el-table-column prop="bot" label="机器人" min-width="150" />
+      <el-table-column prop="content_preview" label="消息内容" min-width="220" show-overflow-tooltip />
+      <el-table-column prop="message_type" label="类型" width="110" />
       <el-table-column label="状态" min-width="120"><template slot-scope="scope">{{ labels[scope.row.state] || scope.row.state }}</template></el-table-column>
       <el-table-column label="原因" min-width="200"><template slot-scope="scope">{{ reasons[scope.row.reason] || scope.row.reason || '—' }}</template></el-table-column>
       <el-table-column label="后台记录" min-width="180"><template slot-scope="scope">{{ deliverySummary(scope.row) }}</template></el-table-column>

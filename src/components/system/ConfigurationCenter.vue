@@ -78,7 +78,7 @@
             <header class="group-heading"><div><h3>{{ currentGroup.name }}</h3><p>{{ currentGroup.module }} · {{ currentGroup.fields.length }} 个配置项</p></div><el-button size="small" @click="resetCurrentGroup">恢复本组默认值</el-button></header>
             <div class="config-form-scroll">
               <SchemaForm :key="selectedGroup" :value="currentGroupValue" :schema="currentGroupSchema" :field-ui="currentGroupUi" :issues="pluginIssues" @input="updateCurrentGroup" @validity-change="pluginInvalidPaths = $event" />
-              <div v-for="field in currentSensitiveFields" :key="field.key" class="sensitive-placeholder"><i class="el-icon-lock"></i><span><strong>{{ (field.ui && field.ui.label) || field.key }}</strong>为敏感字段，请在高级原文中修改。</span></div>
+              <div v-for="field in currentSensitiveFields" :key="field.key" class="sensitive-placeholder"><i class="el-icon-lock"></i><span><strong>{{ (field.ui && field.ui.label) || field.key }}</strong>为敏感字段，请在配置原文中修改。</span></div>
             </div>
             <div class="action-bar config-action-bar">
               <span>{{ Object.keys(simpleChanges).length ? `${Object.keys(simpleChanges).length} 个配置组有未保存修改` : "未知配置组和字段会原样保留" }}</span>
@@ -89,7 +89,7 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="高级原文" name="raw" lazy>
+      <el-tab-pane label="配置原文" name="raw" lazy>
         <el-alert title="原文可能包含 Token、密码和 Secret。请勿截图、分享或粘贴到外部服务。" type="warning" :closable="false" show-icon />
         <div class="raw-switch">
           <el-radio-group :value="rawFile" size="small" :disabled="Boolean(saving)" @input="loadRaw">
@@ -177,7 +177,7 @@ export default {
       const needsRestart = this.customOperations.length > 0 || changedKeys.some((key) => ["restart_required", "worker_restart"].includes(this.envFieldEffects[key]))
       if (!changedKeys.length && !this.customOperations.length) return "仅实际变化会触发运行时操作"
       if (!needsRestart) return "保存后立即应用，必要时只重载相关插件或服务"
-      return this.launcherManaged ? "包含启动期配置，保存后可选择立即重启" : "包含启动期配置，保存后需要手动重启"
+      return this.launcherManaged ? "包含启动期配置，保存后可确认重启" : "包含启动期配置，保存后需要手动重启"
     },
     rawReady() { return Boolean(this.rawLoaded[this.rawFile] && /^[a-f0-9]{64}$/.test(this.rawRevision)) },
     filteredGroups() {
@@ -249,7 +249,7 @@ export default {
     },
     async reloadSummary() {
       if (this.saving || this.loading) return
-      if ((Object.keys(this.changedEnvFields()).length || this.customOperations.length || Object.keys(this.simpleChanges).length) && !await this.confirmDiscard("环境及插件配置草稿将重新读取；高级原文草稿保持不变。")) return
+      if ((Object.keys(this.changedEnvFields()).length || this.customOperations.length || Object.keys(this.simpleChanges).length) && !await this.confirmDiscard("环境及插件配置草稿将重新读取；配置原文草稿保持不变。")) return
       await this.loadSummary()
     },
     async loadSummary(scope = "all") {
@@ -284,11 +284,34 @@ export default {
       if (!this.simpleChanges[module]) this.$set(this.simpleChanges, module, {})
       this.$set(this.simpleChanges[module], field.key, field.value)
     },
-    updateCurrentGroup(value) {
+    async updateCurrentGroup(value) {
       if (!this.currentGroup) return
+      const previous = this.currentGroupValue
       this.editableCurrentFields.forEach((field) => { if (Object.prototype.hasOwnProperty.call(value, field.key)) field.value = value[field.key] })
+      const enabledOnly = Object.keys(value).includes("ENABLED") && Object.keys(value).every((key) => key === "ENABLED" || value[key] === previous[key])
+      if (enabledOnly && value.ENABLED !== previous.ENABLED) {
+        await this.savePluginEnabled(value.ENABLED, previous.ENABLED)
+        return
+      }
       this.$set(this.simpleChanges, this.currentGroup.module, { ...value }); this.pluginIssues = []
       setDirtyState("plugin-configuration", true)
+    },
+    async savePluginEnabled(enabled, previous) {
+      if (this.saving) return
+      this.saving = "simple"
+      try {
+        const fields = { [this.currentGroup.module]: { ENABLED: enabled } }
+        const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/simple`, { expected_revision: this.simpleRevision, fields })
+        if (!response.suc) throw new Error(response.info || "插件开关保存失败")
+        this.simpleRevision = response.data.revision
+        this.$delete(this.simpleChanges, this.currentGroup.module)
+        setDirtyState("plugin-configuration", Boolean(Object.keys(this.simpleChanges).length))
+        this.$message.success(enabled ? "插件已开启" : "插件已关闭")
+      } catch (error) {
+        const field = this.currentGroup?.fields.find((item) => item.key === "ENABLED")
+        if (field) field.value = previous
+        this.$message.error(apiErrorDetail(error, "插件开关保存失败"))
+      } finally { this.saving = "" }
     },
     resetCurrentGroup() {
       if (!this.currentGroup) return
@@ -360,7 +383,7 @@ export default {
     },
     async loadRaw(file) {
       if (this.saving || this.rawLoading) return
-      if (this.rawContent !== this.rawOriginal && !await this.confirmDiscard("高级原文中的未保存修改将被放弃。")) return
+    if (this.rawContent !== this.rawOriginal && !await this.confirmDiscard("配置原文中的未保存修改将被放弃。")) return
       this.rawLoading = true
       try {
         const response = await this.getRequest(`${this.$root.prefix}/system/configuration/files/${file}`, {}, { suppressErrorToast: true })

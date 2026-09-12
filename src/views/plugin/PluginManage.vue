@@ -46,14 +46,6 @@
 
       <!-- 安装依赖按钮 -->
       <CuteButton
-        @click="showArchiveDialog = true"
-        type="primary"
-        icon="download"
-        size="sm"
-      >
-        外部安装插件
-      </CuteButton>
-      <CuteButton
         @click="showInstallDependencyDialog = true"
         type="primary"
         icon="download"
@@ -63,6 +55,14 @@
       >
         <i class="fas fa-box mr-1"></i>
         依赖管理
+      </CuteButton>
+      <CuteButton
+        @click="showArchiveDialog = true"
+        type="primary"
+        icon="download"
+        size="sm"
+      >
+        外部安装插件
       </CuteButton>
     </div>
 

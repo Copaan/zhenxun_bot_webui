@@ -9,11 +9,6 @@
     </header>
 
     <div class="store-toolbar">
-      <el-select v-model="downloadSource" aria-label="下载源" :disabled="pluginOperation.active" @change="saveDownloadSource">
-        <el-option label="自动：阿里优先，GitHub 后备" value="auto" />
-        <el-option label="仅阿里" value="ali" />
-        <el-option label="仅 GitHub" value="git" />
-      </el-select>
       <el-input v-model.trim="search" clearable prefix-icon="el-icon-search" placeholder="搜索名称、模块或作者" />
       <el-select v-model="statusFilter" aria-label="安装状态">
         <el-option label="全部状态" value="all" />
@@ -30,6 +25,11 @@
         <el-option label="名称" value="name" />
         <el-option label="作者" value="author" />
         <el-option label="最近版本" value="version" />
+      </el-select>
+      <el-select v-model="downloadSource" class="download-source" aria-label="下载源" :disabled="pluginOperation.active" @change="saveDownloadSource">
+        <el-option label="自动：阿里优先，GitHub 后备" value="auto" />
+        <el-option label="仅阿里" value="ali" />
+        <el-option label="仅 GitHub" value="git" />
       </el-select>
     </div>
 
@@ -95,7 +95,7 @@
               <el-button v-if="plugin.installed && plugin.update_available" type="warning" size="small" :loading="actionId === (plugin.store_key || plugin.id) && actionType === 'update'" @click="runAction('update', plugin)">更新插件</el-button>
               <el-dropdown v-if="plugin.installed" trigger="click" @command="runAction($event, plugin)">
                 <el-button size="small">已安装<i class="el-icon-arrow-down el-icon--right" /></el-button>
-                <el-dropdown-menu slot="dropdown"><el-dropdown-item command="remove" divided>卸载</el-dropdown-item></el-dropdown-menu>
+                <el-dropdown-menu slot="dropdown"><el-dropdown-item command="remove">卸载</el-dropdown-item></el-dropdown-menu>
               </el-dropdown>
             </template>
           </footer>
@@ -356,7 +356,7 @@ export default {
 .store-shell.is-embedded .store-header h1 { font-size: 18px; }
 .store-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .store-header h1 { margin: 0; font-size: 24px; }.store-header p { margin: 5px 0 0; color: var(--text-color-secondary); }
-.store-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) 150px 150px 150px; gap: 10px; margin-bottom: 16px; }
+.store-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) 150px 150px 150px 230px; gap: 10px; margin-bottom: 16px; }
 .store-content { min-height: 260px; }.plugin-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .plugin-card { display: flex; min-width: 0; min-height: 244px; flex-direction: column; padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
 .plugin-card__head { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 10px; }.plugin-title { min-width: 0; }
@@ -366,10 +366,10 @@ export default {
 .plugin-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin: 0 0 14px; }.plugin-meta div { min-width: 0; }.plugin-meta dt { color: var(--text-color-secondary); font-size: 11px; }.plugin-meta dd { margin: 2px 0 0; overflow: hidden; color: var(--text-color); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .reload-diagnostic { min-height: 24px; margin-bottom: 8px; }
 .catalog-blocked { margin-bottom: 8px; color: var(--danger-color); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.plugin-actions { display: flex; min-height: 34px; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border-color); }.action-spacer { flex: 1; }.icon-action { width: 32px; height: 32px; padding: 0; }
+.plugin-actions { display: flex; min-height: 34px; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: auto; padding-top: 12px; border-top: 0; }.action-spacer { flex: 1; }.icon-action { width: 32px; height: 32px; padding: 0; }.plugin-actions .el-dropdown-menu { min-height: 0; padding: 4px 0; }.plugin-actions .el-dropdown-menu__item { line-height: 30px; }
 .inline-state, .empty-state { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 96px; color: var(--text-color-secondary); }.inline-state.is-error { margin-bottom: 14px; border: 1px solid var(--el-color-danger-light-7); border-radius: 6px; color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
 .empty-state { min-height: 300px; flex-direction: column; }.empty-state i { font-size: 34px; }.empty-state h2, .empty-state p { margin: 0; }.store-pagination { margin-top: 20px; text-align: center; }
 .detail-drawer { padding: 0 22px 24px; color: var(--text-color); }.detail-drawer h3 { margin: 22px 0 8px; font-size: 14px; }.detail-drawer p, .detail-drawer pre { margin: 0; color: var(--text-color-secondary); line-height: 1.7; white-space: pre-wrap; word-break: break-word; }.detail-drawer a { word-break: break-all; }
-@media (max-width: 1180px) { .plugin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.store-toolbar { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 1180px) { .plugin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.store-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 680px) { .store-shell { padding: 14px; }.store-header { align-items: flex-start; }.store-toolbar, .plugin-grid { grid-template-columns: 1fr; }.plugin-card { min-height: 224px; } }
 </style>

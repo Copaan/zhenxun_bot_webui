@@ -7,7 +7,7 @@
 
     <section class="settings-band">
       <div class="section-heading">
-        <div><h2>数据库连接</h2><p>保存前会使用独立连接执行 SELECT 1，不影响当前 ORM。</p></div>
+        <div><h2>数据库连接</h2></div>
         <span class="status-pill" :class="`is-${databaseStatus.status || 'unknown'}`">
           <i></i>{{ statusLabel(databaseStatus.status) }}
           <em v-if="databaseStatus.latency_ms != null">{{ databaseStatus.latency_ms }} ms</em>
@@ -35,7 +35,7 @@
             <el-form-item label="数据库名" class="wide"><el-input v-model="databaseDrafts.postgres.database" /></el-form-item>
           </el-form>
         </el-tab-pane>
-        <el-tab-pane label="高级 URL" name="url">
+        <el-tab-pane label="自定义 URL 地址" name="url">
           <el-form label-position="top" class="form-grid"><el-form-item label="数据库连接 URL" class="wide"><el-input v-model="databaseDrafts.url.url" type="password" show-password :placeholder="databaseDrafts.url.has_saved_url ? '留空沿用当前 URL' : 'driver://user:password@host/database'" /></el-form-item></el-form>
         </el-tab-pane>
       </el-tabs>
@@ -90,7 +90,7 @@
 
     <div v-if="pageError" class="inline-error">{{ pageError }}</div>
     <footer class="save-bar">
-      <span>{{ launcherManaged ? "保存后可确认由 launcher 受控重启" : "当前为直接 worker，保存后需手动重启" }}</span>
+      <span>{{ launcherManaged ? "保存后可确认重启" : "保存后需手动重启" }}</span>
       <el-button :loading="probing" @click="probe">测试连接</el-button>
       <el-button type="primary" :loading="saving" @click="save">保存配置</el-button>
     </footer>
