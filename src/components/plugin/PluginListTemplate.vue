@@ -222,16 +222,24 @@ export default {
       this.onSwitchChange(data, !data.status)
     },
     onSwitchChange(data, newStatus) {
+      if (data.switching) return
+      const previousStatus = Boolean(data.status)
+      this.$set(data, "status", Boolean(newStatus))
+      this.$set(data, "switching", true)
       this.postRequest(`${this.$root.prefix}/plugin/change_switch`, {
         module: data.module,
         status: newStatus,
-      }).then((resp) => {
-        if (resp.suc) {
-          this.$message.success(resp.info)
-          this.getPluginList()
-        } else {
-          this.$message.error(resp.info)
+      }, { suppressErrorToast: true }).then((resp) => {
+        if (resp?.suc) {
+          this.$message.success(resp.info || "插件状态已更新")
+          return this.getPluginList()
         }
+        throw new Error(resp?.info || "插件状态更新失败")
+      }).catch((error) => {
+        this.$set(data, "status", previousStatus)
+        this.$message.error(error?.response?.data?.detail || error.message || "插件状态更新失败")
+      }).finally(() => {
+        this.$set(data, "switching", false)
       })
     },
     openSetting(data) {

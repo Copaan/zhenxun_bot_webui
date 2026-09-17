@@ -66,27 +66,40 @@ export default {
           { code: this.connectionCode },
           { suppressErrorToast: true }
         )
-        if (response.data.mode === "setup") {
+        const payload = response && response.data
+        if (!payload || typeof payload.mode !== "string") {
+          this.fail("服务器返回了无法识别的连接状态。")
+          return
+        }
+        if (payload.mode === "setup") {
+          if (!payload.setup_token) {
+            this.fail("服务器返回的首次配置凭据无效。")
+            return
+          }
           clearCookie("tokenStr")
           window.sessionStorage.removeItem("isAuthenticated")
           this.clearSetupState()
           window.sessionStorage.setItem(
             SETUP_TOKEN_KEY,
-            response.data.setup_token
+            payload.setup_token
           )
           await this.$router.replace("/configure")
           return
         }
-        if (response.data.mode === "login") {
+        if (payload.mode === "login") {
+          if (!payload.access_token || !payload.token_type) {
+            this.fail("服务器返回的登录凭据无效。")
+            return
+          }
           this.clearSetupState()
           clearCookie("tokenStr")
           setCookie(
             "tokenStr",
-            `${response.data.token_type} ${response.data.access_token}`
+            `${payload.token_type} ${payload.access_token}`
           )
           window.sessionStorage.setItem("isAuthenticated", true)
           await this.$router.replace("/home")
-          this.$message.success(response.info)
+          this.$message.success(response.info || "连接成功")
           return
         }
         this.fail("服务器返回了无法识别的连接状态。")
