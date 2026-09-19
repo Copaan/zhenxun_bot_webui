@@ -9,35 +9,20 @@
     </div>
 
     <NetworkStatus :status="networkStatus" />
-    <div class="action-bar">
+    <div class="action-bar network-action-bar">
       <span>本体受管网络代理由独立策略管理，不影响系统代理或第三方自建客户端。</span>
       <el-button icon="el-icon-connection" @click="$router.push('/network-proxy', () => {}, (error) => $message.error(error.message))">网络代理设置</el-button>
     </div>
     <el-tabs v-model="section">
       <el-tab-pane label="环境配置" name="env">
         <el-form label-position="top" class="env-form">
-          <section v-for="group in envFieldGroups" :key="group.title" class="env-field-group">
-            <header><h3>{{ group.title }}</h3><p>{{ group.description }}</p></header>
-            <div class="env-field-grid">
-              <el-form-item v-for="field in group.fields" :key="field.key" :label="field.label">
-                <el-switch v-if="field.type === 'switch'" v-model="envFields[field.key]" :disabled="fieldDisabled(field)" />
-                <el-input-number v-else-if="field.type === 'number'" v-model="envFields[field.key]" :min="1" :max="65535" controls-position="right" class="full-control" :disabled="fieldDisabled(field)" />
-                <el-radio-group v-else-if="field.type === 'http-mode'" v-model="envFields[field.key]" size="small" :disabled="fieldDisabled(field)">
-                  <el-radio-button v-for="option in field.options" :key="option.value" :label="option.value">{{ option.label }}</el-radio-button>
-                </el-radio-group>
-                <el-input v-else v-model="envFields[field.key]" :placeholder="field.placeholder" :disabled="fieldDisabled(field)" />
-                <div class="field-help">{{ field.help }}</div>
-                <el-alert
-                  v-if="field.key === 'WEBUI_HTTP_MODE' && envFields.WEBUI_HTTPS_ENABLED && envFields.WEBUI_HTTP_MODE === 'serve'"
-                  class="plaintext-warning"
-                  title="HTTP入口为明文传输，登录凭据和管理数据可能被同网段设备截获，请优先使用HTTPS。"
-                  type="warning"
-                  :closable="false"
-                  show-icon
-                />
-                <el-tag size="mini" :type="effectMeta(envFieldEffects[field.key]).type">{{ effectMeta(envFieldEffects[field.key]).label }}</el-tag>
-              </el-form-item>
-            </div>
+          <p>配置来源：{{ envSourceFile }}</p>
+          <section v-for="field in envDescriptors" :key="field.key" class="env-field-group">
+            <SchemaField v-if="!field.sensitive" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema" :label="field.key" :path="field.key" @input="setEnvField(field.key, $event)" />
+            <p v-else>{{ field.key }}：{{ field.configured ? '已配置' : '未配置' }}，请在原文或对应专用页面修改。</p>
+            <p v-if="!field.sensitive && JSON.stringify(field.effective_value) !== JSON.stringify(envFields[field.key])">当前运行值：{{ JSON.stringify(field.effective_value) }}；文件修改的生效方式见下方。</p>
+            <p v-if="field.overridden">由外部环境变量覆盖，修改文件不会覆盖启动进程的环境变量。</p>
+            <el-tag size="mini" :type="effectMeta(field.apply_effect).type">{{ effectMeta(field.apply_effect).label }}</el-tag>
           </section>
           <section class="env-field-group custom-env-section">
             <header class="custom-env-heading">
@@ -77,6 +62,13 @@
           <section v-if="currentGroup" class="current-config-group">
             <header class="group-heading"><div><h3>{{ currentGroup.name }}</h3><p>{{ currentGroup.module }} · {{ currentGroup.fields.length }} 个配置项</p></div><el-button size="small" @click="resetCurrentGroup">恢复本组默认值</el-button></header>
             <div class="config-form-scroll">
+              <el-alert v-if="currentGroup.readonly_reason" :title="currentGroup.readonly_reason" type="info" :closable="false" />
+              <pre v-if="currentGroup.readonly_reason">{{ JSON.stringify(currentGroup.raw_value, null, 2) }}</pre>
+              <div v-for="field in currentManagedFields" :key="field.key">
+                <el-alert :title="field.help" type="info" :closable="false" />
+                <pre>{{ field.key }}: {{ JSON.stringify(field.file_value === undefined ? field.value : field.file_value, null, 2) }}</pre>
+                <el-button type="text" @click="$router.push('/plugin-policy')">打开插件策略</el-button>
+              </div>
               <SchemaForm :key="selectedGroup" :value="currentGroupValue" :schema="currentGroupSchema" :field-ui="currentGroupUi" :issues="pluginIssues" @input="updateCurrentGroup" @validity-change="pluginInvalidPaths = $event" />
               <div v-for="field in currentSensitiveFields" :key="field.key" class="sensitive-placeholder"><i class="el-icon-lock"></i><span><strong>{{ (field.ui && field.ui.label) || field.key }}</strong>为敏感字段，请在配置原文中修改。</span></div>
             </div>
@@ -93,7 +85,7 @@
         <el-alert title="原文可能包含 Token、密码和 Secret。请勿截图、分享或粘贴到外部服务。" type="warning" :closable="false" show-icon />
         <div class="raw-switch">
           <el-radio-group :value="rawFile" size="small" :disabled="Boolean(saving)" @input="loadRaw">
-            <el-radio-button label="env">.env.dev</el-radio-button>
+            <el-radio-button label="env">{{ envSourceFile || '环境文件' }}</el-radio-button>
             <el-radio-button label="simple">config.yaml</el-radio-button>
           </el-radio-group>
           <el-button size="small" icon="el-icon-refresh" @click="loadRaw(rawFile)">重新读取</el-button>
@@ -119,6 +111,7 @@
 
 <script>
 import SchemaForm from "@/components/config/SchemaForm.vue"
+import SchemaField from "@/components/config/SchemaField.vue"
 import NetworkStatus from "@/components/system/NetworkStatus.vue"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
@@ -126,11 +119,11 @@ import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 
 export default {
   name: "ConfigurationCenter",
-  components: { SchemaForm, NetworkStatus },
+  components: { SchemaForm, SchemaField, NetworkStatus },
   data() {
     return {
       networkStatus: {}, rawLoading: false,
-      loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envFieldEffects: {}, customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], simpleChanges: {}, groupSearch: "", selectedGroup: "", launcherManaged: false,
+      loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", envFieldEffects: {}, customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], simpleChanges: {}, groupSearch: "", selectedGroup: "", launcherManaged: false,
       rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalidPaths: [], pluginIssues: [],
       envFieldDefinitions: [
         { key: "HOST", label: "监听地址", placeholder: "0.0.0.0", help: "0.0.0.0 允许局域网访问，127.0.0.1 仅本机访问。" },
@@ -175,7 +168,7 @@ export default {
     envSaveHint() {
       const changedKeys = Object.keys(this.changedEnvFields())
       const needsRestart = this.customOperations.length > 0 || changedKeys.some((key) => ["restart_required", "worker_restart"].includes(this.envFieldEffects[key]))
-      if (!changedKeys.length && !this.customOperations.length) return "仅实际变化会触发运行时操作"
+      if (!changedKeys.length && !this.customOperations.length && !Object.keys(this.originalEnvFields).some(key => this.envFields[key] === undefined)) return "仅实际变化会触发运行时操作"
       if (!needsRestart) return "保存后立即应用，必要时只重载相关插件或服务"
       return this.launcherManaged ? "包含启动期配置，保存后可确认重启" : "包含启动期配置，保存后需要手动重启"
     },
@@ -186,16 +179,15 @@ export default {
       return this.groups.filter((group) => `${group.name} ${group.module} ${group.fields.map((field) => field.key).join(" ")}`.toLowerCase().includes(keyword))
     },
     currentGroup() { return this.groups.find((group) => group.module === this.selectedGroup) || null },
-    editableCurrentFields() { return this.currentGroup ? this.currentGroup.fields.filter((field) => !field.sensitive) : [] },
+    editableCurrentFields() { return this.currentGroup ? this.currentGroup.fields.filter((field) => !field.sensitive && field.authority !== 'database') : [] },
+    currentManagedFields() { return this.currentGroup ? this.currentGroup.fields.filter(field => field.authority === 'database') : [] },
     currentSensitiveFields() { return this.currentGroup ? this.currentGroup.fields.filter((field) => field.sensitive) : [] },
     currentGroupValue() { return Object.fromEntries(this.editableCurrentFields.map((field) => [field.key, field.value])) },
     currentGroupSchema() {
       const result = { type: "object", properties: {}, $defs: {}, definitions: {} }
       this.editableCurrentFields.forEach((field) => {
         const schema = field.schema || { type: "string" }
-        result.properties[field.key] = schema
-        Object.assign(result.$defs, schema.$defs || {})
-        Object.assign(result.definitions, schema.definitions || {})
+        result.properties[field.key] = { ...schema, "x-root-schema": schema }
       })
       return result
     },
@@ -242,7 +234,7 @@ export default {
       )
     },
     normalizeGroups(groups) {
-      return (groups || []).filter((group) => group.module !== "AI").map((group) => ({ ...group, fields: group.fields.map((field) => ({ ...field })) }))
+      return (groups || []).map((group) => ({ ...group, fields: group.fields.map((field) => ({ ...field, originalValue: JSON.stringify(field.value) })) }))
     },
     async confirmDiscard(message) {
       try { await this.$confirm(message, "放弃未保存修改？", { type: "warning", confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); return true } catch (_) { return false }
@@ -260,8 +252,10 @@ export default {
         this.networkStatus = response.data.network || {}
         if (scope === "all" || scope === "env") {
         this.envRevision = response.data.env.revision
-        this.envFields = this.normalizedEnvFields(response.data.env.fields)
-        this.originalEnvFields = this.normalizedEnvFields(response.data.env.fields)
+        this.envDescriptors = response.data.env.descriptors || []
+        this.envSourceFile = response.data.env.source_file || ""
+        this.envFields = Object.fromEntries(this.envDescriptors.filter(field => !field.sensitive && field.configured).map(field => [field.key, field.value]))
+        this.originalEnvFields = JSON.parse(JSON.stringify(this.envFields))
         this.envFieldEffects = response.data.env.field_effects || {}
         this.customEnv = this.normalizeCustomEnv(response.data.env.custom_env)
         this.originalCustomEnv = this.customEnv.map((item) => ({ ...item }))
@@ -286,45 +280,26 @@ export default {
     },
     async updateCurrentGroup(value) {
       if (!this.currentGroup) return
-      const previous = this.currentGroupValue
-      this.editableCurrentFields.forEach((field) => { if (Object.prototype.hasOwnProperty.call(value, field.key)) field.value = value[field.key] })
-      const enabledOnly = Object.keys(value).includes("ENABLED") && Object.keys(value).every((key) => key === "ENABLED" || value[key] === previous[key])
-      if (enabledOnly && value.ENABLED !== previous.ENABLED) {
-        await this.savePluginEnabled(value.ENABLED, previous.ENABLED)
-        return
-      }
-      this.$set(this.simpleChanges, this.currentGroup.module, { ...value }); this.pluginIssues = []
-      setDirtyState("plugin-configuration", true)
-    },
-    async savePluginEnabled(enabled, previous) {
-      if (this.saving) return
-      this.saving = "simple"
-      try {
-        const fields = { [this.currentGroup.module]: { ENABLED: enabled } }
-        const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/simple`, { expected_revision: this.simpleRevision, fields })
-        if (!response.suc) throw new Error(response.info || "插件开关保存失败")
-        this.simpleRevision = response.data.revision
-        this.$delete(this.simpleChanges, this.currentGroup.module)
-        setDirtyState("plugin-configuration", Boolean(Object.keys(this.simpleChanges).length))
-        this.$message.success(enabled ? "插件已开启" : "插件已关闭")
-      } catch (error) {
-        const field = this.currentGroup?.fields.find((item) => item.key === "ENABLED")
-        if (field) field.value = previous
-        this.$message.error(apiErrorDetail(error, "插件开关保存失败"))
-      } finally { this.saving = "" }
+      this.editableCurrentFields.forEach((field) => { field.value = value[field.key] })
+      const changed = Object.fromEntries(this.editableCurrentFields.filter(field => JSON.stringify(field.value) !== field.originalValue).map(field => [field.key, field.value]))
+      if (Object.keys(changed).length) this.$set(this.simpleChanges, this.currentGroup.module, changed)
+      else this.$delete(this.simpleChanges, this.currentGroup.module)
+      this.pluginIssues = []
+      setDirtyState("plugin-configuration", Boolean(Object.keys(this.simpleChanges).length))
     },
     resetCurrentGroup() {
       if (!this.currentGroup) return
       const values = {}
       this.editableCurrentFields.forEach((field) => { field.value = field.default_value == null ? field.default_value : JSON.parse(JSON.stringify(field.default_value)); values[field.key] = field.value })
-      this.$set(this.simpleChanges, this.currentGroup.module, values)
-      setDirtyState("plugin-configuration", true)
+      this.updateCurrentGroup(values)
     },
+    setEnvField(key, value) { if (value === undefined) this.$delete(this.envFields, key); else this.$set(this.envFields, key, value) },
     changedEnvFields() {
       const changed = {}
-      this.envFieldDefinitions.forEach(({ key }) => { if (this.envFields[key] !== this.originalEnvFields[key]) changed[key] = this.envFields[key] == null ? "" : this.envFields[key] })
+      this.envDescriptors.filter(field => !field.sensitive).forEach(({ key }) => { if (JSON.stringify(this.envFields[key]) !== JSON.stringify(this.originalEnvFields[key]) && this.envFields[key] !== undefined) changed[key] = this.envFields[key] })
       return changed
     },
+    unsetEnvFields() { return Object.keys(this.originalEnvFields).filter(key => !Object.prototype.hasOwnProperty.call(this.envFields, key)).map(key => [key]) },
     addCustomEnv() { this.customEnv.push({ clientId: `env-${++this.customEnvSequence}`, key: "", value: "", sensitive: false, configured: false, replacing: false, deleted: false, isNew: true }); this.markEnvDirty() },
     beginSecretReplace(item) { item.replacing = true; item.value = ""; this.markEnvDirty() },
     removeCustomEnv(item, index) { if (item.isNew) this.customEnv.splice(index, 1); else item.deleted = true; this.markEnvDirty() },
@@ -336,19 +311,20 @@ export default {
       if (new Set(keys.map((key) => key.toLowerCase())).size !== keys.length) return "自定义环境变量名称不能重复。"
       return ""
     },
-    markEnvDirty() { this.customEnvError = this.validateCustomEnv(); setDirtyState("environment-configuration", Object.keys(this.changedEnvFields()).length > 0 || this.customOperations.length > 0) },
+    markEnvDirty() { this.customEnvError = this.validateCustomEnv(); setDirtyState("environment-configuration", Object.keys(this.changedEnvFields()).length > 0 || this.unsetEnvFields().length > 0 || this.customOperations.length > 0) },
     async saveEnv() {
       if (this.saving) return
       const fields = this.changedEnvFields()
       this.customEnvError = this.validateCustomEnv()
       if (this.customEnvError) return
       const customOperations = this.customOperations
-      if (!Object.keys(fields).length && !customOperations.length) return this.$message.info("没有需要保存的环境配置。")
+      const unsetFields = this.unsetEnvFields()
+      if (!Object.keys(fields).length && !customOperations.length && !unsetFields.length) return this.$message.info("没有需要保存的环境配置。")
       this.saving = "env"
       const submittedFields = JSON.stringify(this.envFields)
       const submittedCustom = JSON.stringify(this.customEnv)
       try {
-        const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/env`, { expected_revision: this.envRevision, fields, custom_operations: customOperations })
+        const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/env`, { expected_revision: this.envRevision, fields, custom_operations: customOperations, unset_fields: unsetFields })
         if (!response.suc) throw new Error(response.info)
         if (response.data?.apply_mode !== "failed") {
           const fieldsDraft = this.envFields
@@ -369,11 +345,24 @@ export default {
       if (this.saving) return
       if (!Object.keys(this.simpleChanges).length) return this.$message.info("没有需要保存的插件配置。")
       this.saving = "simple"
-      const submitted = JSON.parse(JSON.stringify(this.simpleChanges))
+      const submitted = Object.fromEntries(Object.entries(this.simpleChanges).map(([module, fields]) => [module, Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value === undefined ? undefined : JSON.parse(JSON.stringify(value))]))]))
       try {
-        const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/simple`, { expected_revision: this.simpleRevision, fields: this.simpleChanges })
+        const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/simple`, { expected_revision: this.simpleRevision, fields: this.simpleChanges, unset_fields: Object.entries(this.simpleChanges).flatMap(([module, fields]) => Object.keys(fields).filter(key => fields[key] === undefined).map(key => [module, key])) })
         if (!response.suc) throw new Error(response.info)
-        if (response.data?.apply_mode !== "failed") { this.simpleRevision = response.data.revision; Object.keys(submitted).forEach(module => { if (JSON.stringify(this.simpleChanges[module]) === JSON.stringify(submitted[module])) this.$delete(this.simpleChanges, module) }); setDirtyState("plugin-configuration", Boolean(Object.keys(this.simpleChanges).length)) }
+        if (response.data?.apply_mode !== "failed") {
+          this.simpleRevision = response.data.revision
+          this.groups.forEach(group => {
+            const saved = submitted[group.module]
+            if (!saved) return
+            group.fields.forEach(field => {
+              if (Object.prototype.hasOwnProperty.call(saved, field.key)) field.originalValue = JSON.stringify(saved[field.key])
+            })
+            const changed = Object.fromEntries(group.fields.filter(field => !field.sensitive && JSON.stringify(field.value) !== field.originalValue).map(field => [field.key, field.value]))
+            if (Object.keys(changed).length) this.$set(this.simpleChanges, group.module, changed)
+            else this.$delete(this.simpleChanges, group.module)
+          })
+          setDirtyState("plugin-configuration", Boolean(Object.keys(this.simpleChanges).length))
+        }
         await handleApplyResult(this, response, {
           restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/system",
@@ -437,4 +426,12 @@ export default {
 .validation-issues { margin: 10px 0 0; padding: 10px 14px 10px 34px; border: 1px solid rgba(224,82,96,.35); border-radius: 6px; color: var(--danger-color); background: rgba(224,82,96,.06); }.validation-issues li { margin: 4px 0; line-height: 1.55; }.validation-issues code { margin-right: 8px; }
 .custom-env-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }.custom-env-list { display: flex; flex-direction: column; gap: 10px; padding-bottom: 16px; }.custom-env-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(220px, 1.4fr) auto auto auto; align-items: center; gap: 9px; }.custom-env-row.deleted { opacity: .58; }.secret-configured { display: flex; min-height: 40px; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color-secondary); }.custom-env-empty { padding: 8px 0 20px; color: var(--text-color-secondary); text-align: center; }
 @media (max-width: 760px) { .env-field-grid { grid-template-columns: 1fr; }.env-field-group { padding: 14px 14px 2px; }.configuration-toolbar, .custom-env-heading { align-items: flex-start; flex-direction: column; }.custom-env-row { grid-template-columns: 1fr auto; }.custom-env-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }.plugin-config-workbench { grid-template-columns: 1fr; }.config-groups { display: grid; max-height: 240px; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--border-color); }.config-groups .el-input { grid-column: 1 / -1; }.current-config-group { padding: 14px; }.group-heading { align-items: flex-start; flex-direction: column; }.action-bar { flex-wrap: wrap; }.action-bar span { width: 100%; }.raw-switch { gap: 10px; } }
+</style>
+
+<style scoped>
+.network-action-bar { position: static; }
+@media (max-width: 760px) {
+  .plugin-config-workbench { height: auto; }
+  .config-form-scroll { max-height: 70vh; }
+}
 </style>

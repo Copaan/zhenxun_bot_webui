@@ -5,12 +5,12 @@
       <div class="schema-grid">
         <SchemaField
           v-for="field in section.fields"
-          v-show="visible(field.key)"
           :key="field.key"
           :class="{ wide: wideField(field.schema) }"
           :value="formValue[field.key]"
           :schema="field.schema"
-          :root-schema="effectiveRoot"
+          :root-schema="field.schema['x-root-schema'] || effectiveRoot"
+          :required="(resolvedSchema.required || []).includes(field.key)"
           :label="labels[field.key] || field.ui.label || resolved(field.schema).title || field.key"
           :path="field.key"
           :ui="field.ui"
@@ -25,12 +25,12 @@
         <div class="schema-grid">
           <SchemaField
             v-for="field in advancedFields"
-            v-show="visible(field.key)"
             :key="field.key"
             :class="{ wide: wideField(field.schema) }"
             :value="formValue[field.key]"
             :schema="field.schema"
-            :root-schema="effectiveRoot"
+            :root-schema="field.schema['x-root-schema'] || effectiveRoot"
+          :required="(resolvedSchema.required || []).includes(field.key)"
             :label="labels[field.key] || field.ui.label || resolved(field.schema).title || field.key"
             :path="field.key"
             :ui="field.ui"
@@ -82,6 +82,7 @@ export default {
     },
     update(key, value) {
       const next = { ...this.formValue, [key]: value }
+      if (value === undefined) delete next[key]
       Object.keys(this.invalidPaths).forEach((path) => {
         if (!this.visible(path.split(".")[0], next)) this.$delete(this.invalidPaths, path)
       })

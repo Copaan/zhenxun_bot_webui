@@ -307,6 +307,8 @@ export default {
     commit() {
       const data = {
         group_id: this.data.group_id,
+        bot_id: this.data.bot_id || this.botId,
+        expected_revision: this.data.policy_revision,
         status: this.data.status,
         level: this.data.level,
         task: this.data.task_status,

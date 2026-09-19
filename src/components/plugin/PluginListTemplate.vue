@@ -229,6 +229,7 @@ export default {
       this.postRequest(`${this.$root.prefix}/plugin/change_switch`, {
         module: data.module,
         status: newStatus,
+        expected_revision: data.policy_revision,
       }, { suppressErrorToast: true }).then((resp) => {
         if (resp?.suc) {
           this.$message.success(resp.info || "插件状态已更新")

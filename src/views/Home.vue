@@ -765,6 +765,8 @@ export default {
       restartAvailable: false,
       restartLoading: false,
       pendingRestartCount: 0,
+      restartStatusUnknown: false,
+      restartRequestSequence: 0,
       pendingRestartReasons: [],
       firstLoad: true,
       windowHeight: window.innerHeight,
@@ -928,6 +930,7 @@ export default {
       return Object.keys(evidence).slice(0, 8)
     },
     restartTooltip() {
+      if (this.restartStatusUnknown) return this.pendingRestartCount ? `有 ${this.pendingRestartCount} 项修改等待重启应用；当前状态暂不可确认` : "重启状态暂不可确认"
       if (this.pendingRestartCount) return `有 ${this.pendingRestartCount} 项修改等待重启应用`
       return this.restartAvailable
         ? "重启真寻"
@@ -1128,18 +1131,20 @@ export default {
     },
     async loadRestartStatus() {
       if (isBusinessNetworkFrozen()) return
+      const request = ++this.restartRequestSequence
       const epoch = businessNetworkEpoch()
       try {
         const response = await this.getRequest(`${this.$root.prefix}/system/restart/status`, {}, { suppressErrorToast: true })
-        if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
+        if (request !== this.restartRequestSequence || isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
+        if (!response?.suc || !response.data || !Number.isInteger(response.data.pending_count) || response.data.pending_count < 0) throw new Error("restart_status_unavailable")
+        this.restartStatusUnknown = false
         this.restartAvailable = Boolean(response && response.suc && response.data.launcher_managed)
         this.pendingRestartCount = Number(response?.data?.pending_count || 0)
         this.pendingRestartReasons = response?.data?.pending_reasons || []
       } catch (error) {
-        if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
+        if (request !== this.restartRequestSequence || isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
         this.restartAvailable = false
-        this.pendingRestartCount = 0
-        this.pendingRestartReasons = []
+        this.restartStatusUnknown = true
       }
     },
     async restartWorker() {

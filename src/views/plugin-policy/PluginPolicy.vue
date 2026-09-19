@@ -4,6 +4,7 @@
       <div>
         <h1>插件策略</h1>
         <p>按机器人账号控制插件与被动技能</p>
+        <el-button size="small" :disabled="saving" @click="openTransfer">迁移预览 / 导入导出</el-button>
       </div>
       <div class="header-actions" v-if="policyScope === 'account'">
         <el-button v-if="!editingPolicy" icon="el-icon-document-copy" @click="openCopyDialog" :disabled="!account">复制账号已保存设置</el-button>
@@ -216,6 +217,21 @@
       </div>
       <span slot="footer"><el-button @click="copyDialogVisible = false">取消</el-button><el-button type="primary" :loading="dialogSaving" :disabled="!copyTargets.length" @click="copyAccount">确认复制</el-button></span>
     </el-dialog>
+    <el-dialog title="策略迁移与导入导出" :visible.sync="transferVisible" width="85%" custom-class="policy-dialog" :close-on-click-modal="false">
+      <p>数据库为唯一策略来源。导入用于同一部署，按修订校验；修改模板会影响所有关联账号。配置文件不会在每次启动覆盖策略。</p>
+      <el-button size="small" :disabled="transferBusy" @click="loadTransfer">重新读取数据库策略</el-button>
+      <el-input v-model="transferText" type="textarea" :rows="12" :disabled="transferBusy" aria-label="策略 JSON" />
+      <el-table :data="migrationPreview" max-height="280">
+        <el-table-column prop="bot_id" label="Bot" />
+        <el-table-column prop="platform_scope" label="平台" />
+        <el-table-column prop="group_id" label="群 / 场景" />
+        <el-table-column prop="channel_id" label="频道" />
+        <el-table-column prop="status" label="迁移状态" />
+        <el-table-column prop="reason" label="待核验原因" />
+        <el-table-column label="操作"><template slot-scope="scope"><el-button v-if="scope.row.status === 'pending'" size="mini" :disabled="transferBusy" @click="migrateScope(scope.row)">保留旧规则并迁移</el-button></template></el-table-column>
+      </el-table>
+      <span slot="footer"><el-button :disabled="transferBusy" @click="transferVisible = false">关闭</el-button><el-button type="primary" :loading="transferBusy" @click="importTransfer">校验并导入</el-button></span>
+    </el-dialog>
   </main>
 </template>
 
@@ -230,6 +246,7 @@ export default {
   data() {
     return {
       loading: false, saving: false, dialogSaving: false, loadError: "",
+      transferVisible: false, transferBusy: false, transferText: "", migrationPreview: [],
       accounts: [], policies: [], catalog: { plugins: [], tasks: [] },
       selectedBotId: "", account: null, editingPolicy: null,
       policyScope: "account", groups: [], groupAccount: null, selectedGroupKey: "", privateAccount: null, selectionRequest: 0, listRequest: 0, destroyed: false,
@@ -258,6 +275,48 @@ export default {
   async mounted() { await this.loadAll() },
   beforeDestroy() { this.destroyed = true; this.selectionRequest++; this.listRequest++; this.impactRequest++; clearDirtyState(SOURCE) },
   methods: {
+    async openTransfer() {
+      if (this.dirty) return this.$message.warning("请先保存或放弃当前策略草稿。")
+      this.transferVisible = true
+      await this.loadTransfer()
+    },
+    async loadTransfer() {
+      this.transferBusy = true
+      try {
+        const [document, preview] = await Promise.all([
+          this.getRequest(`${this.$root.prefix}/plugin-policy/export`),
+          this.getRequest(`${this.$root.prefix}/plugin-policy/migration/preview`),
+        ])
+        if (!document.suc || !preview.suc) throw new Error("策略读取失败")
+        this.transferText = JSON.stringify(document.data, null, 2)
+        this.migrationPreview = preview.data
+      } catch (error) { this.$message.error(error.message || "策略读取失败") }
+      finally { this.transferBusy = false }
+    },
+    async importTransfer() {
+      if (this.transferBusy) return
+      try {
+        const document = JSON.parse(this.transferText)
+        await this.$confirm("将按文档内的作用域提交策略，旧修订会被拒绝。确认导入？", "导入策略", { type: "warning" })
+        this.transferBusy = true
+        const response = await this.postRequest(`${this.$root.prefix}/plugin-policy/import`, document)
+        if (!response.suc) throw new Error(response.info || "导入失败")
+        this.$message.success("策略已提交。")
+        await this.loadAll()
+        await this.loadTransfer()
+      } catch (error) { if (error !== "cancel" && error !== "close") this.$message.error(error?.response?.status === 409 ? "策略已变化，导入草稿保留，请核对后重新读取。" : error.message || "导入失败") }
+      finally { this.transferBusy = false }
+    },
+    async migrateScope(row) {
+      this.transferBusy = true
+      try {
+        const response = await this.postRequest(`${this.$root.prefix}/plugin-policy/migration/apply`, { ...row, expected_revision: row.revision })
+        if (!response.suc) throw new Error(response.info || "迁移失败")
+        await this.loadTransfer()
+        await this.loadAll()
+      } catch (error) { this.$message.error(error?.response?.status === 409 ? "策略已变化，请重新读取迁移预览。" : error.message || "迁移失败") }
+      finally { this.transferBusy = false }
+    },
     navigate(query) {
       this.$router.replace({ path: "/plugin-policy", query }, () => {}, (error) => {
         if (error instanceof Error) this.$message.error(error.message || "页面导航失败")
@@ -350,7 +409,20 @@ export default {
     toggleFilteredSelection(value) { const values = new Set(this.selectedModules); this.filteredFeatures.forEach((x) => value ? values.add(x.module) : values.delete(x.module)); this.selectedModules = [...values] },
     setSelectedEnabled(enabled) { this.selectedModules.forEach((module) => this.setFeatureEnabled(module, enabled)); this.selectedModules = [] },
     typeLabel(item) { const map = { NORMAL: "普通", DEPENDANT: "依赖", ADMIN: "管理员", SUPERUSER: "超级用户", ADMIN_SUPER: "管理/超管", TASK: "被动", MISSING: "缺失" }; return map[item.feature_type] || item.feature_type },
-    effectiveLabel(item) { if (!item.load_status) return item.missing ? "模块缺失" : "未加载"; if (!item.global_status) return "全局关闭"; const scoped = this.groupAccount || this.privateAccount; if (scoped) { const suffix = this.activeKind === "plugins" ? "plugins" : "tasks"; if ((scoped[`account_block_${suffix}`] || []).includes(item.module)) return "账号禁用"; const legacy = scoped.scope === "private" ? false : (scoped[`group_block_${suffix}`] || []).includes(item.module); if (legacy) return "配置或命令禁用"; if ((scoped[`block_${suffix}`] || []).includes(item.module)) return "当前禁用"; } return this.isEnabled(item.module) ? "当前启用" : (this.editingPolicy ? "策略禁用" : scoped ? "当前禁用" : "账号禁用") },
+    effectiveLabel(item) {
+      if (!item.load_status) return item.missing ? "模块缺失" : "未加载"
+      const scoped = this.groupAccount || this.privateAccount
+      const target = scoped || (!this.editingPolicy && this.account)
+      if (target?.publication_pending) return "已保存，运行态待重新核验"
+      const labels = { not_loaded: "未加载", global_disabled: "全局关闭", global_group_disabled: "全局群聊关闭", global_private_disabled: "全局私聊关闭", account_disabled: scoped ? "账号禁用（本层开启不能解除）" : "账号禁用", administrator_disabled: "管理员禁用（本层开启不能解除）", group_disabled: "本群禁用", private_disabled: "全部私聊禁用" }
+      const decision = target?.effective?.[this.activeKind]?.find(row => row.module === item.module)
+      if (decision) {
+        const localReasons = scoped ? ["group_disabled", "private_disabled"] : ["account_disabled"]
+        const reasons = (decision.blocked_by || []).filter(reason => !this.dirty || !localReasons.includes(reason))
+        if (reasons.length) return reasons.map(reason => labels[reason] || reason).join("；")
+      } else if (!item.global_status && !["GROUP", "PRIVATE"].includes(item.block_type)) return "全局关闭"
+      return this.isEnabled(item.module) ? "当前启用" : (this.editingPolicy ? "策略禁用" : scoped ? "本层禁用" : "账号禁用")
+    },
     effectiveType(item) { if (!item.load_status || !item.global_status) return "info"; return ["可用", "当前启用"].includes(this.effectiveLabel(item)) ? "success" : "danger" },
     discardChanges() { if (this.saving) return; if (this.editingPolicy) { this.editingPolicy.name = this.editingPolicy.originalName; this.editingPolicy.description = this.editingPolicy.originalDescription } this.draft = JSON.parse(JSON.stringify(this.baseline)); this.detachPending = false },
     async saveEditor() { if (this.saving || (this.policyScope === "group" && !this.groupAccount) || (this.policyScope === "private" && !this.privateAccount)) return; if (this.editingPolicy) return this.savePolicy(); this.saving = true; try { const target = this.groupAccount || this.privateAccount || this.account; const url = this.groupAccount ? this.groupUrl(target) : this.privateAccount ? `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/private` : `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`; const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true }); if (this.destroyed) return; if (resp.suc) { this.$message.success(resp.info); if (this.groupAccount) { this.groupAccount = resp.data; this.setDraft(resp.data) } else if (this.privateAccount) { this.privateAccount = resp.data; this.setDraft(resp.data) } else await this.loadAll() } } catch (error) { if (error?.response?.status === 409) this.$message.warning("配置已变化，草稿已保留，请重新加载后比较"); else this.$message.error("保存失败，草稿已保留") } finally { this.saving = false } },

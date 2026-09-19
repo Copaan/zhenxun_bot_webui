@@ -206,11 +206,13 @@
               </el-table-column>
               <el-table-column label="值" min-width="140" align="center">
                 <template slot-scope="scope">
-                  <AutoComponent
+                  <SchemaField
                     :ref="'autoComponent_' + scope.$index"
                     v-model="scope.row.value"
-                    :type="scope.row.type"
-                    :typeInner="scope.row.type_inner"
+                    :schema="scope.row.schema || {}"
+                    :root-schema="scope.row.schema || {}"
+                    :label="scope.row.key"
+                    :path="scope.row.key"
                   />
                 </template>
               </el-table-column>
@@ -237,7 +239,7 @@
 </template>
 
 <script>
-import AutoComponent from "./AutoComponent.vue"
+import SchemaField from "@/components/config/SchemaField.vue"
 import { handleApplyResult } from "@/utils/apply-result"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 import NeonInput from "@/components/ui/NeonInput.vue"
@@ -251,7 +253,7 @@ export default {
     module: String,
   },
   components: {
-    AutoComponent,
+    SchemaField,
     "neon-input": NeonInput,
     "neko-select": NekoSelect,
     MySwitch,
@@ -414,7 +416,7 @@ export default {
       if (this.updateData.config_list && this.updateData.config_list) {
         for (let i = 0; i < this.updateData.config_list.length; i++) {
           const ref = this.$refs["autoComponent_" + i]
-          if (ref) {
+          if (ref && typeof ref.validate === "function") {
             const flag = ref.validate()
             if (!flag) {
               return this.$message.warning("配置项填写错误...")
@@ -425,6 +427,7 @@ export default {
       this.$refs["form"].validate((valid) => {
         if (valid) {
           const data = JSON.parse(JSON.stringify(this.updateData))
+          data.expected_revision = data.policy_revision
           if (data.config_list && data.config_list.length) {
             const configs = {}
             data.config_list.forEach((e) => {
