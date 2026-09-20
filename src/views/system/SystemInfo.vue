@@ -20,3 +20,10 @@ export default { name: "SystemInfo", components: { ConfigurationCenter, FileTabl
 <style scoped>
 .system-page { min-height: 100%; padding: 22px; overflow-y: auto; color: var(--text-color); background: var(--bg-color); }.system-page > header h1 { margin: 0; font-size: 24px; }.system-page > header p { margin: 5px 0 16px; color: var(--text-color-secondary); }.system-tabs { min-height: 0; padding: 0 18px 18px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.file-panel { min-height: 620px; padding-top: 8px; }@media (max-width: 680px) { .system-page { padding: 12px; }.system-tabs { padding: 0 10px 12px; } }
 </style>
+
+<style scoped>
+.system-page, .system-tabs { min-width:0; box-sizing:border-box; }
+.system-page ::v-deep .el-tabs__content { overflow:visible; }
+.system-page ::v-deep .el-tabs__item { padding-inline:12px; }
+@media(max-width:420px) { .system-page { padding:8px; } .system-tabs { padding:0 8px 8px; } }
+</style>

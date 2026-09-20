@@ -93,6 +93,18 @@
                 <article v-for="(bot, index) in qqForm.bots" :key="bot.localKey" class="bot-entry">
                   <header><strong>Bot {{ index + 1 }}</strong><el-button type="text" class="danger-text" icon="el-icon-delete" :loading="bot.removing" @click="removeBot(bot, index)">移除</el-button></header>
                   <el-form-item label="连接方式"><el-radio-group v-model="bot.use_websocket" size="small"><el-radio-button :label="true">WebSocket</el-radio-button><el-radio-button :label="false">Webhook</el-radio-button></el-radio-group><p class="field-help">Gateway 由 QQ 自动下发，不需要手动填写链接。</p></el-form-item>
+                  <el-form-item label="事件订阅（WebSocket）">
+                    <el-checkbox v-for="option in qqIntentOptions" :key="option.key" v-model="bot.intent[option.key]">{{ option.label }}</el-checkbox>
+                    <p class="field-help">{{ bot.use_websocket ? "只接收勾选的事件；保存后需要重启 Worker。" : "Webhook 订阅由 QQ 开放平台管理，以下 WS 设置保留但不生效。" }}</p>
+                  </el-form-item>
+                  <el-form-item label="WebSocket 分片">
+                    <el-switch :value="Boolean(bot.shard)" @change="$set(bot, 'shard', $event ? [0, 1] : null)" />
+                    <template v-if="bot.shard">
+                      <span>索引</span><el-input-number v-model="bot.shard[0]" :min="0" :max="Math.max(0, bot.shard[1] - 1)" size="small" />
+                      <span>总数</span><el-input-number v-model="bot.shard[1]" :min="1" size="small" />
+                    </template>
+                    <p class="field-help">关闭时沿用适配器自动分片；Webhook 模式不使用分片设置。</p>
+                  </el-form-item>
                   <el-form-item label="AppID"><el-input v-model.trim="bot.id" placeholder="机器人 AppID" /></el-form-item>
                   <el-form-item label="Secret"><el-input v-model="bot.secret" show-password autocomplete="new-password" :placeholder="bot.has_secret ? '已保存，留空沿用' : 'AppSecret'" /></el-form-item>
                   <el-form-item label="Token（兼容旧配置，可选）"><el-input v-model="bot.token" show-password autocomplete="new-password" :placeholder="bot.has_token ? '已保存，留空沿用' : '可留空'" /></el-form-item>
@@ -135,7 +147,7 @@ import {
 } from "@/utils/restart-flow"
 
 let botKey = 0
-const emptyBot = () => ({ localKey: `bot-${++botKey}`, id: "", token: "", secret: "", use_websocket: true, has_token: false, has_secret: false, probing: false, removing: false, probeResult: "", probeError: null })
+const emptyBot = () => ({ localKey: `bot-${++botKey}`, id: "", token: "", secret: "", use_websocket: true, intent: { c2c_group_at_messages: true, at_messages: false, guild_messages: false, direct_message: false, interaction: false, group_members: false }, shard: null, has_token: false, has_secret: false, probing: false, removing: false, probeResult: "", probeError: null })
 const emptyRegistration = () => ({ visible: false, starting: false, registrationId: "", qrDataUrl: "", qrUrl: "", status: "idle", error: "", interval: 2, expiresAt: 0, bot: {}, restartAvailable: false, accessUrls: [], accessTargets: [] })
 
 export default {
@@ -145,6 +157,14 @@ export default {
     return {
       selectedPlatform: "qq_official", loading: false, saving: false, statusLoading: false,
       statusConfirmed: false, statusSequence: 0, configurationSequence: 0, registrationSequence: 0, registrationPolling: "",
+      qqIntentOptions: [
+        { key: "c2c_group_at_messages", label: "官方群 / C2C" },
+        { key: "at_messages", label: "频道 @消息" },
+        { key: "guild_messages", label: "频道消息（需权限）" },
+        { key: "direct_message", label: "频道私信" },
+        { key: "interaction", label: "按钮回调" },
+        { key: "group_members", label: "群成员变更" }
+      ],
       status: { onebot_v11_connected: false, qq_official_enabled: false, qq_official_connected: false, qq_webhook_mode: "external", qq_webhook_callback_url: null, connections: [], qq_bots: [], onebot_v11_reverse_ws_path: "/onebot/v11/ws", qq_webhook_path: "/qq/webhook" },
       configuration: { revision: "", launcher_managed: false, onebot: { has_access_token: false }, qq: { bots: [] } },
       onebotToken: "", onebotHost: "", clearOnebotToken: false, qqSetupMode: "scan", logoUrl, registration: emptyRegistration(), registrationTimer: null,
@@ -337,7 +357,7 @@ export default {
           onebot_access_token: this.onebotToken || null,
           clear_onebot_access_token: this.clearOnebotToken,
           qq_enabled: this.qqForm.enabled,
-          qq_bots: this.qqForm.bots.map((bot) => ({ id: bot.id, token: bot.token || null, secret: bot.secret || null, use_websocket: bot.use_websocket })),
+          qq_bots: this.qqForm.bots.map((bot) => ({ id: bot.id, token: bot.token || null, secret: bot.secret || null, use_websocket: bot.use_websocket, intent: bot.intent, shard: bot.shard })),
           qq_webhook_mode: this.qqForm.webhook_mode,
           qq_webhook_public_base_url: this.qqForm.public_base_url,
           qq_webhook_listen_host: this.qqForm.listen_host,

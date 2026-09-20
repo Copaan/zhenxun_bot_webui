@@ -1,8 +1,9 @@
 <template>
   <div class="schema-form">
+    <el-input v-if="searchable" v-model="search" clearable prefix-icon="el-icon-search" placeholder="搜索字段、说明或嵌套路径" />
     <section v-for="section in sections" :key="section.name || 'default'" class="schema-section">
-      <div v-if="section.name" class="schema-section-heading">{{ section.name }}</div>
-      <div class="schema-grid">
+      <button v-if="section.name" type="button" class="schema-section-heading" :aria-expanded="sectionOpen(section)" @click="$set(collapsed, section.name, !collapsed[section.name])"><i :class="sectionOpen(section) ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i> {{ section.name }} · {{ section.fields.length }} 项</button>
+      <div v-show="sectionOpen(section)" class="schema-grid">
         <SchemaField
           v-for="field in section.fields"
           :key="field.key"
@@ -14,13 +15,13 @@
           :label="labels[field.key] || field.ui.label || resolved(field.schema).title || field.key"
           :path="field.key"
           :ui="field.ui"
-          :issues="issues"
+          :issues="issues" :query="activeQuery"
           @input="update(field.key, $event)"
           @validity="handleValidity"
         />
       </div>
     </section>
-    <el-collapse v-if="advancedFields.length" class="advanced-fields">
+    <el-collapse v-if="advancedFields.length" :value="activeQuery || issues.length ? ['advanced'] : advancedOpen" class="advanced-fields" @input="advancedOpen = $event">
       <el-collapse-item title="高级设置" name="advanced">
         <div class="schema-grid">
           <SchemaField
@@ -34,7 +35,7 @@
             :label="labels[field.key] || field.ui.label || resolved(field.schema).title || field.key"
             :path="field.key"
             :ui="field.ui"
-            :issues="issues"
+            :issues="issues" :query="activeQuery"
             @input="update(field.key, $event)"
             @validity="handleValidity"
           />
@@ -46,15 +47,18 @@
 
 <script>
 import SchemaField from "./SchemaField.vue"
+import { fieldMatches, resolveReference } from "./schema-utils"
 
 export default {
   name: "SchemaForm",
   components: { SchemaField },
   props: {
+    query: { type: String, default: "" }, searchable: { type: Boolean, default: true },
     value: { type: Object, default: () => ({}) }, schema: { type: Object, default: () => ({}) }, rootSchema: { type: Object, default: null },
     labels: { type: Object, default: () => ({}) }, fieldUi: { type: Object, default: () => ({}) }, issues: { type: Array, default: () => [] },
   },
   computed: {
+    activeQuery() { return this.query || this.search },
     effectiveRoot() { return this.rootSchema || this.schema },
     resolvedSchema() { return this.resolved(this.schema) },
     properties() { return this.resolvedSchema.properties || {} },
@@ -74,11 +78,15 @@ export default {
       return [...sections].map(([name, fields]) => ({ name, fields }))
     },
   },
-  data() { return { invalidPaths: {} } },
+  data() { return { invalidPaths: {}, search: "", collapsed: {}, advancedOpen: [] } },
   methods: {
+    sectionOpen(section) {
+      return !this.collapsed[section.name] || section.fields.some(field =>
+        this.issues.some(issue => issue.path === field.key || String(issue.path || "").startsWith(`${field.key}.`)) ||
+        this.activeQuery.trim() && fieldMatches(this.activeQuery, `${field.key} ${field.ui.label || ""} ${field.ui.description || ""}`, field.schema, this.formValue[field.key], this.effectiveRoot))
+    },
     resolved(schema) {
-      if (!schema?.$ref) return schema || {}
-      return schema.$ref.replace(/^#\//, "").split("/").reduce((value, key) => value?.[key], this.effectiveRoot) || schema
+      return resolveReference(schema, schema?.["x-root-schema"] || this.effectiveRoot)
     },
     update(key, value) {
       const next = { ...this.formValue, [key]: value }
@@ -96,8 +104,8 @@ export default {
       this.$emit("validity-change", Object.keys(this.invalidPaths))
     },
     wideField(schema) {
-      const type = this.resolved(schema).type
-      return type === "object" || type === "array"
+      const resolved = this.resolved(schema)
+      return [resolved, ...(resolved.anyOf || resolved.oneOf || [])].some(item => item.type === "object" || item.type === "array" || item.properties)
     },
     visible(key, formValue = this.formValue) {
       const condition = this.fieldUi[key]?.visible_when

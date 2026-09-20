@@ -44,26 +44,10 @@
         </button>
       </div>
 
-      <!-- 安装依赖按钮 -->
-      <CuteButton
-        @click="showInstallDependencyDialog = true"
-        type="primary"
-        icon="download"
-        :iconColor="'var(--button-icon-color-info)'"
-        class="px-4 py-2 text-sm rounded-full transition-colors duration-200 flex items-center gap-1"
-        size="sm"
-      >
-        <i class="fas fa-box mr-1"></i>
-        依赖管理
-      </CuteButton>
-      <CuteButton
-        @click="showArchiveDialog = true"
-        type="primary"
-        icon="download"
-        size="sm"
-      >
-        外部安装插件
-      </CuteButton>
+      <div class="plugin-action-pair">
+        <CuteButton @click="showArchiveDialog = true" type="primary" icon="download" :iconColor="'var(--button-icon-color-info)'" class="plugin-action" size="sm">外部安装插件</CuteButton>
+        <CuteButton @click="showInstallDependencyDialog = true" type="primary" icon="download" :iconColor="'var(--button-icon-color-info)'" class="plugin-action" size="sm">依赖管理</CuteButton>
+      </div>
     </div>
 
     <PluginArchiveDialog
@@ -82,7 +66,7 @@
       }"
       ref="filterAreaRef"
     >
-      <div class="flex flex-wrap items-center gap-2">
+      <div class="filter-row">
         <span
           v-for="tag in sortedMenuTypeList"
           :key="tag"
@@ -102,26 +86,10 @@
           {{ tag }}
         </span>
 
-        <CuteButton
-          @click="showAddDialogFlag = true"
-          type="primary"
-          icon="add"
-          :iconColor="'var(--button-icon-color-info)'"
-          class="ml-auto px-3 py-1 text-xs rounded-full transition-colors duration-200 flex items-center"
-          size="sm"
-        >
-          新增类型
-        </CuteButton>
-        <CuteButton
-          @click="manageTypesDialogVisible = true"
-          type="primary"
-          icon="setting1"
-          :iconColor="'var(--button-icon-color-info)'"
-          class="px-3 py-1 text-xs rounded-full transition-colors duration-200 flex items-center"
-          size="sm"
-        >
-          管理类型
-        </CuteButton>
+        <div class="plugin-action-pair">
+          <CuteButton @click="showAddDialogFlag = true" type="primary" icon="add" :iconColor="'var(--button-icon-color-info)'" class="plugin-action" size="sm">新增类型</CuteButton>
+          <CuteButton @click="manageTypesDialogVisible = true" type="primary" icon="setting1" :iconColor="'var(--button-icon-color-info)'" class="plugin-action" size="sm">管理类型</CuteButton>
+        </div>
       </div>
     </div>
 
@@ -1014,4 +982,13 @@ export default {
     }
   }
 }
+</style>
+
+<style scoped>
+.type-selector-container { padding-inline: 17px; }
+.filter-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.plugin-action-pair { display:grid; grid-template-columns:144px 116px; gap:8px; margin-left:auto; flex-shrink:0; }
+.plugin-action-pair .plugin-action { border-radius:999px; height:36px; padding:6px 12px; white-space:nowrap; }
+@media(max-width:760px) { .type-selector-container { padding-inline:0; } .plugin-action-pair { max-width:100%; } .type-selector-container .plugin-action-pair { margin-right:17px; } }
+@media(max-width:420px) { .type-selector-container { padding-inline:0; } .plugin-action-pair { width:100%; grid-template-columns:minmax(0,1fr) minmax(0,1fr); } .type-selector-container .plugin-action-pair { width:calc(100% - 34px); margin-inline:17px; } .plugin-action-pair .plugin-action { font-size:12px; padding-inline:6px; } }
 </style>

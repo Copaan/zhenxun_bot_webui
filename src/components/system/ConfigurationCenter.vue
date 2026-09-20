@@ -17,13 +17,17 @@
       <el-tab-pane label="环境配置" name="env">
         <el-form label-position="top" class="env-form">
           <p>配置来源：{{ envSourceFile }}</p>
-          <section v-for="field in envDescriptors" :key="field.key" class="env-field-group">
-            <SchemaField v-if="!field.sensitive" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema" :label="field.key" :path="field.key" @input="setEnvField(field.key, $event)" />
+          <el-input v-model="envSearch" clearable prefix-icon="el-icon-search" placeholder="搜索环境字段、说明或嵌套路径" />
+          <div class="env-descriptor-grid">
+          <section v-for="field in envDescriptors" v-show="envMatches(field)" :key="field.key" class="env-field-group" :class="{ wide: complexField(field.schema, envFields[field.key]) }">
+            <p v-if="field.readonly_reason" class="inline-error">{{ field.key }}：{{ field.readonly_reason }}</p>
+            <SchemaField v-else-if="!field.sensitive" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema"  :label="field.key" :path="field.key" :query="envSearch" :issues="envIssues" @input="setEnvField(field.key, $event)" />
             <p v-else>{{ field.key }}：{{ field.configured ? '已配置' : '未配置' }}，请在原文或对应专用页面修改。</p>
             <p v-if="!field.sensitive && JSON.stringify(field.effective_value) !== JSON.stringify(envFields[field.key])">当前运行值：{{ JSON.stringify(field.effective_value) }}；文件修改的生效方式见下方。</p>
             <p v-if="field.overridden">由外部环境变量覆盖，修改文件不会覆盖启动进程的环境变量。</p>
             <el-tag size="mini" :type="effectMeta(field.apply_effect).type">{{ effectMeta(field.apply_effect).label }}</el-tag>
           </section>
+          </div>
           <section class="env-field-group custom-env-section">
             <header class="custom-env-heading">
               <div><h3>自定义环境变量</h3><p>用于第三方插件或外部服务。未知变量保存后需要重启生效。</p></div>
@@ -112,6 +116,7 @@
 <script>
 import SchemaForm from "@/components/config/SchemaForm.vue"
 import SchemaField from "@/components/config/SchemaField.vue"
+import { fieldMatches, resolveReference, valueType, validateField } from "@/components/config/schema-utils"
 import NetworkStatus from "@/components/system/NetworkStatus.vue"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
@@ -122,7 +127,7 @@ export default {
   components: { SchemaForm, SchemaField, NetworkStatus },
   data() {
     return {
-      networkStatus: {}, rawLoading: false,
+      networkStatus: {}, rawLoading: false, envSearch: "", envIssues: [],
       loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", envFieldEffects: {}, customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], simpleChanges: {}, groupSearch: "", selectedGroup: "", launcherManaged: false,
       rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalidPaths: [], pluginIssues: [],
       envFieldDefinitions: [
@@ -196,6 +201,9 @@ export default {
   mounted() { this.loadSummary() },
   beforeDestroy() { clearDirtyState("plugin-configuration"); clearDirtyState("environment-configuration"); clearDirtyState("raw-configuration") },
   methods: {
+    envMatches(field) { return fieldMatches(this.envSearch, field.key, field.schema, this.envFields[field.key], field.schema["x-root-schema"] || field.schema) || this.envIssues.some(issue => String(issue.path || "").startsWith(field.key)) },
+    complexField(schema, value) { const resolved = resolveReference(schema, schema["x-root-schema"] || schema); return ["object", "array"].includes(valueType(value)) || [resolved, ...(resolved.anyOf || resolved.oneOf || [])].some(item => item.type === "object" || item.type === "array" || item.properties) },
+    focusIssue() { this.$nextTick(() => { const error = this.$el.querySelector(".field-error"); if (error) error.scrollIntoView({ block: "center", behavior: "smooth" }) }) },
     normalizedEnvFields(fields) {
       const result = { ...fields }
       if (!["serve", "redirect", "disabled"].includes(result.WEBUI_HTTP_MODE)) {
@@ -237,7 +245,7 @@ export default {
       return (groups || []).map((group) => ({ ...group, fields: group.fields.map((field) => ({ ...field, originalValue: JSON.stringify(field.value) })) }))
     },
     async confirmDiscard(message) {
-      try { await this.$confirm(message, "放弃未保存修改？", { type: "warning", confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); return true } catch (_) { return false }
+      try { await this.$confirm(message, "放弃未保存修改？", { type: "warning", customClass: "configuration-confirm", confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); return true } catch (_) { return false }
     },
     async reloadSummary() {
       if (this.saving || this.loading) return
@@ -320,6 +328,8 @@ export default {
       const customOperations = this.customOperations
       const unsetFields = this.unsetEnvFields()
       if (!Object.keys(fields).length && !customOperations.length && !unsetFields.length) return this.$message.info("没有需要保存的环境配置。")
+      this.envIssues = this.envDescriptors.filter(field => !field.sensitive && !field.readonly_reason).flatMap(field => validateField(this.envFields[field.key], field.schema, field.schema["x-root-schema"] || field.schema, field.key))
+      if (this.envIssues.length) { this.focusIssue(); return this.$message.warning("请修正环境配置中的错误") }
       this.saving = "env"
       const submittedFields = JSON.stringify(this.envFields)
       const submittedCustom = JSON.stringify(this.customEnv)
@@ -338,12 +348,15 @@ export default {
           restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/system",
         })
-      } catch (error) { this.$message.error(apiErrorDetail(error, "保存失败")) }
+      } catch (error) { this.envIssues = apiErrorIssues(error); this.focusIssue(); this.$message.error(apiErrorDetail(error, "保存失败")) }
       finally { this.saving = "" }
     },
     async saveSimple() {
       if (this.saving) return
       if (!Object.keys(this.simpleChanges).length) return this.$message.info("没有需要保存的插件配置。")
+      const invalidGroup = this.groups.filter(group => this.simpleChanges[group.module]).map(group => ({ module: group.module, issues: group.fields.filter(field => !field.sensitive && field.authority !== "database").flatMap(field => validateField(field.value, field.schema || {}, field.schema?.["x-root-schema"] || field.schema || {}, field.key)) })).find(group => group.issues.length)
+      this.pluginIssues = invalidGroup?.issues || []
+      if (invalidGroup) { this.selectedGroup = invalidGroup.module; this.focusIssue(); return this.$message.warning("请修正插件配置中的错误") }
       this.saving = "simple"
       const submitted = Object.fromEntries(Object.entries(this.simpleChanges).map(([module, fields]) => [module, Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value === undefined ? undefined : JSON.parse(JSON.stringify(value))]))]))
       try {
@@ -367,7 +380,7 @@ export default {
           restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/system",
         })
-      } catch (error) { this.pluginIssues = apiErrorIssues(error); this.$message.error(apiErrorDetail(error, "保存失败")) }
+      } catch (error) { this.pluginIssues = apiErrorIssues(error); this.focusIssue(); this.$message.error(apiErrorDetail(error, "保存失败")) }
       finally { this.saving = "" }
     },
     async loadRaw(file) {
@@ -434,4 +447,19 @@ export default {
   .plugin-config-workbench { height: auto; }
   .config-form-scroll { max-height: 70vh; }
 }
+</style>
+
+<style scoped>
+.configuration-center { container-type:inline-size; min-width:0; }
+.env-descriptor-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.env-descriptor-grid .wide { grid-column:1 / -1; }
+.env-field-group { min-width:0; padding:12px; overflow-wrap:anywhere; }
+.configuration-toolbar, .action-bar, .group-heading { min-width:0; flex-wrap:wrap; }
+.config-form-scroll { overflow:visible; }
+.plugin-config-workbench { height:auto; min-height:360px; overflow:visible; }
+.config-groups { max-height:70vh; }
+.current-config-group { padding-bottom:16px; }
+.current-config-group pre { max-width:100%; white-space:pre-wrap; overflow-wrap:anywhere; }
+@container (max-width:760px) { .env-descriptor-grid { grid-template-columns:1fr; } .plugin-config-workbench { grid-template-columns:1fr; } .config-groups { max-height:180px; } .custom-env-row { grid-template-columns:minmax(0,1fr); } }
+@media(max-width:760px) { .env-descriptor-grid { grid-template-columns:1fr; } .config-form-scroll { max-height:none; } .custom-env-row { grid-template-columns:minmax(0,1fr); } .custom-env-row > :nth-child(2) { grid-column:auto; grid-row:auto; } }
 </style>

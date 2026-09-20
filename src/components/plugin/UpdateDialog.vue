@@ -172,51 +172,11 @@
           </div>
 
           <div class="config-table-wrapper">
-            <el-table
-              :data="updateData.config_list"
-              border
-              class="config-table"
-              height="400"
-            >
-              <el-table-column
-                label="键"
-                prop="key"
-                min-width="100"
-                align="left"
-              />
-              <el-table-column
-                label="帮助"
-                prop="help"
-                min-width="200"
-                align="left"
-              />
-              <el-table-column
-                label="默认值"
-                prop="default_value"
-                min-width="100"
-                align="center"
-              >
-                <template slot-scope="{ row }">
-                  {{
-                    row.default_value + "" != "null"
-                      ? row.default_value + ""
-                      : "-"
-                  }}
-                </template>
-              </el-table-column>
-              <el-table-column label="值" min-width="140" align="center">
-                <template slot-scope="scope">
-                  <SchemaField
-                    :ref="'autoComponent_' + scope.$index"
-                    v-model="scope.row.value"
-                    :schema="scope.row.schema || {}"
-                    :root-schema="scope.row.schema || {}"
-                    :label="scope.row.key"
-                    :path="scope.row.key"
-                  />
-                </template>
-              </el-table-column>
-            </el-table>
+            <el-input v-model="configSearch" clearable prefix-icon="el-icon-search" placeholder="搜索配置项、说明或嵌套路径" />
+            <section v-for="(row, index) in updateData.config_list" v-show="matchesConfig(row)" :key="row.key" class="plugin-config-row">
+              <SchemaField :ref="'autoComponent_' + index" v-model="row.value" :schema="row.schema || {}" :root-schema="row.schema || {}" :label="row.key" :path="row.key" :query="configSearch" :issues="configIssues" :ui="{ description: row.help }" />
+              <details class="default-value"><summary>默认值：{{ summary(row.default_value) }}</summary><pre>{{ formatDefault(row.default_value) }}</pre></details>
+            </section>
           </div>
         </div>
       </div>
@@ -240,6 +200,8 @@
 
 <script>
 import SchemaField from "@/components/config/SchemaField.vue"
+import { fieldMatches, valueSummary, validateField } from "@/components/config/schema-utils"
+import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 import NeonInput from "@/components/ui/NeonInput.vue"
@@ -269,7 +231,7 @@ export default {
       callback()
     }
     return {
-      dialogWidth: "1300px",
+      dialogWidth: "1300px", configSearch: "", configIssues: [],
       visible: false,
       menuTypeList: [],
       menuTypeOptions: [],
@@ -322,6 +284,9 @@ export default {
     },
   },
   methods: {
+    summary: valueSummary,
+    formatDefault(value) { return value === undefined ? "未设置" : JSON.stringify(value, null, 2) },
+    matchesConfig(row) { return fieldMatches(this.configSearch, `${row.key} ${row.help || ""}`, row.schema || {}, row.value, row.schema || {}) || this.configIssues.some(issue => String(issue.path || "").includes(row.key)) },
     async close() {
       if (!(await this.confirmDiscard())) return
       clearDirtyState(this.dirtySource)
@@ -342,6 +307,7 @@ export default {
             confirmButtonText: "放弃修改",
             cancelButtonText: "继续编辑",
             type: "warning",
+            customClass: "configuration-confirm",
           }
         )
         return true
@@ -413,25 +379,20 @@ export default {
       return icons[type] || "menu-default"
     },
     commit() {
-      if (this.updateData.config_list && this.updateData.config_list) {
-        for (let i = 0; i < this.updateData.config_list.length; i++) {
-          const ref = this.$refs["autoComponent_" + i]
-          if (ref && typeof ref.validate === "function") {
-            const flag = ref.validate()
-            if (!flag) {
-              return this.$message.warning("配置项填写错误...")
-            }
-          }
-        }
-      }
+      this.configIssues = (this.updateData.config_list || []).flatMap(row => validateField(row.value, row.schema || {}, row.schema?.["x-root-schema"] || row.schema || {}, row.key))
+      if (this.configIssues.length) { this.$nextTick(() => this.$el.querySelector(".field-error")?.scrollIntoView({ block: "center" })); return this.$message.warning("请修正配置项中的错误") }
       this.$refs["form"].validate((valid) => {
         if (valid) {
           const data = JSON.parse(JSON.stringify(this.updateData))
           data.expected_revision = data.policy_revision
-          if (data.config_list && data.config_list.length) {
+          if (this.updateData.config_list && this.updateData.config_list.length) {
             const configs = {}
-            data.config_list.forEach((e) => {
-              configs[e.key] = e.value
+            data.unset_configs = []
+            const original = JSON.parse(this.initialData).config_list || []
+            this.updateData.config_list.forEach((e) => {
+              if (JSON.stringify(e.value) === JSON.stringify(original.find(row => row.key === e.key)?.value)) return
+              if (e.value === undefined) data.unset_configs.push(e.key)
+              else configs[e.key] = e.value
             })
             data.configs = configs
             data.config_list = null
@@ -461,6 +422,11 @@ export default {
               this.$message.error(resp.info)
             }
             loading.close()
+          }).catch(error => {
+            loading.close()
+            this.configIssues = apiErrorIssues(error)
+            this.$message.error(apiErrorDetail(error, "配置保存失败"))
+            this.$nextTick(() => this.$el.querySelector(".field-error")?.scrollIntoView({ block: "center" }))
           })
         } else {
           return false
@@ -846,8 +812,7 @@ $bg-color-overlay: var(--el-bg-color-overlay, #ffffff);
   .config-section {
     .config-table-wrapper {
       padding: 15px;
-      max-height: 400px;
-      overflow: hidden;
+      min-width: 0;
     }
 
     .config-table {
@@ -986,4 +951,14 @@ $bg-color-overlay: var(--el-bg-color-overlay, #ffffff);
     }
   }
 }
+</style>
+
+<style scoped>
+.config-table-wrapper { overflow:visible; min-width:0; }
+.plugin-config-row { padding:14px 0; border-bottom:1px solid var(--border-color-light); min-width:0; }
+.default-value { margin-top:10px; font-size:12px; color:var(--text-color-secondary); overflow-wrap:anywhere; }
+.default-value summary { cursor:pointer; }
+.default-value pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.neko-dialog ::v-deep .el-dialog { max-width:1400px; }
+@media(max-width:760px) { .neko-dialog ::v-deep .el-dialog { width:calc(100% - 16px) !important; margin:8px auto !important; } .neko-dialog ::v-deep .el-dialog__body { padding:12px; } .dialog-footer { position:sticky; bottom:0; background:var(--bg-color-secondary); z-index:4; } }
 </style>
