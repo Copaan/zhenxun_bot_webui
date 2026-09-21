@@ -76,7 +76,7 @@ export default {
   data: () => ({ loading: false, saving: false, probing: false, statusLoading: false, statusSequence: 0, revision: "", saved: {}, runtime: {}, draft: newDraft(), baseline: "", plugins: [], search: "", error: "", probeResult: null, sequence: 0 }),
   computed: {
     busy() { return this.loading || this.saving || this.probing },
-    dirty() { return Boolean(this.baseline && JSON.stringify(this.draft) !== this.baseline) },
+    dirty() { return Boolean(this.baseline && this.normalizeDraft(this.draft) !== this.baseline) },
     filteredPlugins() {
       const rows = new Map(this.plugins.map((item) => [item.module, item]))
       this.draft.plugins.forEach((module) => { if (!rows.has(module)) rows.set(module, { module, name: module, missing: true }) })
@@ -88,6 +88,14 @@ export default {
   mounted() { this.load() },
   beforeDestroy() { this.sequence++; this.statusSequence++; clearDirtyState("network-proxy") },
   methods: {
+    normalizeDraft(draft) {
+      return JSON.stringify({
+        ...draft,
+        mode: draft.mode || "disabled",
+        plugins: [...(draft.plugins || [])].map(String).sort(),
+        bypassText: String(draft.bypassText || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean).join("\n"),
+      })
+    },
     modeName(mode) { return { disabled: "关闭本体代理", global: "全局强制代理", selected: "指定插件代理", legacy: "旧代理配置" }[mode] || "未确认" },
     routeName(route) { return { forced_proxy: "强制代理", explicit_proxy: "显式代理", legacy_proxy: "旧代理", direct: "直连", local_direct: "本地直连", proxy_error: "代理失败" }[route] || route },
     errorText(code) { return errors[code] || code || "请求失败" },
@@ -115,8 +123,7 @@ export default {
       this.saved = data.saved
       this.runtime = data.runtime || {}
       this.draft = { ...newDraft(), ...Object.fromEntries(["url", "plugins", "core_enabled"].map((key) => [key, data.saved[key] ?? newDraft()[key]])), mode: data.saved.mode === "legacy" ? "disabled" : data.saved.mode, bypassText: (data.saved.bypass || []).join("\n") }
-      this.baseline = JSON.stringify(this.draft)
-      if (data.saved.mode === "legacy") this.baseline = JSON.stringify({ ...this.draft, mode: "legacy" })
+      this.baseline = this.normalizeDraft(this.draft)
       this.error = data.saved.error_code ? this.errorText(data.saved.error_code) : ""
     },
     async load() {

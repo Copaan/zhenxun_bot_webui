@@ -185,6 +185,15 @@
     <!-- 底部操作区 -->
     <div class="dialog-footer">
       <div class="action-buttons">
+        <button
+          v-if="canUninstall"
+          class="cancel-button uninstall-button"
+          @click="requestUninstall"
+        >
+          <i class="el-icon-delete"></i>
+          <span>{{ updateData.management_source === "nonebot_store" ? "前往卸载" : "卸载插件" }}</span>
+        </button>
+        <span v-else-if="updateData.uninstall_reason">{{ updateData.uninstall_reason }}</span>
         <button class="cancel-button" @click="close">
           <i class="el-icon-close"></i>
           <span>取消</span>
@@ -283,6 +292,13 @@ export default {
       },
     },
   },
+  computed: {
+    canUninstall() {
+      return ["zhenxun_store", "nonebot_store", "local_archive"].includes(
+        this.updateData.management_source
+      ) && this.updateData.uninstall_supported && !this.updateData.is_builtin
+    },
+  },
   methods: {
     summary: valueSummary,
     formatDefault(value) { return value === undefined ? "未设置" : JSON.stringify(value, null, 2) },
@@ -290,6 +306,12 @@ export default {
     async close() {
       if (!(await this.confirmDiscard())) return
       clearDirtyState(this.dirtySource)
+      this.$emit("close")
+    },
+    async requestUninstall() {
+      if (!(await this.confirmDiscard())) return
+      clearDirtyState(this.dirtySource)
+      this.$emit("uninstall", this.updateData)
       this.$emit("close")
     },
     async confirmDiscard() {

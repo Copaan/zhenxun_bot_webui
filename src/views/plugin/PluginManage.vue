@@ -53,6 +53,8 @@
     <PluginArchiveDialog
       v-if="showArchiveDialog"
       :visible="showArchiveDialog"
+      :initial-store-key="$route.query.archive_store_key || ''"
+      :initial-action="$route.query.archive_action || ''"
       @close="showArchiveDialog = false"
       @changed="archiveChanged"
     />

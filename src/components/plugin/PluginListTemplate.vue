@@ -114,6 +114,15 @@
               @click="goToManagement(data)"
             />
             <NormalButton
+              v-else-if="data.management_source === 'local_archive'"
+              iconClass="store"
+              text="归档"
+              title="前往归档管理或卸载"
+              base-class="hover:scale-110"
+              active-class="bg-blue-100 text-blue-600 hover:bg-blue-200 hover:text-blue-800"
+              @click="goToManagement(data)"
+            />
+            <NormalButton
               v-else
               text="卸载"
               :iconClass="
@@ -138,6 +147,7 @@
       v-if="dialogVisible"
       :module="pluginModule"
       @close="closeSetting"
+      @uninstall="handleDetailUninstall"
     />
     <el-drawer
       :visible.sync="usageVisible"
@@ -157,18 +167,27 @@
         >打开插件主页</el-button>
       </div>
     </el-drawer>
+    <PluginArchiveDialog
+      v-if="archiveUninstallKey"
+      :visible="true"
+      :initial-store-key="archiveUninstallKey"
+      initial-action="uninstall"
+      @close="archiveUninstallKey = ''"
+      @changed="getPluginList"
+    />
   </div>
 </template>
 
 <script>
 import UpdateDialog from "./UpdateDialog"
+import PluginArchiveDialog from "./PluginArchiveDialog.vue"
 import NormalButton from "@/components/ui/NormalButton.vue"
 import MySwitch from "@/components/ui/MySwitch.vue"
 
 export default {
   name: "PluginListTemplate",
   props: { pluginType: String, menuType: String },
-  components: { UpdateDialog, NormalButton, MySwitch },
+  components: { UpdateDialog, PluginArchiveDialog, NormalButton, MySwitch },
   data() {
     return {
       dataList: [],
@@ -177,6 +196,7 @@ export default {
       selectedPlugins: [],
       usageVisible: false,
       usagePlugin: null,
+      archiveUninstallKey: "",
     }
   },
   computed: {
@@ -263,6 +283,25 @@ export default {
     closeSetting(isRefresh) {
       this.dialogVisible = false
       if (isRefresh) this.getPluginList()
+    },
+    handleDetailUninstall(data) {
+      this.dialogVisible = false
+      if (data.management_source === "zhenxun_store") {
+        return this.uninstallPlugin(data)
+      }
+      if (data.management_source === "nonebot_store") {
+        const project = String(data.management_key || "").replace(/^nonebot:/, "")
+        if (!project) return this.$message.error("未找到 NoneBot 商店项目标识")
+        return this.$router.push({
+          path: "/store",
+          query: { source: "nonebot", search: project, action: "uninstall" },
+        }).catch(() => {})
+      }
+      if (data.management_source === "local_archive") {
+        this.archiveUninstallKey = data.management_key || data.store_key || ""
+        return
+      }
+      return null
     },
     async uninstallPlugin(data) {
       const result = await this.$cuteConfirm({

@@ -4,7 +4,7 @@ import { clearAuthToken, hasValidAuthToken } from "@/utils/auth-token"
 import { MessageBox } from "element-ui"
 import Login from "@/views/Login"
 import Home from "@/views/Home"
-import { clearAllDirtyStates, hasDirtyState } from "@/utils/dirty-state"
+import { clearDirtyStatesFor, hasDirtyState } from "@/utils/dirty-state"
 
 const MyApi = () => import(/* webpackChunkName: "address" */ "@/views/MyApi")
 const PluginManage = () =>
@@ -144,7 +144,7 @@ router.beforeEach(async (to, from, next) => {
   const isAuthenticated = window.sessionStorage.getItem("isAuthenticated")
   const hasToken = hasValidAuthToken()
 
-  if (to.path !== from.path && hasDirtyState()) {
+  if (to.path !== from.path && hasDirtyState(from.path)) {
     try {
       await MessageBox.confirm(
         "当前页面有尚未保存的修改，离开后这些修改会丢失。",
@@ -155,7 +155,7 @@ router.beforeEach(async (to, from, next) => {
           type: "warning",
         }
       )
-      clearAllDirtyStates()
+      clearDirtyStatesFor(from.path)
     } catch (error) {
       next(false)
       return

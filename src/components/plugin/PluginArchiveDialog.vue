@@ -195,7 +195,11 @@ const errors = {
 
 export default {
   name: "PluginArchiveDialog",
-  props: { visible: Boolean },
+  props: {
+    visible: Boolean,
+    initialStoreKey: { type: String, default: "" },
+    initialAction: { type: String, default: "" },
+  },
   data() {
     return {
       file: null, preflight: null, busy: false, progress: null, sourceBuildTrusted: false, sequence: 0,
@@ -326,10 +330,21 @@ export default {
       } finally { this.busy = false }
     },
     async refresh() {
-      try { this.installed = this.check(await getRequest(`${this.base}/installed`)) }
+      try {
+        this.installed = this.check(await getRequest(`${this.base}/installed`))
+        if (this.initialAction === "uninstall" && this.initialStoreKey && !this.actionIds.__initial) {
+          const item = this.installed.find((entry) => entry.store_key === this.initialStoreKey)
+          this.actionIds.__initial = true
+          if (item) await this.manage(item, "uninstall")
+        }
+      }
       catch (error) { this.fail(error) }
     },
     async manage(item, action) {
+      if (this.busy || item.pending || !item.current_digest) {
+        this.error = item.pending ? "该插件已有待生效事务，请先处理原事务。" : "插件文件缺失，请重新核对安装记录。"
+        return
+      }
       try {
         await this.$confirm(`确认${action === "load" ? "加载" : "卸载"}插件 ${item.module}？操作将在下次重启后生效。`, "确认外部插件操作", { type: "warning", confirmButtonText: "确认", cancelButtonText: "取消" })
       } catch (_) { return }

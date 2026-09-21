@@ -182,6 +182,7 @@
                 <code>{{ reason.code }}</code>
                 <strong>{{ reasonLabel(reason) }}</strong>
                 <span v-if="reasonDetail(reason)">{{ reasonDetail(reason) }}</span>
+                <span v-if="archiveConflictDetail(reason)" class="archive-diagnostic">{{ archiveConflictDetail(reason) }}</span>
                 <div v-if="Array.isArray(reason.details) && reason.details.length" class="drift-list">
                   <div v-for="item in reason.details" :key="`${reason.code}-${item.name}`" class="dependency-change">
                     <code>{{ item.name }}</code><span>{{ driftDescription(item) }}</span>
@@ -262,6 +263,14 @@
           <p>Python {{ detail.pypi.requires_python || "未限定" }} · Registry 版本 {{ detail.version }}</p>
           <h3>适配器</h3><p>{{ adapterLabel(detail) }}</p>
           <h3>配置说明</h3><p>NoneBot 插件不使用真寻 Schema 配置；插件所需环境项请按官方文档在高级配置中填写。</p>
+          <el-button
+            v-if="detail.uninstall_capability && detail.uninstall_capability.mode === 'analysis_required'"
+            type="danger"
+            plain
+            icon="el-icon-delete"
+            @click="startAnalysis('uninstall', detail)"
+          >卸载插件</el-button>
+          <p v-else-if="detail.install_state === 'external'" class="muted">该插件由其他安装来源管理，不能从 NoneBot 商店接管卸载。</p>
           <el-button v-if="detail.homepage" type="primary" plain icon="el-icon-link" @click="openHomepage(detail.homepage)">打开官方文档</el-button>
         </template>
       </div>
@@ -272,6 +281,7 @@
 <script>
 import { notifyRestartStatusChanged } from "@/utils/apply-result"
 import { startRestartRecovery } from "@/utils/restart-recovery"
+import { apiErrorDetail } from "@/utils/api-error"
 
 const reasonLabels = {
   registry_module_invalid: "Registry 中的模块名不是有效的 Python 导入路径。",
@@ -290,6 +300,9 @@ const reasonLabels = {
   project_dependency_conflict: "插件依赖超出真寻声明的兼容范围。",
   project_lock_stale: "pyproject.toml与uv.lock不一致，请先更新锁文件。",
   source_build_required: "缺少兼容 Wheel，需要确认源码构建并重启。",
+  archive_source_build_transaction_conflict: "归档依赖的源码构建授权或环境修订已失效。",
+  archive_dependency_conflict: "归档依赖与当前安装事务存在冲突。",
+  archive_dependency_receipt_invalid: "归档安装收据无效，需要重新解析。",
   dependency_resolution_failed: "依赖求解失败，无法生成一致的安装方案。",
   external_install_not_managed: "同名包由 WebUI 外部安装，不能自动接管。",
   plugin_not_managed: "该插件不由 WebUI 管理。",
@@ -315,7 +328,7 @@ export default {
       confirmCode: false, confirmChanges: false, confirmSource: false, confirmCompatibility: false, confirmMigration: false,
       detailVisible: false, detailLoading: false, detail: null,
       environment: null, repairing: false,
-      pluginLoadInFlight: false, queuedPluginLoad: null, componentDestroyed: false,
+      pluginLoadInFlight: false, queuedPluginLoad: null, componentDestroyed: false, routeActionConsumed: false,
     }
   },
   computed: {
@@ -400,6 +413,28 @@ export default {
     },
     reasonLabel(reason) { return reasonLabels[reason?.code] || reason?.message || reason?.code || "当前环境不兼容" },
     reasonDetail(reason) { const label = reasonLabels[reason?.code]; return label && reason?.message && reason.message !== label ? reason.message : "" },
+    archiveConflictDetail(reason) {
+      if (![
+        "archive_source_build_transaction_conflict",
+        "archive_dependency_conflict",
+        "archive_dependency_receipt_invalid",
+      ].includes(reason?.code) || !reason.details) return ""
+      const details = reason.details
+      const owners = Array.isArray(details.archive_owners) ? details.archive_owners.join("、") : "未知"
+      const packages = Array.isArray(details.packages) ? details.packages.join("、") : "未知"
+      const revisions = Array.isArray(details.source_revisions) ? details.source_revisions.join("、") : "未知"
+      const revisionText = revisions === "未知" ? "请重新解析归档依赖" : `源码修订：${revisions}`
+      return `阻断归档：${owners}；交集包：${packages}；${revisionText}`
+    },
+    operationError(error, fallback) {
+      const detail = error?.response?.data?.detail
+      if (detail && typeof detail === "object" && detail.details) {
+        const owners = Array.isArray(detail.details.archive_owners) ? detail.details.archive_owners.join("、") : "未知"
+        const packages = Array.isArray(detail.details.packages) ? detail.details.packages.join("、") : "未知"
+        return `${apiErrorDetail(error, fallback)}\n归档：${owners}\n依赖包：${packages}`
+      }
+      return apiErrorDetail(error, fallback)
+    },
     driftDescription(item) {
       if (item.kind === "constraint_conflict") return `插件要求 ${item.expected || item.requirement || "-"} · 当前 ${item.actual || "未安装"}`
       const relation = { missing: "缺失", older: "版本偏低", newer: "版本偏高", version_mismatch: "版本不一致" }[item.kind] || "不一致"
@@ -438,6 +473,7 @@ export default {
             if (!response.suc) throw new Error(response.info || "NoneBot Registry 加载失败")
             this.plugins = response.data.items || []; this.total = Number(response.data.total || 0); this.registryMeta = response.data.registry || {}
             this.enabledAdapters = response.data.enabled_adapters || []
+            this.consumeRouteAction()
           } catch (error) {
             if (this.componentDestroyed) return
             if (this.queuedPluginLoad) continue
@@ -448,6 +484,18 @@ export default {
         this.pluginLoadInFlight = false
         if (!this.componentDestroyed) this.loading = false
       }
+    },
+    consumeRouteAction() {
+      if (this.routeActionConsumed || this.$route.query.action !== "uninstall") return
+      const target = String(this.$route.query.search || "").trim().toLowerCase()
+      const plugin = this.plugins.find((item) => String(item.project_link || "").toLowerCase() === target || String(item.module_name || item.module || "").toLowerCase() === target)
+      if (!plugin) return
+      this.routeActionConsumed = true
+      if (plugin.install_state === "external") {
+        this.$message.warning("该插件由其他安装来源管理，请在对应来源中卸载。")
+        return
+      }
+      this.startAnalysis("uninstall", plugin)
     },
     async openDetail(plugin) {
       this.detail = null; this.detailVisible = true; this.detailLoading = true
@@ -572,7 +620,10 @@ export default {
           confirm_compatibility_overrides: this.confirmCompatibility,
           confirm_database_migration: this.confirmMigration,
         })
-        if (!response.suc) throw new Error(response.info || `${labels[action]}失败`)
+        if (!response.suc) {
+          const reason = { code: response.info, details: response.details }
+          throw new Error([this.reasonLabel(reason), this.archiveConflictDetail(reason), response.details ? '请重新解析归档依赖，核对上述收据后重试。' : ''].filter(Boolean).join('\n'))
+        }
         const mode = response.data.apply_mode
         const pending = mode === "restart_pending"
         const resultMessages = {
@@ -588,7 +639,7 @@ export default {
         })
         notifyRestartStatusChanged(); sessionStorage.removeItem("zhenxun_nonebot_analysis"); this.analysisVisible = false; await this.loadPlugins(false)
       } catch (error) {
-        this.$store.commit("FINISH_PLUGIN_OPERATION", { status: "error", title: `插件${labels[action]}失败`, message: error.response?.data?.detail || error.message || "操作失败" })
+        this.$store.commit("FINISH_PLUGIN_OPERATION", { status: "error", title: `插件${labels[action]}失败`, message: this.operationError(error, "操作失败") })
       } finally { this.applying = false }
     },
   },
