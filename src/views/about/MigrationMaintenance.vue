@@ -15,6 +15,17 @@
         <div class="task-heading"><h3>{{ job.action === 'restore' ? '完整替换迁移' : '导出实例' }}</h3><el-tag>{{ stage(job.stage) }}</el-tag></div>
         <code>{{ job.id }}</code>
         <p v-if="job.first_error" class="error-text">首次错误：{{ job.first_error }}</p>
+        <details v-if="job.shutdown_diagnostic && job.shutdown_diagnostic.result !== 'confirmed'">
+          <summary>查看关闭阻塞原因</summary>
+          <p v-for="item in (job.shutdown_diagnostic.failed_components || [])" :key="item.component_id">
+            {{ item.component_id }}：{{ item.error_code }}
+            <small v-if="item.diagnostic && item.diagnostic.diagnostic_id">（{{ item.diagnostic.diagnostic_id }}）</small>
+            <span v-for="(stage, index) in ((item.diagnostic && item.diagnostic.stages) || [])" :key="index"> · {{ stage.stage }}：{{ stage.error_code }}</span>
+          </p>
+          <p v-if="job.shutdown_diagnostic.forced">进程曾被强制终止，未生成迁移快照。</p>
+          <p v-if="job.progress && job.progress.export_recovered">已结束失败任务，允许原实例重新启动。</p>
+          <p v-else>关闭尚未确认，迁移快照未开始。</p>
+        </details>
         <p v-if="job.rollback_error" class="error-text">回滚错误：{{ job.rollback_error }}</p>
         <p v-if="job.progress && job.progress.last_recovery_error" class="error-text">最近一次恢复核验：{{ job.progress.last_recovery_error }}</p>
         <p v-if="job.cancel_requested">取消已请求，等待实际清理结果。</p>

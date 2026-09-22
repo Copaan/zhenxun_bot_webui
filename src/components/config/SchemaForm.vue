@@ -1,5 +1,5 @@
 <template>
-  <div class="schema-form">
+  <div class="schema-form" :class="{ 'settings-form': presentation === 'settings' }">
     <el-input v-if="searchable" v-model="search" clearable prefix-icon="el-icon-search" placeholder="搜索字段、说明或嵌套路径" />
     <section v-for="section in sections" :key="section.name || 'default'" class="schema-section">
       <button v-if="section.name" type="button" class="schema-section-heading" :aria-expanded="sectionOpen(section)" @click="$set(collapsed, section.name, !collapsed[section.name])"><i :class="sectionOpen(section) ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i> {{ section.name }} · {{ section.fields.length }} 项</button>
@@ -7,6 +7,7 @@
         <SchemaField
           v-for="field in section.fields"
           :key="field.key"
+          :presentation="presentation"
           :class="{ wide: wideField(field.schema) }"
           :value="formValue[field.key]"
           :schema="field.schema"
@@ -27,6 +28,7 @@
           <SchemaField
             v-for="field in advancedFields"
             :key="field.key"
+            :presentation="presentation"
             :class="{ wide: wideField(field.schema) }"
             :value="formValue[field.key]"
             :schema="field.schema"
@@ -53,6 +55,7 @@ export default {
   name: "SchemaForm",
   components: { SchemaField },
   props: {
+    presentation: { type: String, default: 'form' },
     query: { type: String, default: "" }, searchable: { type: Boolean, default: true },
     value: { type: Object, default: () => ({}) }, schema: { type: Object, default: () => ({}) }, rootSchema: { type: Object, default: null },
     labels: { type: Object, default: () => ({}) }, fieldUi: { type: Object, default: () => ({}) }, issues: { type: Array, default: () => [] },
@@ -122,4 +125,7 @@ export default {
 
 <style scoped>
 .schema-form { display: flex; flex-direction: column; gap: 20px; }.schema-section-heading { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color-light); color: var(--text-color); font-size: 14px; font-weight: 600; }.schema-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }.schema-grid .wide { grid-column: 1 / -1; }.advanced-fields { border-bottom: 0; }@media (max-width: 720px) { .schema-grid { grid-template-columns: 1fr; }.schema-grid .wide { grid-column: auto; } }
+</style>
+<style scoped>
+.settings-form .schema-grid { grid-template-columns:minmax(0,1fr); gap:0; }.settings-form { gap:0; }
 </style>

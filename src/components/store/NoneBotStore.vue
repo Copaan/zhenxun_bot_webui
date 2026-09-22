@@ -198,10 +198,11 @@
               </section>
 
               <section class="analysis-section">
-                <h3>插件私有依赖</h3>
-                <div v-if="!allChanges.length" class="muted">不会增加或修改 Python 包。</div>
+                <h3>插件与依赖变更</h3>
+                <p class="dependency-note">优先保留现有版本，仅调整本次插件所需依赖；已有待应用变更会单独标注。</p>
+                <div v-if="!allChanges.length" class="muted">{{ sharedChanges.length ? "仅有下方共享依赖变更。" : "不会增加或修改 Python 包。" }}</div>
                 <div v-for="item in allChanges" :key="`${item.kind}-${item.name}`" class="dependency-change">
-                  <code>{{ item.name }}</code>
+                  <div><code>{{ item.name }}</code><div class="dependency-note">{{ dependencySource(item.name) }}</div></div>
                   <span v-if="item.kind === 'added'">新增 {{ item.version }}</span>
                   <span v-else-if="item.kind === 'changed'">{{ item.from }} → {{ item.to }}</span>
                   <span v-else>移除插件包 {{ item.version }}</span>
@@ -213,7 +214,7 @@
                 <h3>共享依赖变化</h3>
                 <p>这些包会影响整个真寻进程，只能在重启并完成启动验证后生效。</p>
                 <div v-for="item in sharedChanges" :key="`shared-${item.name}`" class="dependency-change">
-                  <code>{{ item.name }}</code><span>{{ item.from || "缺失" }} → {{ item.to }}</span>
+                  <div><code>{{ item.name }}</code><div class="dependency-note">{{ dependencySource(item.name) }}</div></div><span>{{ item.from || "缺失" }} → {{ item.to }}</span>
                 </div>
               </section>
 
@@ -293,7 +294,7 @@ const reasonLabels = {
   nonebot2_version_incompatible: "插件要求的 NoneBot 2 版本与当前环境冲突。",
   pydantic_version_incompatible: "插件要求的 Pydantic 版本与当前环境冲突。",
   core_dependency_conflict: "安装会改变真寻核心依赖，已阻止操作。",
-  third_party_dependency_conflict: "该插件与已托管的其他 NoneBot 插件依赖冲突。",
+  third_party_dependency_conflict: "该插件与现有依赖约束冲突，未放宽或升级无关包。",
   plugin_dependency_invalid: "插件自身的依赖声明无法得到一致解。",
   environment_drift: "当前运行环境与 uv.lock 不一致，请先同步项目依赖。",
   interpreter_mismatch: "当前worker不是由项目.venv启动，请使用uv run zx。",
@@ -304,6 +305,13 @@ const reasonLabels = {
   archive_dependency_conflict: "归档依赖与当前安装事务存在冲突。",
   archive_dependency_receipt_invalid: "归档安装收据无效，需要重新解析。",
   dependency_resolution_failed: "依赖求解失败，无法生成一致的安装方案。",
+  dependency_network: "无法连接依赖索引，请检查网络与代理后重新分析。",
+  dependency_proxy_auth: "代理认证失败，请检查代理凭据后重新分析。",
+  dependency_index_auth: "依赖索引认证失败，请检查索引访问权限。",
+  dependency_tls: "依赖索引 TLS 校验失败，请检查证书与代理设置。",
+  dependency_python: "依赖不支持当前 Python 版本。",
+  dependency_disk_full: "依赖解析所需磁盘空间不足。",
+  dependency_resolver_configuration: "依赖解析器参数配置异常，未执行版本放宽。",
   external_install_not_managed: "同名包由 WebUI 外部安装，不能自动接管。",
   plugin_not_managed: "该插件不由 WebUI 管理。",
   plugin_configuration_required: "插件缺少启动所需配置，已恢复原运行版本。",
@@ -358,11 +366,12 @@ export default {
     allChanges() {
       const changes = this.analysis?.plan?.package_changes
       if (!changes) return []
+      const shared = new Set(this.sharedChanges.map((item) => item.name))
       return [
         ...(changes.added || []).map((item) => ({ ...item, kind: "added" })),
         ...(changes.changed || []).map((item) => ({ ...item, kind: "changed" })),
         ...(changes.removed || []).map((item) => ({ ...item, kind: "removed" })),
-      ]
+      ].filter((item) => !shared.has(item.name))
     },
     canApply() {
       if (!this.confirmCode || this.applying) return false
@@ -386,6 +395,13 @@ export default {
   mounted() { this.loadEnvironment(); this.loadPlugins(false); this.restoreAnalysis() },
   beforeDestroy() { this.componentDestroyed = true; this.queuedPluginLoad = null; clearTimeout(this.searchTimer); clearTimeout(this.analysisTimer) },
   methods: {
+    dependencySource(name) {
+      const source = this.analysis?.plan?.change_sources?.[name]
+      if (source?.kind === "requested_plugin") return "本次选择的插件"
+      if (source?.kind === "candidate_dependency") return `依赖来源：${source.required_by}`
+      if (source?.kind === "pending_transaction") return "已有待应用事务"
+      return this.analysis?.action === "uninstall" ? "本次卸载" : "依赖变更"
+    },
     newOperationId() {
       const bytes = new Uint8Array(16)
       window.crypto.getRandomValues(bytes)

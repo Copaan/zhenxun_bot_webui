@@ -1,0 +1,92 @@
+[
+  {
+    "page": "env",
+    "initial": {
+      "errors": [],
+      "dirty": 0
+    }
+  },
+  {
+    "page": "env",
+    "width": 360,
+    "overflow": false
+  },
+  {
+    "page": "env",
+    "width": 768,
+    "overflow": false
+  },
+  {
+    "page": "env",
+    "width": 1280,
+    "overflow": false
+  },
+  {
+    "page": "env",
+    "width": 1920,
+    "overflow": false
+  },
+  {
+    "page": "env",
+    "css_zoom": 1.25,
+    "overflow": false
+  },
+  {
+    "page": "env",
+    "css_zoom": 1.5,
+    "overflow": false
+  },
+  {
+    "page": "ai",
+    "initial": {
+      "errors": [],
+      "dirty": 0
+    }
+  },
+  {
+    "page": "ai",
+    "width": 360,
+    "overflow": false
+  },
+  {
+    "page": "ai",
+    "width": 768,
+    "overflow": false
+  },
+  {
+    "page": "ai",
+    "width": 1280,
+    "overflow": false
+  },
+  {
+    "page": "ai",
+    "width": 1920,
+    "overflow": false
+  },
+  {
+    "page": "ai",
+    "css_zoom": 1.25,
+    "overflow": false
+  },
+  {
+    "page": "ai",
+    "css_zoom": 1.5,
+    "overflow": false
+  },
+  {
+    "checks": "switch, unset/default distinction, nullable no coercion, category persistence, dialog cancel/apply, unknown keys",
+    "passed": true
+  },
+  {
+    "checks": "literal-dot unknown key preservation",
+    "passed": true
+  },
+  {
+    "checks": "cross-category validation, error focus, revision conflict preserves draft, save, enum, unknown keys",
+    "passed": true
+  },
+  {
+    "checks": "search does not open dialogs, environment save and revision conflict",
+    "passed": true
+  }
+]

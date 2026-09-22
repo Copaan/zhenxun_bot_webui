@@ -1,5 +1,6 @@
 <template>
-  <div v-show="matchesSearch || hasIssue || localError" class="schema-field" :class="{ nested: depth > 0 }" :data-field-path="path">
+  <SettingsField v-if="presentation === 'settings'" v-bind="$props" :readonly="readonlyReason" @input="$emit('input', $event)" @validity="$emit('validity', $event)"><template #meta><slot name="meta" /></template><template #details><slot name="details" /></template><template #status><slot name="status" /></template></SettingsField>
+  <div v-else v-show="matchesSearch || hasIssue || localError" class="schema-field" :class="{ nested: depth > 0 }" :data-field-path="path">
     <div class="field-label"><strong>{{ label }}</strong><span>{{ description }}</span></div>
     <div class="field-overview">
       <button v-if="complex && value != null" type="button" class="structure-toggle" :aria-expanded="structureOpen" @click="expanded = !expanded"><i :class="structureOpen ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i> {{ summary }}</button>
@@ -59,10 +60,13 @@
 
 <script>
 import { valueType, resolveReference, matchesSchema, emptyValue, valueSummary, fieldMatches, validateField } from "./schema-utils"
+import SettingsField from "./SettingsField.vue"
 
 export default {
   name: "SchemaField",
+  components: { SettingsField },
   props: {
+    presentation: { type: String, default: 'form' }, readonlyReason: { type: String, default: '' },
     query: { type: String, default: "" },
     value: { default: undefined }, schema: { type: Object, default: () => ({}) }, rootSchema: { type: Object, default: () => ({}) },
     label: { type: String, default: "" }, path: { type: String, default: "" }, depth: { type: Number, default: 0 }, ui: { type: Object, default: () => ({}) }, issues: { type: Array, default: () => [] }, required: Boolean,

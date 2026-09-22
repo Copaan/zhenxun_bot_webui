@@ -8,42 +8,30 @@
       <el-button icon="el-icon-refresh" :disabled="Boolean(saving)" @click="reloadSummary">重新加载</el-button>
     </div>
 
-    <NetworkStatus :status="networkStatus" />
-    <div class="action-bar network-action-bar">
-      <span>本体受管网络代理由独立策略管理，不影响系统代理或第三方自建客户端。</span>
-      <el-button icon="el-icon-connection" @click="$router.push('/network-proxy', () => {}, (error) => $message.error(error.message))">网络代理设置</el-button>
+    <div class="configuration-connection">
+      <details><summary><i class="el-icon-connection"></i> 网络入口<span v-if="networkStatus.network_runtime"> · {{ (networkStatus.network_runtime.scheme || '待确认').toUpperCase() }}</span><span v-if="networkStatus.network_configured && networkStatus.network_configured.pending_restart"> · 待重启</span><span v-if="networkStatus.network_runtime && networkStatus.network_runtime.http_state === 'degraded'"> · 入口降级</span></summary><NetworkStatus :status="networkStatus" /></details>
+      <el-button type="text" icon="el-icon-position" @click="$router.push('/network-proxy', () => {}, (error) => $message.error(error.message))">网络代理设置</el-button>
     </div>
     <el-tabs v-model="section">
       <el-tab-pane label="环境配置" name="env">
-        <el-form label-position="top" class="env-form">
-          <p>配置来源：{{ envSourceFile }}</p>
-          <el-input v-model="envSearch" clearable prefix-icon="el-icon-search" placeholder="搜索环境字段、说明或嵌套路径" />
-          <div class="env-descriptor-grid">
-          <section v-for="field in envDescriptors" v-show="envMatches(field)" :key="field.key" class="env-field-group" :class="{ wide: complexField(field.schema, envFields[field.key]) }">
-            <div class="env-field-header">
-              <div class="env-field-title"><strong>{{ envLabel(field) }}</strong><code>{{ field.key }}</code><p>{{ envHelp(field) }}</p></div>
-              <div class="env-field-meta"><el-tag size="mini" :type="effectMeta(field.apply_effect).type">{{ effectMeta(field.apply_effect).label }}</el-tag><el-button v-if="field.configured && !field.sensitive" type="text" size="mini" icon="el-icon-refresh-left" @click="unsetEnvField(field.key)">恢复未设置</el-button></div>
-            </div>
-            <div class="env-field-editor">
-              <p v-if="field.readonly_reason" class="inline-error">{{ field.readonly_reason }}</p>
-              <SchemaField v-else-if="!field.sensitive" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema"  :label="envLabel(field)" :path="field.key" :query="envSearch" :issues="envIssues" @input="setEnvField(field.key, $event)" />
-              <p v-else class="sensitive-config-line"><i class="el-icon-lock"></i>{{ field.configured ? '已配置，敏感值不会回传' : '未配置，请在原文或对应专用页面修改。' }}</p>
-            </div>
-            <div v-if="!field.sensitive" class="runtime-value">
-              <span class="runtime-value-label">当前运行值</span>
-              <code>{{ formatRuntimeValue(field.effective_value) }}</code>
-              <small v-if="field.configured && JSON.stringify(field.effective_value) !== JSON.stringify(envFields[field.key])">配置值尚未生效，{{ effectMeta(field.apply_effect).label }}。</small>
-            </div>
-            <p v-if="field.overridden" class="override-note"><i class="el-icon-warning-outline"></i>由外部环境变量覆盖，修改文件不会覆盖启动进程的环境变量。</p>
+        <p class="environment-source">配置来源 <code>{{ envSourceFile }}</code> · 运行值由后端提供，只读展示</p>
+        <SettingsLayout v-model="envCategory" :query="envSearch" :groups="envCategories" @search="envSearch = $event">
+          <section v-for="group in envCategories.filter(item => item.key !== 'custom')" v-show="envSearch.trim() ? group.count > 0 : envCategory === group.key" :key="group.key">
+            <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-tag size="mini" type="info">{{ group.count }} 项</el-tag></header>
+            <div v-if="!group.fields.length" class="category-empty">此分类暂无配置项</div>
+            <SchemaField v-for="field in group.fields" v-show="envMatches(field)" :key="field.key" presentation="settings" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema" :label="envLabel(field)" :path="field.key" :ui="envFieldUi(field)" :query="envSearch" :readonly-reason="field.readonly_reason || (field.sensitive ? (field.configured ? '已配置 · 敏感值不会回传' : '未配置 · 请在原文或专用页面修改') : '')" :issues="envIssues" @input="setEnvField(field.key, $event)">
+              <template #meta><div v-if="envFieldChanged(field.key)" class="field-effect changed-indicator">未保存修改</div></template>
+              <template #details><div>生效方式：{{ effectMeta(field.apply_effect).label }}</div><div v-if="field.schema_sources && field.schema_sources.length">来源：{{ envFieldSource(field) }}</div></template>
+              <template #status><div v-if="!field.sensitive" class="setting-runtime"><span>当前运行</span><code>{{ formatRuntimeValue(field.effective_value) }}</code></div><p v-if="field.overridden" class="setting-status-note">由外部环境变量覆盖，文件修改不会覆盖进程环境。</p><p v-else-if="envPending(field)" class="setting-status-note">已保存，尚未生效 · {{ effectMeta(field.apply_effect).label }}</p></template>
+            </SchemaField>
           </section>
-          </div>
-          <section class="env-field-group custom-env-section">
-            <header class="custom-env-heading">
+          <section v-show="envSearch.trim() ? customSearchCount > 0 : envCategory === 'custom'" class="custom-env-section">
+            <header class="settings-group-heading">
               <div><h3>自定义环境变量</h3><p>用于第三方插件或外部服务。未知变量保存后需要重启生效。</p></div>
               <el-button size="small" icon="el-icon-plus" @click="addCustomEnv">添加变量</el-button>
             </header>
             <div v-if="customEnv.length" class="custom-env-list">
-              <div v-for="(item, index) in customEnv" :key="item.clientId" class="custom-env-row" :class="{ deleted: item.deleted }">
+              <div v-for="(item, index) in customEnv" :key="item.clientId" v-show="customMatches(item)" class="custom-env-row" :class="{ deleted: item.deleted }">
                 <el-input v-model="item.key" placeholder="变量名称" :disabled="!item.isNew || item.deleted" @input="markEnvDirty" />
                 <el-input v-if="!item.sensitive || item.replacing || item.isNew" v-model="item.value" :type="item.sensitive ? 'password' : 'text'" :show-password="item.sensitive" placeholder="变量值" :disabled="item.deleted" @input="markEnvDirty" />
                 <div v-else class="secret-configured"><i class="el-icon-lock"></i><span>已配置，值不会回传</span></div>
@@ -56,11 +44,8 @@
             <div v-else class="custom-env-empty">尚未配置自定义环境变量</div>
             <div v-if="customEnvError" class="inline-error">{{ customEnvError }}</div>
           </section>
-        </el-form>
-        <div class="action-bar">
-          <span>{{ envSaveHint }}</span>
-          <el-button type="primary" :loading="saving === 'env'" @click="saveEnv">保存环境配置</el-button>
-        </div>
+          <template #footer><div class="save-description"><strong>{{ envChangeCount ? envChangeCount + ' 项未保存修改' : '所有更改已保存' }}</strong>{{ envSaveHint }}</div><el-button :disabled="!envChangeCount || Boolean(saving)" @click="resetEnvironment">撤销修改</el-button><el-button type="primary" :disabled="!envChangeCount || Boolean(customEnvError)" :loading="saving === 'env'" @click="saveEnv">保存环境配置</el-button></template>
+        </SettingsLayout>
       </el-tab-pane>
 
       <el-tab-pane label="插件配置" name="simple">
@@ -135,6 +120,8 @@
 </template>
 
 <script>
+import SettingsLayout from "@/components/config/SettingsLayout.vue"
+import { environmentCategories } from "@/components/config/settings-ui"
 import SchemaForm from "@/components/config/SchemaForm.vue"
 import SchemaField from "@/components/config/SchemaField.vue"
 import { fieldMatches, resolveReference, valueType, validateField } from "@/components/config/schema-utils"
@@ -145,10 +132,10 @@ import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 
 export default {
   name: "ConfigurationCenter",
-  components: { SchemaForm, SchemaField, NetworkStatus },
+  components: { SchemaForm, SchemaField, NetworkStatus, SettingsLayout },
   data() {
     return {
-      networkStatus: {}, rawLoading: false, envSearch: "", envIssues: [],
+      envCategory: "access", networkStatus: {}, rawLoading: false, envSearch: "", envIssues: [],
       loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", envFieldEffects: {}, customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], simpleChanges: {}, groupSearch: "", selectedGroup: "", launcherManaged: false,
       rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalidPaths: [], pluginIssues: [], orphanPanel: [], selectedOrphan: "",
       envFieldDefinitions: [
@@ -174,12 +161,9 @@ export default {
     }
   },
   computed: {
-    envFieldGroups() {
-      return [
-        { title: "WebUI 访问与 HTTPS", description: "配置HTTPS主入口及独立的HTTP兼容访问模式。", fields: this.envFieldDefinitions.slice(0, 7) },
-        { title: "机器人运行环境", description: "配置日志、代理、昵称、权限和插件加载路径。", fields: this.envFieldDefinitions.slice(7) },
-      ]
-    },
+    envCategories() { return environmentCategories(this.envDescriptors, this.envMatches, this.envFieldSource, this.customSearchCount) },
+    customSearchCount() { return this.customEnv.filter(this.customMatches).length },
+    envChangeCount() { return Object.keys(this.changedEnvFields()).length + this.unsetEnvFields().length + this.customEnv.filter(item => item.isNew || item.deleted || item.replacing || this.originalCustomEnv.find(old => old.key === item.key)?.value !== item.value).length },
     customOperations() {
       const original = new Map(this.originalCustomEnv.map((item) => [item.key, item]))
       const operations = []
@@ -228,6 +212,13 @@ export default {
   mounted() { this.loadSummary() },
   beforeDestroy() { clearDirtyState("plugin-configuration"); clearDirtyState("environment-configuration"); clearDirtyState("raw-configuration") },
   methods: {
+    envFieldUi(field) { return { ...this.envMeta(field), description: this.envHelp(field), secret: field.sensitive } },
+    envFieldSource(field) { return (field.schema_sources || []).map(item => typeof item === 'string' ? item : item.source || item.model || item.module || '注册模型').join('、') || '配置模型' },
+    envFieldChanged(key) { return JSON.stringify(this.envFields[key]) !== JSON.stringify(this.originalEnvFields[key]) },
+    envPending(field) { return field.configured && !field.sensitive && Object.prototype.hasOwnProperty.call(field, 'effective_value') && JSON.stringify(this.originalEnvFields[field.key]) !== JSON.stringify(field.effective_value) },
+    customMatches(item) { return !this.envSearch.trim() || `${item.key} 自定义变量`.toLowerCase().includes(this.envSearch.trim().toLowerCase()) },
+    resetEnvironment() { this.envFields = JSON.parse(JSON.stringify(this.originalEnvFields)); this.customEnv = this.originalCustomEnv.map(item => ({ ...item })); this.envIssues = []; this.markEnvDirty() },
+    focusEnvironmentIssue() { const issue = this.envIssues[0]; if (!issue) return; const group = this.envCategories.find(item => item.fields?.some(field => issue.path === field.key || String(issue.path).startsWith(field.key + '.'))); if (group) this.envCategory = group.key; this.envSearch = ''; this.focusIssue() },
     envMeta(field) { return this.envFieldDefinitions.find((item) => item.key === field.key) || {} },
     envLabel(field) { return this.envMeta(field).label || field.key },
     envHelp(field) { return this.envMeta(field).help || field.schema?.description || "" },
@@ -296,7 +287,7 @@ export default {
     },
     async reloadSummary() {
       if (this.saving || this.loading) return
-      if ((Object.keys(this.changedEnvFields()).length || this.customOperations.length || Object.keys(this.simpleChanges).length) && !await this.confirmDiscard("环境及插件配置草稿将重新读取；配置原文草稿保持不变。")) return
+      if ((this.envChangeCount || Object.keys(this.simpleChanges).length) && !await this.confirmDiscard("环境及插件配置草稿将重新读取；配置原文草稿保持不变。")) return
       await this.loadSummary()
     },
     async loadSummary(scope = "all") {
@@ -306,6 +297,7 @@ export default {
         if (!response.suc) throw new Error(response.info)
         this.networkStatus = response.data.network || {}
         if (scope === "all" || scope === "env") {
+        this.envIssues = []
         this.envRevision = response.data.env.revision
         this.envDescriptors = response.data.env.descriptors || []
         this.envSourceFile = response.data.env.source_file || ""
@@ -349,7 +341,7 @@ export default {
       this.editableCurrentFields.forEach((field) => { field.value = field.default_value == null ? field.default_value : JSON.parse(JSON.stringify(field.default_value)); values[field.key] = field.value })
       this.updateCurrentGroup(values)
     },
-    setEnvField(key, value) { if (value === undefined) this.$delete(this.envFields, key); else this.$set(this.envFields, key, value) },
+    setEnvField(key, value) { if (value === undefined) this.$delete(this.envFields, key); else this.$set(this.envFields, key, value); this.envIssues = this.envIssues.filter(issue => issue.path !== key && !String(issue.path).startsWith(key + ".")); this.markEnvDirty() },
     unsetEnvField(key) { this.$delete(this.envFields, key) },
     selectOrphan(group) { this.selectedOrphan = group.module; this.selectedGroup = "" },
     changedEnvFields() {
@@ -369,17 +361,17 @@ export default {
       if (new Set(keys.map((key) => key.toLowerCase())).size !== keys.length) return "自定义环境变量名称不能重复。"
       return ""
     },
-    markEnvDirty() { this.customEnvError = this.validateCustomEnv(); setDirtyState("environment-configuration", Object.keys(this.changedEnvFields()).length > 0 || this.unsetEnvFields().length > 0 || this.customOperations.length > 0) },
+    markEnvDirty() { this.customEnvError = this.validateCustomEnv(); setDirtyState("environment-configuration", this.envChangeCount > 0) },
     async saveEnv() {
       if (this.saving) return
       const fields = this.changedEnvFields()
       this.customEnvError = this.validateCustomEnv()
-      if (this.customEnvError) return
+      if (this.customEnvError) { this.envCategory = "custom"; this.envSearch = ""; return }
       const customOperations = this.customOperations
       const unsetFields = this.unsetEnvFields()
       if (!Object.keys(fields).length && !customOperations.length && !unsetFields.length) return this.$message.info("没有需要保存的环境配置。")
       this.envIssues = this.envDescriptors.filter(field => !field.sensitive && !field.readonly_reason).flatMap(field => validateField(this.envFields[field.key], field.schema, field.schema["x-root-schema"] || field.schema, field.key))
-      if (this.envIssues.length) { this.focusIssue(); return this.$message.warning("请修正环境配置中的错误") }
+      if (this.envIssues.length) { this.focusEnvironmentIssue(); return this.$message.warning("请修正环境配置中的错误") }
       this.saving = "env"
       const submittedFields = JSON.stringify(this.envFields)
       const submittedCustom = JSON.stringify(this.customEnv)
@@ -398,7 +390,7 @@ export default {
           restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/system",
         })
-      } catch (error) { this.envIssues = apiErrorIssues(error); this.focusIssue(); this.$message.error(apiErrorDetail(error, "保存失败")) }
+      } catch (error) { this.envIssues = apiErrorIssues(error); this.focusEnvironmentIssue(); this.$message.error(apiErrorDetail(error, "保存失败")) }
       finally { this.saving = "" }
     },
     async saveSimple() {
@@ -483,13 +475,13 @@ export default {
 
 <style scoped>
 .configuration-center { min-height: 420px; }.configuration-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }.configuration-toolbar h2 { margin: 0; font-size: 20px; }.configuration-toolbar p { margin: 5px 0 0; color: var(--text-color-secondary); }
-.env-form { display: flex; flex-direction: column; gap: 18px; }.env-field-group { padding: 16px 18px 2px; border: 1px solid var(--border-color); border-radius: 8px; }.env-field-group > header { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color-light); }.env-field-group h3 { margin: 0; font-size: 16px; }.env-field-group header p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 12px; }.env-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.field-help { margin-top: 5px; color: var(--text-color-secondary); font-size: 12px; line-height: 1.5; }.plugin-config-workbench { display: grid; height: clamp(360px, calc(100vh - 370px), 680px); grid-template-columns: 230px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-color); border-radius: 8px; }.config-groups { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 14px; overflow-y: auto; border-right: 1px solid var(--border-color); }.config-groups .el-input { margin-bottom: 8px; }.config-groups button { display: flex; min-height: 54px; flex-direction: column; justify-content: center; padding: 7px 9px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.config-groups button:hover { background: var(--bg-color-hover); }.config-groups button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.config-groups button strong, .config-groups button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.config-groups button span { margin-top: 3px; color: var(--text-color-secondary); font-size: 11px; }.current-config-group { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 18px 20px 0; }.config-form-scroll { min-height: 0; flex: 1; padding-right: 5px; overflow-y: auto; }.group-heading { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color-light); }.group-heading h3 { margin: 0; font-size: 18px; }.group-heading p { margin: 4px 0 0; color: var(--text-color-secondary); font-size: 12px; }.group-empty, .current-config-empty { color: var(--text-color-secondary); text-align: center; }.group-empty { padding: 24px 4px; }.current-config-empty { display: grid; place-content: center; }.current-config-empty i { font-size: 36px; }.sensitive-placeholder { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 11px; border: 1px dashed var(--border-color); border-radius: 5px; color: var(--text-color-secondary); }
-.runtime-value { display: flex; min-width: 0; align-items: baseline; flex-wrap: wrap; gap: 7px; margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--border-color); color: var(--text-color-secondary); background: var(--bg-color-secondary); }.runtime-value-label { font-size: 12px; font-weight: 600; }.runtime-value code { max-width: 100%; color: var(--text-color); overflow-wrap: anywhere; white-space: pre-wrap; }.runtime-value small { color: var(--text-color-secondary); }
+.field-help { margin-top: 5px; color: var(--text-color-secondary); font-size: 12px; line-height: 1.5; }.plugin-config-workbench { display: grid; height: clamp(360px, calc(100vh - 370px), 680px); grid-template-columns: 230px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-color); border-radius: 8px; }.config-groups { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 14px; overflow-y: auto; border-right: 1px solid var(--border-color); }.config-groups .el-input { margin-bottom: 8px; }.config-groups button { display: flex; min-height: 54px; flex-direction: column; justify-content: center; padding: 7px 9px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.config-groups button:hover { background: var(--bg-color-hover); }.config-groups button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.config-groups button strong, .config-groups button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.config-groups button span { margin-top: 3px; color: var(--text-color-secondary); font-size: 11px; }.current-config-group { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 18px 20px 0; }.config-form-scroll { min-height: 0; flex: 1; padding-right: 5px; overflow-y: auto; }.group-heading { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color-light); }.group-heading h3 { margin: 0; font-size: 18px; }.group-heading p { margin: 4px 0 0; color: var(--text-color-secondary); font-size: 12px; }.group-empty, .current-config-empty { color: var(--text-color-secondary); text-align: center; }.group-empty { padding: 24px 4px; }.current-config-empty { display: grid; place-content: center; }.current-config-empty i { font-size: 36px; }.sensitive-placeholder { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 11px; border: 1px dashed var(--border-color); border-radius: 5px; color: var(--text-color-secondary); }
+
 .plaintext-warning { margin: 8px 0; }
 .action-bar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color-secondary); }.config-action-bar { position: static; flex: none; margin-top: 8px; }.action-bar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.raw-switch { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 10px; }.raw-editor ::v-deep textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; line-height: 1.55; }.inline-error { margin-top: 8px; color: var(--el-color-danger); }
 .validation-issues { margin: 10px 0 0; padding: 10px 14px 10px 34px; border: 1px solid rgba(224,82,96,.35); border-radius: 6px; color: var(--danger-color); background: rgba(224,82,96,.06); }.validation-issues li { margin: 4px 0; line-height: 1.55; }.validation-issues code { margin-right: 8px; }
 .custom-env-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }.custom-env-list { display: flex; flex-direction: column; gap: 10px; padding-bottom: 16px; }.custom-env-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(220px, 1.4fr) auto auto auto; align-items: center; gap: 9px; }.custom-env-row.deleted { opacity: .58; }.secret-configured { display: flex; min-height: 40px; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color-secondary); }.custom-env-empty { padding: 8px 0 20px; color: var(--text-color-secondary); text-align: center; }
-@media (max-width: 760px) { .env-field-grid { grid-template-columns: 1fr; }.env-field-group { padding: 14px 14px 2px; }.configuration-toolbar, .custom-env-heading { align-items: flex-start; flex-direction: column; }.custom-env-row { grid-template-columns: 1fr auto; }.custom-env-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }.plugin-config-workbench { grid-template-columns: 1fr; }.config-groups { display: grid; max-height: 240px; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--border-color); }.config-groups .el-input { grid-column: 1 / -1; }.current-config-group { padding: 14px; }.group-heading { align-items: flex-start; flex-direction: column; }.action-bar { flex-wrap: wrap; }.action-bar span { width: 100%; }.raw-switch { gap: 10px; } }
+@media (max-width: 760px) { .configuration-toolbar, .custom-env-heading { align-items: flex-start; flex-direction: column; }.custom-env-row { grid-template-columns: 1fr auto; }.custom-env-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }.plugin-config-workbench { grid-template-columns: 1fr; }.config-groups { display: grid; max-height: 240px; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--border-color); }.config-groups .el-input { grid-column: 1 / -1; }.current-config-group { padding: 14px; }.group-heading { align-items: flex-start; flex-direction: column; }.action-bar { flex-wrap: wrap; }.action-bar span { width: 100%; }.raw-switch { gap: 10px; } }
 </style>
 
 <style scoped>
@@ -502,24 +494,24 @@ export default {
 
 <style scoped>
 .configuration-center { container-type:inline-size; min-width:0; }
-.env-descriptor-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
-.env-descriptor-grid .wide { grid-column:1 / -1; }
-.env-field-group { min-width:0; padding:12px; overflow-wrap:anywhere; }
+
+
+
 .configuration-toolbar, .action-bar, .group-heading { min-width:0; flex-wrap:wrap; }
 .config-form-scroll { overflow:visible; }
 .plugin-config-workbench { height:auto; min-height:360px; overflow:visible; }
 .config-groups { max-height:70vh; }
 .current-config-group { padding-bottom:16px; }
 .current-config-group pre { max-width:100%; white-space:pre-wrap; overflow-wrap:anywhere; }
-.env-field-group { display:flex; flex-direction:column; gap:10px; padding:14px 16px 16px; background:var(--bg-color-secondary); }
-.env-field-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding-bottom:10px; border-bottom:1px solid var(--border-color-light); }
-.env-field-title { min-width:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:7px; }
-.env-field-title strong { font-size:14px; }
-.env-field-title code { color:var(--text-color-secondary); font-size:11px; overflow-wrap:anywhere; }
-.env-field-title p { flex-basis:100%; margin:3px 0 0; color:var(--text-color-secondary); font-size:12px; line-height:1.5; }
-.env-field-meta { display:flex; flex:none; align-items:center; gap:6px; }
-.env-field-editor { min-width:0; }
-.env-field-editor > .schema-field { margin-top:0; }
+
+
+
+
+
+
+
+
+
 .sensitive-config-line, .override-note { margin:0; color:var(--text-color-secondary); font-size:12px; line-height:1.5; }
 .sensitive-config-line i, .override-note i { margin-right:5px; }
 .override-note { color:var(--warning-color); }
@@ -530,6 +522,10 @@ export default {
 .orphan-groups button { width:100%; }
 .orphan-config-panel .el-alert { margin-bottom:14px; }
 .orphan-preview { margin:14px 0 0; padding:14px; border:1px solid var(--border-color-light); border-radius:6px; background:var(--bg-color); color:var(--text-color); white-space:pre-wrap; overflow-wrap:anywhere; }
-@container (max-width:760px) { .env-descriptor-grid { grid-template-columns:1fr; } .plugin-config-workbench { grid-template-columns:1fr; } .config-groups { max-height:180px; } .custom-env-row { grid-template-columns:minmax(0,1fr); } }
-@media(max-width:760px) { .env-descriptor-grid { grid-template-columns:1fr; } .config-form-scroll { max-height:none; } .custom-env-row { grid-template-columns:minmax(0,1fr); } .custom-env-row > :nth-child(2) { grid-column:auto; grid-row:auto; } .env-field-header { flex-direction:column; } .env-field-meta { width:100%; justify-content:space-between; } }
+@container (max-width:760px) {  .plugin-config-workbench { grid-template-columns:1fr; } .config-groups { max-height:180px; } .custom-env-row { grid-template-columns:minmax(0,1fr); } }
+@media(max-width:760px) {  .config-form-scroll { max-height:none; } .custom-env-row { grid-template-columns:minmax(0,1fr); } .custom-env-row > :nth-child(2) { grid-column:auto; grid-row:auto; }   }
+</style>
+
+<style scoped>
+.configuration-connection { display:flex; align-items:center; gap:16px; justify-content:space-between; padding:8px 0 14px; color:var(--text-color-secondary); font-size:12px; }.configuration-connection details { min-width:0; }.configuration-connection summary { cursor:pointer; }.environment-source { font-size:12px; color:var(--text-color-secondary); margin:4px 0 18px; overflow-wrap:anywhere; }.environment-source code { margin-left:8px; }.field-effect { font-size:11px; color:var(--text-color-secondary); margin-top:8px; }.changed-indicator { color:var(--primary-color,#5c83d6); }.setting-runtime { display:flex; flex-wrap:wrap; gap:4px 9px; margin-top:12px; font-size:11px; color:var(--text-color-secondary); line-height:1.6; }.setting-runtime > span { flex:none; }.setting-runtime code { min-width:0; overflow-wrap:anywhere; font-family:inherit; }.setting-status-note { font-size:11px; color:var(--warning-color,#b78236); line-height:1.6; margin:6px 0 0; }.category-empty { padding:40px 0; color:var(--text-color-secondary); font-size:13px; }.custom-env-section { min-width:0; }.custom-env-section .custom-env-row { grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; padding:18px 0; }.custom-env-section .custom-env-row .el-tag { display:none; }@media(max-width:768px) { .configuration-connection { align-items:flex-start; flex-wrap:wrap; }.custom-env-section .custom-env-row { grid-template-columns:minmax(0,1fr); } }
 </style>
