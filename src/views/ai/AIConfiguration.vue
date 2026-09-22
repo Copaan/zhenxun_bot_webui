@@ -187,7 +187,15 @@
       </el-tab-pane>
 
       <el-tab-pane v-for="tab in schemaTabs" :key="tab.name" :label="tab.label" :name="tab.name">
-        <section class="settings-section"><div class="section-title"><div><h2>{{ tab.title }}</h2><p>{{ tab.description }}</p></div><el-tag v-if="tab.name === 'sandbox'" size="small" type="warning">部分设置需要重启</el-tag></div>
+        <section v-if="tab.name === 'advanced'" class="settings-section advanced-settings-section"><div class="section-title"><div><h2>{{ tab.title }}</h2><p>{{ tab.description }}</p></div><el-tag size="small" type="info">保存后热加载</el-tag></div>
+          <div class="advanced-cards">
+            <article v-for="part in advancedParts" :key="part.key" class="advanced-card">
+              <header><div><h3>{{ part.title }}</h3><p>{{ part.description }}</p></div><el-button type="text" size="mini" icon="el-icon-refresh-left" :disabled="!advancedPartDirty(part.key)" @click="resetAdvancedPart(part.key)">撤销修改</el-button></header>
+              <SchemaForm :key="`${part.key}-${revision}`" :value="advancedPartValue(part.key)" :schema="advancedPartSchema(part.key)" :root-schema="schema" :field-ui="advancedPartUi(part.key)" :issues="operationIssues" :searchable="false" @input="updateAdvancedPart(part.key, $event)" @validity-change="setSectionValidity('advanced', $event)" />
+            </article>
+          </div>
+        </section>
+        <section v-else class="settings-section"><div class="section-title"><div><h2>{{ tab.title }}</h2><p>{{ tab.description }}</p></div><el-tag v-if="tab.name === 'sandbox'" size="small" type="warning">部分设置需要重启</el-tag></div>
           <SchemaForm v-if="sectionSchema(tab.name)" :key="`${tab.name}-${revision}`" v-model="sectionDrafts[tab.name]" :schema="sectionSchema(tab.name)" :root-schema="schema" :field-ui="sectionFieldUi(tab.name)" :issues="operationIssues" @change="markSectionDirty(tab.name)" @validity-change="setSectionValidity(tab.name, $event)" />
         </section><SectionAction :dirty="isSectionDirty(tab.name)" :saving="saving === tab.name" :invalid="sectionInvalid(tab.name)" :effect="tab.effect" @reset="resetSection(tab.name)" @save="saveSection(tab.name)" />
       </el-tab-pane>
@@ -265,6 +273,13 @@ export default {
     filteredRouteGroups() { const key = this.routeSearch.trim().toLowerCase(); return this.groupRows.filter((item) => !key || item.name.toLowerCase().includes(key)) },
     selectedRouteGroup() { return this.groupRows.find((item) => item.clientId === this.selectedRouteGroupId) || null },
     filteredDiscovered() { const key = this.discoverySearch.trim().toLowerCase(); return this.discoveredModels.filter((item) => item.toLowerCase().includes(key)) },
+    advancedParts() {
+      return [
+        { key: "client_settings", title: "客户端行为", description: "控制超时、重试、代理和请求层行为。" },
+        { key: "provider_settings", title: "厂商高级参数", description: "不同服务商的额外参数，复杂内容按需展开编辑。" },
+        { key: "debug_log", title: "运行时与调试", description: "诊断日志和运行时调试开关。" },
+      ]
+    },
     providerDiscoverySupported() { return Boolean(this.providerDraft && this.discoveryApiTypes.includes(this.providerDraft.api_type)) },
     providerDraftStatus() {
       if (!this.providerDraft) return { code: "unavailable", label: "状态待确认", type: "info", reason: "请先选择服务商" }
@@ -555,6 +570,19 @@ export default {
     },
     resolveSchema(node) { if (!node?.$ref) return node || {}; return node.$ref.replace(/^#\//, "").split("/").reduce((value, key) => value?.[key], this.schema) || node },
     sectionSchema(name) { const properties = this.schema.properties || {}; const map = { context: "context_settings", agent: "agent_settings", sandbox: "sandbox" }; if (name === "advanced") return { type: "object", properties: { client_settings: properties.client_settings, debug_log: properties.debug_log, provider_settings: properties.provider_settings } }; return this.resolveSchema(properties[map[name]]) },
+    advancedPartValue(key) { return { [key]: this.sectionDrafts.advanced?.[key] } },
+    advancedPartSchema(key) {
+      const property = (this.schema.properties || {})[key]
+      return { type: "object", properties: { [key]: property || { type: "object" } } }
+    },
+    advancedPartUi(key) { return { [key]: this.sectionFieldUi("advanced")[key] || { label: key } } },
+    advancedPartDirty(key) { return JSON.stringify(this.sectionDrafts.advanced?.[key]) !== JSON.stringify(this.originalSections.advanced?.[key]) },
+    resetAdvancedPart(key) { this.$set(this.sectionDrafts.advanced, key, clone(this.originalSections.advanced?.[key])); this.markSectionDirty("advanced") },
+    updateAdvancedPart(key, value) {
+      const next = value && Object.prototype.hasOwnProperty.call(value, key) ? value[key] : value
+      this.$set(this.sectionDrafts.advanced, key, next)
+      this.markSectionDirty("advanced")
+    },
     sectionFieldUi(name) {
       if (name === "context") return {
         llm_summary: { label: "对话总结压缩", order: 10 },
@@ -670,7 +698,15 @@ export default {
 
 <style scoped>
 .ai-page { min-height: 100%; padding: 20px 22px 32px; overflow-y: auto; color: var(--text-color); background: var(--bg-color); }.page-header, .section-title, .subheading, .provider-actions, .models-save, .section-action { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.page-header { margin-bottom: 12px; }.configuration-warning { margin-bottom: 12px; }.configuration-warning code { margin-right: 6px; }.load-error { display: grid; min-height: 260px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 28px; border: 1px solid var(--danger-color); border-radius: 8px; background: var(--bg-color-secondary); }.load-error > i { color: var(--danger-color); font-size: 34px; }.load-error h2 { margin: 0; font-size: 18px; }.load-error p { margin: 8px 0 0; color: var(--text-color-secondary); }.page-header h1, .section-title h2, .subheading h3 { margin: 0; letter-spacing: 0; }.page-header h1 { font-size: 24px; }.page-header p, .section-title p, .subheading p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 13px; }.header-status { display: flex; align-items: center; gap: 8px; }.ai-tabs { min-height: 0; }.provider-workbench { display: grid; min-height: 650px; grid-template-columns: 250px minmax(0, 1fr); border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.provider-sidebar { min-width: 0; padding: 16px; border-right: 1px solid var(--border-color); }.sidebar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }.provider-list { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }.provider-list button { display: flex; width: 100%; min-height: 58px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.provider-list button:hover { background: var(--bg-color-hover); }.provider-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.provider-list span { display: flex; min-width: 0; flex-direction: column; }.provider-list strong, .provider-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.provider-list small { margin-top: 4px; color: var(--text-color-secondary); }.provider-main { min-width: 0; padding: 20px 22px 26px; }.provider-form, .advanced-grid, .default-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.full-control { width: 100%; }.secret-section, .models-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-color-light); }.secret-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 10px; }.advanced-collapse { margin-top: 14px; border-bottom: 0; }.provider-actions { margin-top: 18px; }.models-section { margin-top: 24px; }.model-search { max-width: 420px; margin: 14px 0 10px; }.model-list { border-top: 1px solid var(--border-color-light); }.model-row { display: flex; min-height: 64px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-color-light); }.model-name { display: flex; min-width: 0; flex-direction: column; gap: 7px; }.model-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.model-name span { display: flex; flex-wrap: wrap; gap: 5px; }.model-actions { flex: none; white-space: nowrap; }.models-save { margin-top: 14px; }.models-save span { color: var(--warning-color); font-size: 12px; }.provider-empty { display: grid; place-content: center; color: var(--text-color-secondary); text-align: center; }.provider-empty i { font-size: 42px; }.settings-section { min-height: 480px; padding: 20px 22px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.section-action { position: sticky; bottom: 0; z-index: 3; margin-top: 10px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color); }.section-action span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.group-row { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; gap: 10px; margin-top: 12px; }.empty-copy { padding: 30px 12px; color: var(--text-color-secondary); text-align: center; }.danger-text { color: var(--danger-color) !important; }.model-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }.discovery-list { display: grid; max-height: 360px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; overflow-y: auto; }.discovery-list .el-checkbox { min-width: 0; margin-right: 0; overflow: hidden; text-overflow: ellipsis; }.dialog-note { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
-@media (max-width: 820px) { .ai-page { padding: 12px; }.page-header, .section-title, .subheading { align-items: flex-start; flex-direction: column; }.header-status { width: 100%; flex-wrap: wrap; }.load-error { min-height: 220px; grid-template-columns: auto minmax(0, 1fr); padding: 20px; }.load-error .el-button { grid-column: 1 / -1; }.provider-workbench { grid-template-columns: 1fr; }.provider-sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }.provider-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }.provider-main { padding: 16px; }.provider-form, .advanced-grid, .default-grid, .model-form { grid-template-columns: 1fr; }.group-row { grid-template-columns: 1fr auto; }.group-row .el-select { grid-column: 1 / -1; grid-row: 2; }.model-row { align-items: flex-start; flex-direction: column; padding: 10px 0; }.model-actions { align-self: flex-end; }.discovery-list { grid-template-columns: 1fr; } }
+.advanced-settings-section { min-height: 0; }
+.advanced-cards { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin-top:18px; }
+.advanced-card { min-width:0; padding:16px; border:1px solid var(--border-color-light); border-radius:8px; background:var(--bg-color); }
+.advanced-card:first-child { grid-column:1 / -1; }
+.advanced-card header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; padding-bottom:10px; border-bottom:1px solid var(--border-color-light); }
+.advanced-card h3 { margin:0; font-size:15px; }
+.advanced-card p { margin:5px 0 0; color:var(--text-color-secondary); font-size:12px; line-height:1.5; }
+.advanced-card .schema-form { gap:10px; }
+@media (max-width: 820px) { .ai-page { padding: 12px; }.page-header, .section-title, .subheading { align-items: flex-start; flex-direction: column; }.header-status { width: 100%; flex-wrap: wrap; }.load-error { min-height: 220px; grid-template-columns: auto minmax(0, 1fr); padding: 20px; }.load-error .el-button { grid-column: 1 / -1; }.provider-workbench { grid-template-columns: 1fr; }.provider-sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }.provider-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }.provider-main { padding: 16px; }.provider-form, .advanced-grid, .default-grid, .model-form { grid-template-columns: 1fr; }.advanced-cards { grid-template-columns:1fr; }.advanced-card:first-child { grid-column:auto; }.group-row { grid-template-columns: 1fr auto; }.group-row .el-select { grid-column: 1 / -1; grid-row: 2; }.model-row { align-items: flex-start; flex-direction: column; padding: 10px 0; }.model-actions { align-self: flex-end; }.discovery-list { grid-template-columns: 1fr; } }
 .mobile-provider-select { display: none; width: 100%; margin-top: 10px; }
 .group-name-field { margin-bottom: 0; }
 .route-section { padding: 0; overflow: hidden; }

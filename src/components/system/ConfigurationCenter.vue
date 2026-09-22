@@ -20,12 +20,21 @@
           <el-input v-model="envSearch" clearable prefix-icon="el-icon-search" placeholder="搜索环境字段、说明或嵌套路径" />
           <div class="env-descriptor-grid">
           <section v-for="field in envDescriptors" v-show="envMatches(field)" :key="field.key" class="env-field-group" :class="{ wide: complexField(field.schema, envFields[field.key]) }">
-            <p v-if="field.readonly_reason" class="inline-error">{{ field.key }}：{{ field.readonly_reason }}</p>
-            <SchemaField v-else-if="!field.sensitive" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema"  :label="field.key" :path="field.key" :query="envSearch" :issues="envIssues" @input="setEnvField(field.key, $event)" />
-            <p v-else>{{ field.key }}：{{ field.configured ? '已配置' : '未配置' }}，请在原文或对应专用页面修改。</p>
-            <p v-if="!field.sensitive && JSON.stringify(field.effective_value) !== JSON.stringify(envFields[field.key])">当前运行值：{{ JSON.stringify(field.effective_value) }}；文件修改的生效方式见下方。</p>
-            <p v-if="field.overridden">由外部环境变量覆盖，修改文件不会覆盖启动进程的环境变量。</p>
-            <el-tag size="mini" :type="effectMeta(field.apply_effect).type">{{ effectMeta(field.apply_effect).label }}</el-tag>
+            <div class="env-field-header">
+              <div class="env-field-title"><strong>{{ envLabel(field) }}</strong><code>{{ field.key }}</code><p>{{ envHelp(field) }}</p></div>
+              <div class="env-field-meta"><el-tag size="mini" :type="effectMeta(field.apply_effect).type">{{ effectMeta(field.apply_effect).label }}</el-tag><el-button v-if="field.configured && !field.sensitive" type="text" size="mini" icon="el-icon-refresh-left" @click="unsetEnvField(field.key)">恢复未设置</el-button></div>
+            </div>
+            <div class="env-field-editor">
+              <p v-if="field.readonly_reason" class="inline-error">{{ field.readonly_reason }}</p>
+              <SchemaField v-else-if="!field.sensitive" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema"  :label="envLabel(field)" :path="field.key" :query="envSearch" :issues="envIssues" @input="setEnvField(field.key, $event)" />
+              <p v-else class="sensitive-config-line"><i class="el-icon-lock"></i>{{ field.configured ? '已配置，敏感值不会回传' : '未配置，请在原文或对应专用页面修改。' }}</p>
+            </div>
+            <div v-if="!field.sensitive" class="runtime-value">
+              <span class="runtime-value-label">当前运行值</span>
+              <code>{{ formatRuntimeValue(field.effective_value) }}</code>
+              <small v-if="field.configured && JSON.stringify(field.effective_value) !== JSON.stringify(envFields[field.key])">配置值尚未生效，{{ effectMeta(field.apply_effect).label }}。</small>
+            </div>
+            <p v-if="field.overridden" class="override-note"><i class="el-icon-warning-outline"></i>由外部环境变量覆盖，修改文件不会覆盖启动进程的环境变量。</p>
           </section>
           </div>
           <section class="env-field-group custom-env-section">
@@ -58,9 +67,16 @@
         <div class="plugin-config-workbench">
           <aside class="config-groups">
             <el-input v-model="groupSearch" clearable prefix-icon="el-icon-search" placeholder="搜索配置组" size="small" />
-            <button v-for="group in filteredGroups" :key="group.module" :class="{ active: selectedGroup === group.module }" @click="selectedGroup = group.module">
+            <button v-for="group in filteredGroups" :key="group.module" :class="{ active: selectedGroup === group.module }" @click="selectedGroup = group.module; selectedOrphan = ''">
               <strong>{{ group.name }}</strong><span>{{ group.module }}</span>
             </button>
+            <el-collapse v-if="orphanGroups.length" v-model="orphanPanel" class="orphan-groups">
+              <el-collapse-item name="orphaned"><template slot="title">孤立配置 · {{ orphanGroups.length }} 组</template>
+                <button v-for="group in filteredOrphanGroups" :key="`orphan-${group.module}`" :class="{ active: selectedOrphan === group.module }" @click="selectOrphan(group)">
+                  <strong>{{ group.name }}</strong><span>{{ group.module }} · {{ group.fields.length }} 项</span>
+                </button>
+              </el-collapse-item>
+            </el-collapse>
             <div v-if="!filteredGroups.length" class="group-empty">没有匹配的配置组</div>
           </aside>
           <section v-if="currentGroup" class="current-config-group">
@@ -80,6 +96,11 @@
               <span>{{ Object.keys(simpleChanges).length ? `${Object.keys(simpleChanges).length} 个配置组有未保存修改` : "未知配置组和字段会原样保留" }}</span>
               <el-button type="primary" icon="el-icon-check" :loading="saving === 'simple'" :disabled="pluginInvalidPaths.length > 0 || !Object.keys(simpleChanges).length" @click="saveSimple">保存配置</el-button>
             </div>
+          </section>
+          <section v-else-if="selectedOrphanGroup" class="current-config-group orphan-config-panel">
+            <header class="group-heading"><div><h3>{{ selectedOrphanGroup.name }}</h3><p>{{ selectedOrphanGroup.module }} · 文件中保留的未注册配置</p></div><el-button size="small" icon="el-icon-document" @click="section = 'raw'">查看配置原文</el-button></header>
+            <el-alert title="该配置组当前没有对应的已加载插件。内容会保留，不会自动写入运行配置。" type="warning" :closable="false" show-icon />
+            <pre class="orphan-preview">{{ JSON.stringify(selectedOrphanGroup.raw_value || Object.fromEntries(selectedOrphanGroup.fields.map(field => [field.key, field.value])), null, 2) }}</pre>
           </section>
           <section v-else class="current-config-empty"><i class="el-icon-setting"></i><p>选择一个配置组开始编辑</p></section>
         </div>
@@ -129,7 +150,7 @@ export default {
     return {
       networkStatus: {}, rawLoading: false, envSearch: "", envIssues: [],
       loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", envFieldEffects: {}, customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], simpleChanges: {}, groupSearch: "", selectedGroup: "", launcherManaged: false,
-      rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalidPaths: [], pluginIssues: [],
+      rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalidPaths: [], pluginIssues: [], orphanPanel: [], selectedOrphan: "",
       envFieldDefinitions: [
         { key: "HOST", label: "监听地址", placeholder: "0.0.0.0", help: "0.0.0.0 允许局域网访问，127.0.0.1 仅本机访问。" },
         { key: "PORT", label: "监听端口", type: "number", placeholder: "8080", help: "WebUI 与适配器共享的本地服务端口；启用 HTTPS 后该端口提供 HTTPS。" },
@@ -180,10 +201,16 @@ export default {
     rawReady() { return Boolean(this.rawLoaded[this.rawFile] && /^[a-f0-9]{64}$/.test(this.rawRevision)) },
     filteredGroups() {
       const keyword = this.groupSearch.trim().toLowerCase()
-      if (!keyword) return this.groups
-      return this.groups.filter((group) => `${group.name} ${group.module} ${group.fields.map((field) => field.key).join(" ")}`.toLowerCase().includes(keyword))
+      return this.activeGroups.filter((group) => !keyword || `${group.name} ${group.module} ${group.fields.map((field) => field.key).join(" ")}`.toLowerCase().includes(keyword))
     },
-    currentGroup() { return this.groups.find((group) => group.module === this.selectedGroup) || null },
+    filteredOrphanGroups() {
+      const keyword = this.groupSearch.trim().toLowerCase()
+      return this.orphanGroups.filter((group) => !keyword || `${group.name} ${group.module} ${group.fields.map((field) => field.key).join(" ")}`.toLowerCase().includes(keyword))
+    },
+    activeGroups() { return this.groups.filter((group) => group.registered !== false && group.source_status !== "orphaned") },
+    orphanGroups() { return this.groups.filter((group) => group.registered === false || group.source_status === "orphaned") },
+    selectedOrphanGroup() { return this.orphanGroups.find((group) => group.module === this.selectedOrphan) || null },
+    currentGroup() { return this.activeGroups.find((group) => group.module === this.selectedGroup) || null },
     editableCurrentFields() { return this.currentGroup ? this.currentGroup.fields.filter((field) => !field.sensitive && field.authority !== 'database') : [] },
     currentManagedFields() { return this.currentGroup ? this.currentGroup.fields.filter(field => field.authority === 'database') : [] },
     currentSensitiveFields() { return this.currentGroup ? this.currentGroup.fields.filter((field) => field.sensitive) : [] },
@@ -201,7 +228,27 @@ export default {
   mounted() { this.loadSummary() },
   beforeDestroy() { clearDirtyState("plugin-configuration"); clearDirtyState("environment-configuration"); clearDirtyState("raw-configuration") },
   methods: {
-    envMatches(field) { return fieldMatches(this.envSearch, field.key, field.schema, this.envFields[field.key], field.schema["x-root-schema"] || field.schema) || this.envIssues.some(issue => String(issue.path || "").startsWith(field.key)) },
+    envMeta(field) { return this.envFieldDefinitions.find((item) => item.key === field.key) || {} },
+    envLabel(field) { return this.envMeta(field).label || field.key },
+    envHelp(field) { return this.envMeta(field).help || field.schema?.description || "" },
+    envMatches(field) {
+      const meta = this.envMeta(field)
+      return fieldMatches(this.envSearch, `${field.key} ${meta.label || ""} ${meta.help || ""}`, field.schema, this.envFields[field.key], field.schema["x-root-schema"] || field.schema) || this.envIssues.some(issue => String(issue.path || "").startsWith(field.key))
+    },
+    formatRuntimeValue(value) {
+      if (value === undefined) return "未取得"
+      if (value === null) return "null"
+      if (typeof value === "boolean") return value ? "开启" : "关闭"
+      if (Array.isArray(value)) {
+        const preview = value.slice(0, 3).map(item => this.formatRuntimeValue(item)).join("、")
+        return `数组 · ${value.length} 项${preview ? ` · ${preview}` : ""}`
+      }
+      if (typeof value === "object") {
+        const keys = Object.keys(value)
+        return `对象 · ${keys.length} 个字段${keys.length ? ` · ${keys.slice(0, 4).join("、")}` : ""}`
+      }
+      return String(value) || "空字符串"
+    },
     complexField(schema, value) { const resolved = resolveReference(schema, schema["x-root-schema"] || schema); return ["object", "array"].includes(valueType(value)) || [resolved, ...(resolved.anyOf || resolved.oneOf || [])].some(item => item.type === "object" || item.type === "array" || item.properties) },
     focusIssue() { this.$nextTick(() => { const error = this.$el.querySelector(".field-error"); if (error) error.scrollIntoView({ block: "center", behavior: "smooth" }) }) },
     normalizedEnvFields(fields) {
@@ -273,7 +320,8 @@ export default {
         if (scope === "all" || scope === "simple") {
         this.simpleRevision = response.data.simple.revision
         this.groups = this.normalizeGroups(response.data.simple.groups)
-        if (!this.groups.some((group) => group.module === this.selectedGroup)) this.selectedGroup = this.groups[0]?.module || ""
+        if (!this.activeGroups.some((group) => group.module === this.selectedGroup)) this.selectedGroup = this.activeGroups[0]?.module || ""
+        if (!this.orphanGroups.some((group) => group.module === this.selectedOrphan)) this.selectedOrphan = ""
         this.pluginInvalidPaths = []; this.pluginIssues = []
         this.simpleChanges = {}
         clearDirtyState("plugin-configuration")
@@ -302,6 +350,8 @@ export default {
       this.updateCurrentGroup(values)
     },
     setEnvField(key, value) { if (value === undefined) this.$delete(this.envFields, key); else this.$set(this.envFields, key, value) },
+    unsetEnvField(key) { this.$delete(this.envFields, key) },
+    selectOrphan(group) { this.selectedOrphan = group.module; this.selectedGroup = "" },
     changedEnvFields() {
       const changed = {}
       this.envDescriptors.filter(field => !field.sensitive).forEach(({ key }) => { if (JSON.stringify(this.envFields[key]) !== JSON.stringify(this.originalEnvFields[key]) && this.envFields[key] !== undefined) changed[key] = this.envFields[key] })
@@ -434,6 +484,7 @@ export default {
 <style scoped>
 .configuration-center { min-height: 420px; }.configuration-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }.configuration-toolbar h2 { margin: 0; font-size: 20px; }.configuration-toolbar p { margin: 5px 0 0; color: var(--text-color-secondary); }
 .env-form { display: flex; flex-direction: column; gap: 18px; }.env-field-group { padding: 16px 18px 2px; border: 1px solid var(--border-color); border-radius: 8px; }.env-field-group > header { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color-light); }.env-field-group h3 { margin: 0; font-size: 16px; }.env-field-group header p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 12px; }.env-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.field-help { margin-top: 5px; color: var(--text-color-secondary); font-size: 12px; line-height: 1.5; }.plugin-config-workbench { display: grid; height: clamp(360px, calc(100vh - 370px), 680px); grid-template-columns: 230px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-color); border-radius: 8px; }.config-groups { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 14px; overflow-y: auto; border-right: 1px solid var(--border-color); }.config-groups .el-input { margin-bottom: 8px; }.config-groups button { display: flex; min-height: 54px; flex-direction: column; justify-content: center; padding: 7px 9px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.config-groups button:hover { background: var(--bg-color-hover); }.config-groups button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.config-groups button strong, .config-groups button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.config-groups button span { margin-top: 3px; color: var(--text-color-secondary); font-size: 11px; }.current-config-group { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 18px 20px 0; }.config-form-scroll { min-height: 0; flex: 1; padding-right: 5px; overflow-y: auto; }.group-heading { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color-light); }.group-heading h3 { margin: 0; font-size: 18px; }.group-heading p { margin: 4px 0 0; color: var(--text-color-secondary); font-size: 12px; }.group-empty, .current-config-empty { color: var(--text-color-secondary); text-align: center; }.group-empty { padding: 24px 4px; }.current-config-empty { display: grid; place-content: center; }.current-config-empty i { font-size: 36px; }.sensitive-placeholder { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 11px; border: 1px dashed var(--border-color); border-radius: 5px; color: var(--text-color-secondary); }
+.runtime-value { display: flex; min-width: 0; align-items: baseline; flex-wrap: wrap; gap: 7px; margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--border-color); color: var(--text-color-secondary); background: var(--bg-color-secondary); }.runtime-value-label { font-size: 12px; font-weight: 600; }.runtime-value code { max-width: 100%; color: var(--text-color); overflow-wrap: anywhere; white-space: pre-wrap; }.runtime-value small { color: var(--text-color-secondary); }
 .plaintext-warning { margin: 8px 0; }
 .action-bar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color-secondary); }.config-action-bar { position: static; flex: none; margin-top: 8px; }.action-bar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.raw-switch { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 10px; }.raw-editor ::v-deep textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; line-height: 1.55; }.inline-error { margin-top: 8px; color: var(--el-color-danger); }
 .validation-issues { margin: 10px 0 0; padding: 10px 14px 10px 34px; border: 1px solid rgba(224,82,96,.35); border-radius: 6px; color: var(--danger-color); background: rgba(224,82,96,.06); }.validation-issues li { margin: 4px 0; line-height: 1.55; }.validation-issues code { margin-right: 8px; }
@@ -460,6 +511,25 @@ export default {
 .config-groups { max-height:70vh; }
 .current-config-group { padding-bottom:16px; }
 .current-config-group pre { max-width:100%; white-space:pre-wrap; overflow-wrap:anywhere; }
+.env-field-group { display:flex; flex-direction:column; gap:10px; padding:14px 16px 16px; background:var(--bg-color-secondary); }
+.env-field-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding-bottom:10px; border-bottom:1px solid var(--border-color-light); }
+.env-field-title { min-width:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:7px; }
+.env-field-title strong { font-size:14px; }
+.env-field-title code { color:var(--text-color-secondary); font-size:11px; overflow-wrap:anywhere; }
+.env-field-title p { flex-basis:100%; margin:3px 0 0; color:var(--text-color-secondary); font-size:12px; line-height:1.5; }
+.env-field-meta { display:flex; flex:none; align-items:center; gap:6px; }
+.env-field-editor { min-width:0; }
+.env-field-editor > .schema-field { margin-top:0; }
+.sensitive-config-line, .override-note { margin:0; color:var(--text-color-secondary); font-size:12px; line-height:1.5; }
+.sensitive-config-line i, .override-note i { margin-right:5px; }
+.override-note { color:var(--warning-color); }
+.orphan-groups { margin-top:8px; border:0; }
+.orphan-groups ::v-deep .el-collapse-item__header { height:auto; min-height:34px; padding:6px 8px; border:1px solid var(--border-color-light); border-radius:5px; color:var(--text-color-secondary); background:var(--bg-color-secondary); line-height:1.4; }
+.orphan-groups ::v-deep .el-collapse-item__wrap { border:0; background:transparent; }
+.orphan-groups ::v-deep .el-collapse-item__content { padding:4px 0 0; }
+.orphan-groups button { width:100%; }
+.orphan-config-panel .el-alert { margin-bottom:14px; }
+.orphan-preview { margin:14px 0 0; padding:14px; border:1px solid var(--border-color-light); border-radius:6px; background:var(--bg-color); color:var(--text-color); white-space:pre-wrap; overflow-wrap:anywhere; }
 @container (max-width:760px) { .env-descriptor-grid { grid-template-columns:1fr; } .plugin-config-workbench { grid-template-columns:1fr; } .config-groups { max-height:180px; } .custom-env-row { grid-template-columns:minmax(0,1fr); } }
-@media(max-width:760px) { .env-descriptor-grid { grid-template-columns:1fr; } .config-form-scroll { max-height:none; } .custom-env-row { grid-template-columns:minmax(0,1fr); } .custom-env-row > :nth-child(2) { grid-column:auto; grid-row:auto; } }
+@media(max-width:760px) { .env-descriptor-grid { grid-template-columns:1fr; } .config-form-scroll { max-height:none; } .custom-env-row { grid-template-columns:minmax(0,1fr); } .custom-env-row > :nth-child(2) { grid-column:auto; grid-row:auto; } .env-field-header { flex-direction:column; } .env-field-meta { width:100%; justify-content:space-between; } }
 </style>

@@ -12,11 +12,20 @@
       <el-select v-else-if="!baseSchema.type && !baseSchema.properties && !baseSchema.$ref" :value="fieldType" size="mini" @input="selectType">
         <el-option v-for="type in ['string', 'integer', 'number', 'boolean', 'object', 'array', 'null']" :key="type" :value="type" :label="type" />
       </el-select>
-      <el-button v-if="value === undefined" size="mini" @click="emitValue(emptyValue(resolvedSchema))">设置值</el-button>
+      <el-button v-if="value === undefined && fieldType !== 'boolean'" size="mini" @click="emitValue(emptyValue(resolvedSchema))">设置值</el-button>
       <el-button v-else-if="!required" size="mini" type="text" @click="emitValue(undefined)">恢复未设置</el-button>
       <span v-if="value === undefined">未设置</span><span v-else-if="value === null">null</span>
     </div>
-    <template v-if="value !== undefined && value !== null && (!complex || structureOpen)">
+    <template v-if="value !== undefined && value !== null && !complex">
+      <el-select v-if="options.length" :value="value" class="full-control" @input="emitValue">
+        <el-option v-for="option in options" :key="String(option.value)" :label="option.label" :value="option.value" />
+      </el-select>
+      <el-switch v-else-if="fieldType === 'boolean'" :value="booleanDisplayValue" @input="emitValue" />
+      <el-input-number v-else-if="['integer', 'number'].includes(fieldType)" :value="value" :precision="fieldType === 'integer' ? 0 : undefined" :min="resolvedSchema.minimum" :max="resolvedSchema.maximum" :step="fieldType === 'integer' ? 1 : 0.1" @change="emitValue" />
+      <el-input v-else :value="value" :type="ui.secret ? 'password' : /prompt|template|description/i.test(path) || ui.component === 'textarea' ? 'textarea' : 'text'" :show-password="ui.secret" @input="emitValue" />
+    </template>
+    <el-switch v-else-if="fieldType === 'boolean'" :value="booleanDisplayValue" @input="emitValue" />
+    <el-dialog v-if="complex && value !== undefined && value !== null" :visible.sync="expanded" :title="`${label} · 编辑`" width="min(720px, calc(100vw - 32px))" append-to-body custom-class="schema-object-dialog">
       <el-button v-if="depth >= 8 && !deepExpanded && !hasIssue && !query.trim()" size="mini" @click="deepExpanded = true">展开深层结构</el-button>
       <template v-else-if="fieldType === 'object'">
         <div class="object-grid">
@@ -42,13 +51,7 @@
           <el-button size="small" @click="addArray">添加一项</el-button>
         </div>
       </template>
-      <el-select v-else-if="options.length" :value="value" class="full-control" @input="emitValue">
-        <el-option v-for="option in options" :key="String(option.value)" :label="option.label" :value="option.value" />
-      </el-select>
-      <el-switch v-else-if="fieldType === 'boolean'" :value="value" @input="emitValue" />
-      <el-input-number v-else-if="['integer', 'number'].includes(fieldType)" :value="value" :precision="fieldType === 'integer' ? 0 : undefined" :min="resolvedSchema.minimum" :max="resolvedSchema.maximum" :step="fieldType === 'integer' ? 1 : 0.1" @change="emitValue" />
-      <el-input v-else :value="value" :type="ui.secret ? 'password' : /prompt|template|description/i.test(path) || ui.component === 'textarea' ? 'textarea' : 'text'" :show-password="ui.secret" @input="emitValue" />
-    </template>
+    </el-dialog>
     <p v-if="ambiguous" class="field-help">请选择字段类型；当前内容保持不变。</p>
     <div v-if="localError || fieldError" class="field-error">{{ localError || fieldError }}</div>
   </div>
@@ -86,6 +89,15 @@ export default {
     },
     resolvedSchema() { return this.variants.length ? { ...this.baseSchema, ...(this.variants[this.variantIndex] || {}) } : this.baseSchema },
     fieldType() { return this.resolvedSchema.type || (this.resolvedSchema.properties ? "object" : valueType(this.value)) },
+    booleanDisplayValue() {
+      if (this.value !== undefined) return Boolean(this.value)
+      if (Object.prototype.hasOwnProperty.call(this.resolvedSchema, "default")) {
+        const value = this.resolvedSchema.default
+        return typeof value === "string" ? ["true", "1", "yes", "on"].includes(value.toLowerCase()) : Boolean(value)
+      }
+      if (typeof this.resolvedSchema.const === "boolean") return this.resolvedSchema.const
+      return false
+    },
     description() { return this.ui.description || this.resolvedSchema.description || "" },
     objectProperties() { return this.resolvedSchema.properties || {} },
     requiredKeys() { return this.resolvedSchema.required || [] },
@@ -128,25 +140,10 @@ export default {
 </script>
 
 <style scoped>
-.schema-field { min-width: 0; }.schema-field.nested { padding-top: 4px; }.field-label { display: flex; min-height: 42px; flex-direction: column; justify-content: flex-end; margin-bottom: 7px; }.field-label strong { font-size: 14px; }.field-label span, .object-heading span { margin-top: 3px; color: var(--text-color-secondary); font-size: 12px; line-height: 1.45; }.object-heading { padding: 8px 0; border-bottom: 1px solid var(--border-color-light); }.object-heading > div { display: flex; flex-direction: column; }.object-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; padding: 8px 0 14px; }.object-grid > .schema-field:has(.object-heading) { grid-column: 1 / -1; }.full-control, .number-control { width: 100%; }.array-editor { display: flex; flex-direction: column; gap: 10px; }.array-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; padding: 10px; border: 1px solid var(--border-color-light); border-radius: 6px; }.json-editor ::v-deep textarea { font-family: Consolas, "Courier New", monospace; font-size: 12px; }.field-error { margin-top: 5px; color: var(--danger-color); font-size: 12px; }.danger-action { color: var(--danger-color); }@media (max-width: 720px) { .object-grid { grid-template-columns: 1fr; }.object-grid > .schema-field:has(.object-heading) { grid-column: auto; } }
+.schema-field { min-width: 0; }.schema-field.nested { padding-top: 4px; }.field-label { display: flex; min-height: 42px; flex-direction: column; justify-content: flex-end; margin-bottom: 7px; overflow-wrap: anywhere; }.field-label strong { font-size: 14px; }.field-label span, .object-heading span { margin-top: 3px; color: var(--text-color-secondary); font-size: 12px; line-height: 1.45; }.object-heading { padding: 8px 0; border-bottom: 1px solid var(--border-color-light); }.object-heading > div { display: flex; flex-direction: column; }.field-overview { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }.structure-toggle { min-width: 0; flex: 1; padding: 8px 0; border: 0; color: var(--text-color-secondary); background: transparent; text-align: left; cursor: pointer; overflow-wrap: anywhere; }.object-grid { display: grid; grid-template-columns: 1fr; gap: 14px 20px; padding: 8px 0 14px; }.full-control, .number-control { width: 100%; }.array-editor { display: flex; flex-direction: column; gap: 10px; }.array-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; padding: 10px; border: 1px solid var(--border-color-light); border-radius: 6px; }.json-editor ::v-deep textarea { font-family: Consolas, "Courier New", monospace; font-size: 12px; }.field-error { margin-top: 5px; color: var(--danger-color); font-size: 12px; }.field-help { color: var(--text-color-secondary); font-size: 12px; }.field-actions, .map-key { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }.field-actions > *, .map-key > * { max-width: 100%; }.map-key .el-input { flex: 1; min-width: 100px; }.object-entry { min-width: 0; }.schema-field ::v-deep .el-input-number { max-width: 100%; }.danger-action { color: var(--danger-color); }@media (max-width: 720px) { .object-grid { grid-template-columns: 1fr; } }
 </style>
 
 <style>
 .configuration-confirm.el-message-box { width:calc(100vw - 32px); max-width:420px; box-sizing:border-box; overflow-wrap:anywhere; }
 </style>
 
-<style scoped>
-.field-actions,.map-key{display:flex;gap:8px;align-items:center;margin:6px 0}.object-entry{min-width:0}
-</style>
-
-<style scoped>
-.field-label { min-height:0; overflow-wrap:anywhere; }
-.field-overview { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
-.structure-toggle { min-width:0; flex:1; padding:8px 0; border:0; text-align:left; color:var(--text-color-secondary); background:transparent; cursor:pointer; overflow-wrap:anywhere; }
-.field-actions, .map-key { flex-wrap:wrap; }
-.field-actions > *, .map-key > * { max-width:100%; }
-.map-key .el-input { flex:1; min-width:100px; }
-.object-grid { grid-template-columns:1fr; }
-.schema-field ::v-deep .el-input-number { max-width:100%; }
-.field-help { font-size:12px; color:var(--text-color-secondary); }
-</style>
