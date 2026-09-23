@@ -484,10 +484,22 @@
           <div class="startup-report-row">
             <span>文件监听</span>
             <strong>
-              {{ lifecycleStatus.plugin_runtime?.watcher?.mode || "未知" }} /
-              {{ lifecycleStatus.plugin_runtime?.watcher?.state || "未知" }}
+              {{ watchModeLabel(lifecycleStatus.plugin_runtime?.watcher?.mode) }} /
+              {{ watchStateLabel(lifecycleStatus.plugin_runtime?.watcher?.state) }}
             </strong>
           </div>
+          <div v-if="lifecycleStatus.plugin_runtime?.last_operation" class="startup-report-row">
+            <span>最近代码与配置更新</span>
+            <strong>{{ runtimeApplyLabel(lifecycleStatus.plugin_runtime.last_operation.apply_mode) }}</strong>
+          </div>
+          <details v-if="lifecycleStatus.plugin_runtime?.last_operation?.steps?.length" class="startup-diagnostic">
+            <summary>查看本批更新结果</summary>
+            <p v-for="(step, index) in lifecycleStatus.plugin_runtime.last_operation.steps" :key="index">
+              {{ runtimeApplyLabel(step.apply_mode) }} · {{ (step.changed || []).join('、') }}
+              <span v-if="step.reason_codes?.length || step.reason"> · {{ (step.reason_codes?.length ? step.reason_codes : [step.reason]).map(runtimeReasonLabel).join('；') }}</span>
+            </p>
+          </details>
+          <p v-for="reason in lifecycleStatus.plugin_runtime?.pending_restart_reasons || []" :key="reason" class="startup-failures">{{ runtimeReasonLabel(reason) }}</p>
           <NetworkStatus :status="lifecycleStatus.network || {}" />
           <div class="startup-report-row">
             <span>TLS关闭超时回收</span>
@@ -967,6 +979,20 @@ export default {
   inject: ["setAppTheme"],
   methods: {
     httpModeLabel, httpStateLabel, httpErrorLabel,
+    watchModeLabel(mode) {
+      return { hot_only: "仅安全热重载", disabled: "不监听", auto_restart: "热重载及自动重启" }[mode] || "未知策略"
+    },
+    watchStateLabel(state) {
+      return { watching: "监听中", disabled: "已关闭", stopped: "已停止", idle: "等待监听目录", retrying: "正在恢复监听" }[state] || "尚未就绪"
+    },
+    runtimeApplyLabel(mode) {
+      return { hot_reloaded: "插件已热重载", config_reloaded: "配置已应用", component_restarted: "组件已重建", webui_refresh: "页面资源已更新", restart_pending: "等待重启", restart_requested: "已请求重启", failed: "更新失败", rolled_back: "更新已回滚" }[mode] || "状态未确认"
+    },
+    runtimeReasonLabel(reason) {
+      const labels = { core_source_changed: "核心代码变化，需要重启", dependencies_changed: "依赖声明变化，需要重启", plugin_dependencies_changed: "插件依赖变化，需要重启", orm_model_changed: "数据库模型变化，需要重启", plugin_not_hot_reloadable: "此插件不能安全热重载", configuration_batch_incomplete: "本批配置未完全应用，相关代码未继续热重载", import_time_config_consumer_requires_restart: "配置消费者需要重启", import_time_environment_consumer_requires_restart: "环境配置消费者需要重启", nonebot_compatibility: "当前框架不支持安全热重载" }
+      if (String(reason).startsWith("environment:")) return `环境配置 ${reason.slice(12)} 需要重启`
+      return labels[reason] || `更新原因：${reason}`
+    },
     handleRecoveryNetwork(frozen) {
       if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
       this.startupPollTimer = null

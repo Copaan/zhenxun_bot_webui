@@ -2,6 +2,7 @@
   <main class="maintenance-page">
     <header><span>真寻 · 实例迁移</span><h1>维护与恢复</h1><p>业务入口保持关闭。请查看持久任务结果，按要求补充授权。</p></header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
+    <el-alert v-if="connectionNotice" :title="connectionNotice" type="info" :closable="false" show-icon />
     <el-form v-if="!token" class="login-form" label-position="top" @submit.native.prevent="login">
       <h2>使用目标实例原管理员登录</h2>
       <el-form-item label="管理员账号"><el-input v-model="username" autocomplete="username" :disabled="busy" /></el-form-item>
@@ -15,6 +16,7 @@
         <div class="task-heading"><h3>{{ job.action === 'restore' ? '完整替换迁移' : '导出实例' }}</h3><el-tag>{{ stage(job.stage) }}</el-tag></div>
         <code>{{ job.id }}</code>
         <p v-if="job.first_error" class="error-text">首次错误：{{ job.first_error }}</p>
+        <p v-if="job.progress && job.progress.snapshot_mode === 'forced_stop'">强制停止后导出 · 仅核验已持久化数据</p><p v-if="job.progress && job.progress.original_worker_resumed">原实例已恢复并就绪</p>
         <details v-if="job.shutdown_diagnostic && job.shutdown_diagnostic.result !== 'confirmed'">
           <summary>查看关闭阻塞原因</summary>
           <p v-for="item in (job.shutdown_diagnostic.failed_components || [])" :key="item.component_id">
@@ -22,9 +24,9 @@
             <small v-if="item.diagnostic && item.diagnostic.diagnostic_id">（{{ item.diagnostic.diagnostic_id }}）</small>
             <span v-for="(stage, index) in ((item.diagnostic && item.diagnostic.stages) || [])" :key="index"> · {{ stage.stage }}：{{ stage.error_code }}</span>
           </p>
-          <p v-if="job.shutdown_diagnostic.forced">进程曾被强制终止，未生成迁移快照。</p>
+          <p v-if="job.shutdown_diagnostic.forced">业务进程曾被强制终止。</p>
           <p v-if="job.progress && job.progress.export_recovered">已结束失败任务，允许原实例重新启动。</p>
-          <p v-else>关闭尚未确认，迁移快照未开始。</p>
+          <p v-else-if="!(job.progress && job.progress.snapshot_mode)">关闭尚未确认，迁移快照未开始。</p>
         </details>
         <p v-if="job.rollback_error" class="error-text">回滚错误：{{ job.rollback_error }}</p>
         <p v-if="job.progress && job.progress.last_recovery_error" class="error-text">最近一次恢复核验：{{ job.progress.last_recovery_error }}</p>
@@ -61,12 +63,13 @@
 </template>
 
 <script>
+import { getBaseUrl } from '@/utils/api'
 const terminal = new Set(["completed", "partial", "rolled_back", "cancelled", "failed"])
 const stages = { queued: "等待执行", preparing: "准备中", quiescing: "停止业务中", snapshotting: "快照中", resuming: "恢复原实例中", compressing: "压缩中", applying: "应用中", verifying: "维护验证中", committing: "提交中", committed: "已提交，等待收尾", completed: "完成", partial: "部分完成", rolling_back: "回滚中", rolled_back: "已回滚", awaiting_credentials: "等待凭据", recovery_required: "恢复受阻", cancelled: "已取消", failed: "失败" }
 export default {
   name: "MigrationMaintenance",
-  data: () => ({ username: "", password: "", token: "", busy: false, loading: false, error: "", jobs: [], total: 0, page: 1, recovery: null, databaseUser: "", databasePassword: "", confirmed: false, ready: false, terminal }),
-  created() { this.sequence = 0; this.sessionRevision = 0; this.onLeave = event => { if (this.databasePassword || this.confirmed) { event.preventDefault(); event.returnValue = "" } }; window.addEventListener("beforeunload", this.onLeave) },
+  data: () => ({ username: "", password: "", token: "", busy: false, loading: false, error: "", connectionNotice: "", lastConnectedAt: 0, activeTaskId: "", jobs: [], total: 0, page: 1, recovery: null, databaseUser: "", databasePassword: "", confirmed: false, ready: false, terminal }),
+  created() { this.sequence = 0; this.sessionRevision = 0; this.activeTaskId = sessionStorage.getItem(`migration-export:${getBaseUrl()}`) || ''; this.onLeave = event => { if (this.databasePassword || this.confirmed) { event.preventDefault(); event.returnValue = "" } }; window.addEventListener("beforeunload", this.onLeave) },
   beforeDestroy() { this.sequence += 1; clearTimeout(this.poll); window.removeEventListener("beforeunload", this.onLeave); this.token = "" },
   methods: {
     stage(value) { return stages[value] || value },
@@ -74,8 +77,14 @@ export default {
       const token = this.token
       const headers = this.token ? { Authorization: `Bearer ${this.token}` } : {}
       if (data) headers["Content-Type"] = "application/json"
-      const response = await fetch(`/zhenxun/api/${path}`, { method, headers, body: form || (data ? JSON.stringify(data) : undefined), credentials: "omit", redirect: "error", cache: "no-store" })
-      const value = await response.json()
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 10000)
+      let response, value
+      try {
+        response = await fetch(`/zhenxun/api/${path}`, { method, headers, body: form || (data ? JSON.stringify(data) : undefined), credentials: "omit", redirect: "error", cache: "no-store", signal: controller.signal })
+        value = await response.json()
+      } catch (error) { error.connectionUnavailable = true; throw error }
+      finally { clearTimeout(timeout) }
       if (response.status === 401 && token === this.token) this.logout(false)
       if (!response.ok || !value.suc) throw new Error(typeof value.detail === "string" ? value.detail : "维护请求失败，请重新连接后查看任务状态。")
       return value.data
@@ -92,11 +101,20 @@ export default {
       if (!this.token) return
       const sequence = ++this.sequence; clearTimeout(this.poll); this.loading = true
       try {
-        const jobs = await this.request(`migration/tasks?offset=${(this.page - 1) * 20}&limit=20`)
-        const status = await this.request("system/startup/status")
+        const [jobs, status, tracked] = await Promise.allSettled([
+          this.request(`migration/tasks?offset=${(this.page - 1) * 20}&limit=20`),
+          this.request("system/startup/status"),
+          this.activeTaskId ? this.request(`migration/tasks/${this.activeTaskId}`) : Promise.resolve(null),
+        ])
         if (sequence !== this.sequence) return
-        this.jobs = jobs.items; this.total = jobs.total; this.ready = status.operating_mode === "normal"
-      } catch (error) { if (sequence === this.sequence) this.error = error.message }
+        if (jobs.status === 'fulfilled') { this.jobs = jobs.value.items; this.total = jobs.value.total }
+        if (tracked.status === 'fulfilled' && tracked.value) { this.jobs = [tracked.value, ...this.jobs.filter(job => job.id !== tracked.value.id)] }
+        if (status.status === 'fulfilled') this.ready = status.value.operating_mode === "normal" && ["warmup_ready", "degraded"].includes(status.value.state)
+        if (jobs.status === 'rejected') throw jobs.reason
+        if (tracked.status === 'rejected') throw tracked.reason
+        if (!this.activeTaskId) this.activeTaskId = this.jobs.find(job => !terminal.has(job.stage))?.id || ''
+        this.lastConnectedAt = Date.now(); this.connectionNotice = ''
+      } catch (error) { if (sequence === this.sequence) { if (error.connectionUnavailable) this.connectionNotice = `管理连接暂时中断，正在查询原任务。${this.lastConnectedAt ? '上次连接：' + new Date(this.lastConnectedAt).toLocaleTimeString() : ''}`; else this.error = error.message } }
       finally { if (sequence === this.sequence) { this.loading = false; if (!this.ready) this.poll = setTimeout(() => this.refresh(), 5000) } }
     },
     changePage(value) { this.page = value; this.refresh() },

@@ -5,6 +5,7 @@
       <el-button icon="el-icon-refresh" size="small" :loading="loading" @click="refresh">刷新状态</el-button>
     </header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
+    <el-alert v-if="connectionNotice" :title="connectionNotice" type="info" :closable="false" show-icon />
     <el-alert v-if="exportTracking" title="正在跟踪导出任务：业务进程会短暂停止，创建快照后自动恢复，再压缩并校验迁移包。连接中断时将继续查询原任务，请勿重复提交。" type="info" :closable="false" show-icon />
     <el-form v-if="authRequired" label-position="top" class="migration-form" @submit.native.prevent="login">
       <p>会话已失效，草稿和任务记录仍保留。恢复提交后请使用确认的管理员重新登录。</p>
@@ -20,6 +21,13 @@
       <el-button icon="el-icon-upload2" :disabled="!capability || capability.upload === false || busy" @click="$refs.file.click()">选择迁移包</el-button>
       <input ref="file" class="migration-file-input" type="file" accept=".zx" @change="selectFile" />
     </div>
+    <el-dialog title="确认导出实例" :visible.sync="exportDialog" width="min(560px, 94vw)" :close-on-click-modal="false">
+      <p v-if="exportPreview">将导出 {{ exportPreview.total }} 个文件，排除 {{ exportPreview.excluded_total }} 项。明文包包含管理员凭据、数据库及插件代码。</p>
+      <p>先停止业务、建立快照，再恢复原实例并打包。</p>
+      <el-checkbox v-model="allowForcedShutdown">关闭超时后允许强制停止 Bot</el-checkbox>
+      <p v-if="allowForcedShutdown" class="migration-error-code">将终止整个业务进程树，可能丢失尚未落盘数据。进程退出与数据库核验通过后才继续导出；迁移包会标记强制停止来源。</p>
+      <span slot="footer"><el-button @click="exportDialog = false">取消</el-button><el-button type="primary" :loading="exportBusy" @click="confirmExport">确认导出明文包</el-button></span>
+    </el-dialog>
     <div class="migration-source">
       <el-select v-model="discoveredPath" :disabled="busy || !capability || capability.discovery === false" placeholder="选择本机已发现的迁移包" clearable @change="selectDiscovered">
         <el-option v-for="item in packages" :key="item.path" :label="`${item.path} (${size(item.size)})`" :value="item.path" />
@@ -39,7 +47,7 @@
       <el-progress v-if="file && busy && !sealed" :percentage="progress" />
     </el-form>
     <div v-if="inspection" class="migration-inspection">
-      <h3>迁移包核验结果</h3>
+      <h3>迁移包核验结果</h3><el-alert v-if="inspection.source.snapshot_mode === 'forced_stop'" title="此包在强制停止 Bot 后生成，可能不包含尚未落盘的内容。" type="warning" :closable="false" />
       <el-alert title="文件完整性已核验；来源可信性未验证。恢复尚未执行。" type="info" :closable="false" />
       <dl>
         <dt>包 ID</dt><dd>{{ inspection.package_id }}</dd>
@@ -64,7 +72,9 @@
       <article v-for="job in jobs" :key="job.id" class="migration-job">
         <div><strong>{{ job.action === 'export' ? '导出实例' : '完整替换迁移' }}</strong><span>{{ stage(job.stage) }}</span></div>
         <code>{{ job.id }}</code>
-        <p v-if="job.first_error" class="migration-error-code">首次错误：{{ job.first_error }}</p>
+        <p v-if="job.first_error" class="migration-error-code">{{ jobFailureSummary(job) }}</p><details v-if="job.first_error"><summary>任务错误详情</summary><code>{{ job.first_error }}</code></details>
+        <p v-if="job.progress && job.progress.snapshot_mode === 'forced_stop'">强制停止后导出 · 仅核验已持久化数据</p>
+        <p v-if="job.progress && job.progress.original_worker_resumed">原实例已恢复并就绪</p>
         <details v-if="job.shutdown_diagnostic && job.shutdown_diagnostic.result !== 'confirmed'">
           <summary>查看关闭阻塞原因</summary>
           <p v-for="item in (job.shutdown_diagnostic.failed_components || [])" :key="item.component_id">
@@ -72,9 +82,9 @@
             <small v-if="item.diagnostic && item.diagnostic.diagnostic_id">（{{ item.diagnostic.diagnostic_id }}）</small>
             <span v-for="(stage, index) in ((item.diagnostic && item.diagnostic.stages) || [])" :key="index"> · {{ stage.stage }}：{{ stage.error_code }}</span>
           </p>
-          <p v-if="job.shutdown_diagnostic.forced">进程曾被强制终止，未生成迁移快照。</p>
+          <p v-if="job.shutdown_diagnostic.forced">业务进程曾被强制终止。</p>
           <p v-if="job.progress && job.progress.export_recovered">已结束失败任务，允许原实例重新启动。</p>
-          <p v-else>关闭尚未确认，迁移快照未开始。</p>
+          <p v-else-if="!(job.progress && job.progress.snapshot_mode)">关闭尚未确认，迁移快照未开始。</p>
         </details>
         <p v-if="job.rollback_error" class="migration-error-code">回滚错误：{{ job.rollback_error }}</p>
         <p v-if="job.progress && job.progress.last_recovery_error" class="migration-error-code">最近一次恢复核验：{{ job.progress.last_recovery_error }}</p>
@@ -117,6 +127,8 @@
 </template>
 
 <script>
+import { apiErrorDetail } from "@/utils/api-error"
+import { getBaseUrl } from "@/utils/api"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 import { migrationLogin, downloadMigration, migrationRequest, migrationStages, recoveryDatabase, terminalMigrationStages, uploadMigration } from "@/utils/migration"
 import MigrationRestoreWizard from "./MigrationRestoreWizard.vue"
@@ -125,8 +137,8 @@ export default {
   name: "MigrationPanel",
   components: { MigrationRestoreWizard },
   props: { firstDeployment: Boolean },
-  data: () => ({ authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
-  created() { this.sequence = 0; this.readSequence = 0; this.refresh() },
+  data: () => ({ exportDialog: false, exportPreview: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
+  created() { this.sequence = 0; this.readSequence = 0; this.activeExportId = sessionStorage.getItem(this.exportStorageKey()) || ""; this.exportTracking = Boolean(this.activeExportId); this.refresh() },
   beforeDestroy() { this.sequence += 1; this.readSequence += 1; this.exportSequence = (this.exportSequence || 0) + 1; this.recoverySequence = (this.recoverySequence || 0) + 1; this.controller?.abort(); clearTimeout(this.poll); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
   watch: {
     recoveryUsername() { this.recoveryDirty() },
@@ -134,28 +146,32 @@ export default {
     recoveryConfirmed() { this.recoveryDirty() },
   },
   methods: {
+    jobFailureSummary(job) {
+      const shutdown = job.shutdown_diagnostic || {}, progress = job.progress || {}
+      const components = (shutdown.failed_components || []).slice(0, 3).map(item => item.component_id).join('、')
+      const reason = components ? `关闭阻塞：${components}` : job.first_error === 'migration_shutdown_unconfirmed' ? '关闭未通过核验' : '任务执行失败'
+      return `${reason}。${shutdown.forced ? '已强制停止；' : ''}${progress.snapshot_generated ? '快照已生成；' : '快照未确认生成；'}${progress.original_worker_resumed ? '原实例已恢复并就绪。' : '原实例恢复状态未确认。'}`
+    },
+    exportStorageKey() { return `migration-export:${getBaseUrl()}` },
+    trackExport(id) { this.activeExportId = id; this.exportTracking = Boolean(id); if (id) sessionStorage.setItem(this.exportStorageKey(), id); else sessionStorage.removeItem(this.exportStorageKey()) },
     async exportInstance() {
       if (this.exportBusy || this.exportTracking) return
+      this.exportBusy = true; this.error = ''
+      try { this.exportPreview = await migrationRequest('/export/preview'); this.allowForcedShutdown = false; this.exportDialog = true }
+      catch (error) { this.error = this.message(error) }
+      finally { this.exportBusy = false }
+    },
+    async confirmExport() {
+      if (this.exportBusy || this.exportTracking) return
+      const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('')
       const sequence = this.exportSequence = (this.exportSequence || 0) + 1
-      this.exportBusy = true; this.error = ""
-      try {
-        const preview = await migrationRequest("/export/preview")
+      this.exportBusy = true; this.exportDialog = false; this.exportSubmittedAt = Date.now(); this.trackExport(id)
+      try { await migrationRequest('/export', { method: 'post', data: { task_id: id, confirm_secrets: true, dependencies: true, allow_forced_shutdown: this.allowForcedShutdown } }) }
+      catch (error) {
         if (sequence !== this.exportSequence) return
-        await this.$confirm(`将导出 ${preview.total} 个文件（另有 ${preview.excluded_total} 个排除项目）。明文包包含管理员凭据、数据库及插件代码；确认后会停止业务进程、建立一致快照并自动重启原业务，再打包校验。请等待任务完成后下载。`, "确认导出实例", { type: "warning", confirmButtonText: "确认导出明文包" })
-        if (sequence !== this.exportSequence) return
-        this.exportTracking = true
-        try {
-          await migrationRequest("/export", { method: "post", data: { confirm_secrets: true, dependencies: true } })
-        } catch (error) {
-          if (sequence !== this.exportSequence) return
-          if (error.response && error.response.status < 500) { this.exportTracking = false; throw error }
-          // The launcher may have accepted the request before the worker disconnected.
-          this.error = "提交结果暂未确认，正在查询原任务；不会自动重复导出。"
-        }
-        if (sequence !== this.exportSequence) return
-        await this.refresh()
-      } catch (error) { if (sequence === this.exportSequence && error !== "cancel" && error !== "close") this.error = this.message(error) }
-      finally { if (sequence === this.exportSequence) this.exportBusy = false }
+        if (error.response && error.response.status < 500) { this.trackExport(''); this.error = this.message(error) }
+        else this.connectionNotice = '提交结果暂未确认，正在查询原任务；不会自动重复导出。'
+      } finally { if (sequence === this.exportSequence) { this.exportBusy = false; await this.refresh() } }
     },
     async downloadJob(job) {
       if (this.downloading) return
@@ -214,27 +230,44 @@ export default {
     },
     stage(value) { return migrationStages[value] || value },
     size(value) { return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MiB` : `${(value / 1024).toFixed(1)} KiB` },
-    message(error) { if (error.response?.status === 401) this.authRequired = true; return error.response?.data?.detail || error.message || "迁移请求失败" },
+    message(error) { if (error.response?.status === 401) this.authRequired = true; return apiErrorDetail(error, "迁移请求失败") },
     canCancel(job) { return !terminalMigrationStages.has(job.stage) && !["committed", "recovery_required"].includes(job.stage) && !job.cancel_requested },
     async refresh() {
       const sequence = ++this.readSequence
-      clearTimeout(this.poll)
-      this.loading = true
+      clearTimeout(this.poll); this.loading = true
       try {
-        const capability = await migrationRequest("/capabilities")
-        const packages = capability.discovery === false ? { items: [] } : await migrationRequest("/discover")
-        const jobs = await migrationRequest("/tasks", { params: { offset: (this.jobPage - 1) * 20, limit: 20 } })
-        if (sequence !== this.readSequence) return
-        this.capability = capability; this.packages = packages.items; this.jobs = jobs.items; this.jobTotal = jobs.total
-        this.exportTracking = jobs.items.some((job) => job.action === "export" && !terminalMigrationStages.has(job.stage)); this.error = ""
-        if (jobs.items.some((job) => !terminalMigrationStages.has(job.stage))) this.poll = setTimeout(() => this.refresh(), 5000)
-      } catch (error) {
-        if (sequence === this.readSequence) {
-          this.error = this.message(error)
-          if (!error.response || error.response.status >= 500) this.poll = setTimeout(() => this.refresh(), 5000)
+        if (!this.discoveryInFlight) {
+          this.discoveryInFlight = true
+          migrationRequest('/discover', { timeout: 10000 }).then(value => { if (!this._isDestroyed) this.packages = value.items }).catch(() => {}).finally(() => { this.discoveryInFlight = false })
         }
+        const [cap, listing, tracked] = await Promise.allSettled([
+          migrationRequest('/capabilities', { timeout: 10000 }),
+          migrationRequest('/tasks', { timeout: 10000, params: { offset: (this.jobPage - 1) * 20, limit: 20 } }),
+          this.activeExportId ? migrationRequest(`/tasks/${this.activeExportId}`, { timeout: 10000 }) : Promise.resolve(null),
+        ])
+        if (sequence !== this.readSequence) return
+        if (cap.status === 'fulfilled') this.capability = cap.value
+        if (listing.status === 'fulfilled') { this.jobs = listing.value.items; this.jobTotal = listing.value.total }
+        if (tracked.status === 'fulfilled' && tracked.value) {
+          if (!this.jobs.some(job => job.id === tracked.value.id)) this.jobs.unshift(tracked.value)
+          else this.jobs = this.jobs.map(job => job.id === tracked.value.id ? tracked.value : job)
+          if (terminalMigrationStages.has(tracked.value.stage)) this.trackExport('')
+        }
+        if (tracked.status === 'rejected' && tracked.reason.response?.status === 404 && (!this.exportSubmittedAt || Date.now() - this.exportSubmittedAt > 60000)) {
+          this.trackExport(''); this.error = '未找到本次任务。请核对当前实例与任务历史后再提交。'
+        }
+        if (listing.status === 'rejected') throw listing.reason
+        if (this.activeExportId && tracked.status === 'rejected') throw tracked.reason
+        if (!this.activeExportId) { const active = this.jobs.find(job => job.action === 'export' && !terminalMigrationStages.has(job.stage)); if (active) this.trackExport(active.id) }
+        this.lastConnectedAt = Date.now(); this.connectionNotice = ''
+      } catch (error) {
+        if (sequence !== this.readSequence) return
+        if (!error.response || error.response.status >= 500 || (this.activeExportId && error.response.status === 404)) {
+          this.connectionNotice = `管理连接暂时中断，正在查询原任务。${this.lastConnectedAt ? '上次连接：' + new Date(this.lastConnectedAt).toLocaleTimeString() : '暂未取得任务状态。'}`
+        } else this.error = this.message(error)
+      } finally {
+        if (sequence === this.readSequence) { this.loading = false; if (this.activeExportId || this.connectionNotice || this.jobs.some(job => !terminalMigrationStages.has(job.stage))) this.poll = setTimeout(() => this.refresh(), 5000) }
       }
-      finally { if (sequence === this.readSequence) this.loading = false }
     },
     async selectFile(event) {
       const file = event.target.files[0]

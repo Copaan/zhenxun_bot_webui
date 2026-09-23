@@ -38,12 +38,12 @@ export function recoveryDatabase(requirements, username, password) {
   return { target_url: `${engine}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${target.port}/${encodeURIComponent(target.database)}` }
 }
 
-export async function migrationRequest(path, { method = "get", data, signal, params } = {}) {
+export async function migrationRequest(path, { method = "get", data, signal, params, timeout } = {}) {
   const url = `${getBaseUrl()}/zhenxun/api/migration${path}`
   if (bootstrapSession && new URL(url, window.location.href).origin !== window.location.origin) throw new Error("迁移临时会话仅限当前实例入口")
   const response = await axios({
     url,
-    method, data, signal, params, suppressErrorToast: true, authFailureMode: "local",
+    method, data, signal, params, ...(timeout === undefined ? {} : { timeout }), suppressErrorToast: true, authFailureMode: "local",
     headers: { ...(data instanceof ArrayBuffer ? { "Content-Type": "application/octet-stream" } : {}), ...(bootstrapSession ? { "X-Migration-Session": bootstrapSession } : {}) },
   })
   if (!response?.suc) throw new Error(response?.info || "migration_request_failed")

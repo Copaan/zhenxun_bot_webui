@@ -13,6 +13,7 @@
       </el-form>
       <section v-if="step === 0">
         <h3>已选择的迁移包</h3>
+        <el-alert v-if="inspection.source && inspection.source.snapshot_mode === 'forced_stop'" title="此迁移包来自强制停止：只包含可读取的持久化数据，不保证插件内存状态或业务级一致性。" type="warning" :closable="false" show-icon />
         <p class="restore-code">{{ inspection.package_id }}</p>
         <p class="restore-code">SHA-256：{{ inspection.sha256 }}</p>
         <p>将完整替换迁移包声明的目录，目标独有文件和空目录先进入回滚区。包中未包含的类别不会清空。</p>

@@ -16,27 +16,30 @@ try {
   // Source archives do not always include Git metadata.
 }
 process.env.VUE_APP_WEBUI_REVISION = buildRevision(pkg.version, commit)
+const managedDev = process.env.WEBUI_DEV_MANAGED === "1" && process.env.NODE_ENV !== "production"
+const devPrefix = "/__webui_dev__/"
 module.exports = defineConfig({
-  transpileDependencies: true,
-})
-
-let proxyObj = {}
-
-proxyObj["/"] = {
-  target: "http://localhost:8080", //真寻酱的端口捏
-  changeOrigin: true,
-  pathReWrite: {
-    "^/": "/",
-  },
-  ws: true,
-}
-
-module.exports = {
   productionSourceMap: false,
+  publicPath: managedDev ? devPrefix : "/",
   devServer: {
-    host: "0.0.0.0",
-    port: 8081,
-    proxy: proxyObj,
+    host: process.env.WEBUI_DEV_HOST || "127.0.0.1",
+    port: Number(process.env.WEBUI_DEV_PORT || 8081),
+    ...(managedDev ? {
+      hot: true,
+      client: {
+        webSocketURL: { protocol: "auto:", hostname: "0.0.0.0", port: 0, pathname: `${devPrefix}ws` },
+        webSocketTransport: require.resolve("./src/utils/webui-dev-client"),
+        overlay: { errors: true, warnings: false },
+      },
+      webSocketServer: { type: "ws", options: { path: `${devPrefix}ws` } },
+      setupMiddlewares: require("./scripts/webui-dev-middleware"),
+    } : { proxy: {
+      "/zhenxun": {
+        target: process.env.WEBUI_DEV_BACKEND || "http://127.0.0.1:8080",
+        changeOrigin: false,
+        ws: true,
+      },
+    } }),
   },
   css: {
     loaderOptions: {
@@ -104,4 +107,4 @@ module.exports = {
         ],
       })
   },
-}
+})

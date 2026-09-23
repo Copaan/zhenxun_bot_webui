@@ -114,7 +114,7 @@ export default new Vuex.Store({
     SET_WS_STATUS_DATA(state, data) {
       state.runtimeGeneration = Number(data.runtime_generation || 0)
       state.webuiRevision = data.webui_revision || ""
-      handleWebuiRevision(state.webuiRevision)
+      handleWebuiRevision(data)
       state.wsStatusObj.timeList.push(data.check_time.split("T")[1])
       state.wsStatusObj.cpuList.push(data.cpu)
       state.wsStatusObj.memoryList.push(data.memory)

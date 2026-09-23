@@ -14,16 +14,16 @@
     </div>
     <el-tabs v-model="section">
       <el-tab-pane label="环境配置" name="env">
-        <p class="environment-source">配置来源 <code>{{ envSourceFile }}</code> · 运行值由后端提供，只读展示</p>
+        <p class="environment-source">配置来源 <code>{{ envSourceFile }}</code> · 本体与插件环境项均保存在此文件，按归属分类展示</p>
         <SettingsLayout v-model="envCategory" :query="envSearch" :groups="envCategories" @search="envSearch = $event">
           <section v-for="group in envCategories.filter(item => item.key !== 'custom')" v-show="envSearch.trim() ? group.count > 0 : envCategory === group.key" :key="group.key">
             <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-tag size="mini" type="info">{{ group.count }} 项</el-tag></header>
             <div v-if="!group.fields.length" class="category-empty">此分类暂无配置项</div>
-            <SchemaField v-for="field in group.fields" v-show="envMatches(field)" :key="field.key" presentation="settings" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema" :label="envLabel(field)" :path="field.key" :ui="envFieldUi(field)" :query="envSearch" :readonly-reason="field.readonly_reason || (field.sensitive ? (field.configured ? '已配置 · 敏感值不会回传' : '未配置 · 请在原文或专用页面修改') : '')" :issues="envIssues" @input="setEnvField(field.key, $event)">
+            <template v-for="(field, fieldIndex) in group.fields"><h4 v-if="group.key === 'plugins' && envMatches(field) && !group.fields.slice(0, fieldIndex).some(item => envMatches(item) && envFieldSource(item) === envFieldSource(field))" :key="field.key + '-source'" class="environment-owner">{{ envFieldSource(field) }}</h4><SchemaField v-show="envMatches(field)" :key="field.key" presentation="settings" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema" :label="envLabel(field)" :path="field.key" :ui="envFieldUi(field)" :query="envSearch" :readonly-reason="field.readonly_reason || (field.sensitive ? (field.configured ? '已配置 · 敏感值不会回传' : '未配置 · 请在原文或专用页面修改') : '')" :issues="envIssues" @input="setEnvField(field.key, $event)">
               <template #meta><div v-if="envFieldChanged(field.key)" class="field-effect changed-indicator">未保存修改</div></template>
-              <template #details><div>生效方式：{{ effectMeta(field.apply_effect).label }}</div><div v-if="field.schema_sources && field.schema_sources.length">来源：{{ envFieldSource(field) }}</div></template>
-              <template #status><div v-if="!field.sensitive" class="setting-runtime"><span>当前运行</span><code>{{ formatRuntimeValue(field.effective_value) }}</code></div><p v-if="field.overridden" class="setting-status-note">由外部环境变量覆盖，文件修改不会覆盖进程环境。</p><p v-else-if="envPending(field)" class="setting-status-note">已保存，尚未生效 · {{ effectMeta(field.apply_effect).label }}</p></template>
-            </SchemaField>
+              <template #details><div>生效方式：{{ effectMeta(field.apply_effect).label }}</div><div v-if="field.schema_sources && field.schema_sources.length">来源：{{ field.schema_sources.join('、') }}</div><div v-if="field.external_environment_present">启动环境也声明了此变量，重启时请核对外部环境设置。</div></template>
+              <template #status><div v-if="!field.sensitive" class="setting-runtime"><span>当前运行</span><code>{{ field.runtime_available === false ? "未取得" : formatRuntimeValue(field.effective_value) }}</code></div><p v-if="field.overridden" class="setting-status-note">当前运行值与启动环境变量一致，和文件设置不同。重启时请同时核对启动环境。</p><p v-else-if="!envFieldChanged(field.key) && envStateText(field)" class="setting-status-note" :class="{ neutral: field.apply_state === 'unknown' }">{{ envStateText(field) }}</p></template>
+            </SchemaField></template>
           </section>
           <section v-show="envSearch.trim() ? customSearchCount > 0 : envCategory === 'custom'" class="custom-env-section">
             <header class="settings-group-heading">
@@ -44,7 +44,7 @@
             <div v-else class="custom-env-empty">尚未配置自定义环境变量</div>
             <div v-if="customEnvError" class="inline-error">{{ customEnvError }}</div>
           </section>
-          <template #footer><div class="save-description"><strong>{{ envChangeCount ? envChangeCount + ' 项未保存修改' : '所有更改已保存' }}</strong>{{ envSaveHint }}</div><el-button :disabled="!envChangeCount || Boolean(saving)" @click="resetEnvironment">撤销修改</el-button><el-button type="primary" :disabled="!envChangeCount || Boolean(customEnvError)" :loading="saving === 'env'" @click="saveEnv">保存环境配置</el-button></template>
+          <template #footer><div class="save-description"><strong>{{ envChangeCount ? envChangeCount + ' 项未保存修改' : '没有未保存的修改' }}</strong>{{ envSaveHint }}</div><el-button :disabled="!envChangeCount || Boolean(saving)" @click="resetEnvironment">撤销修改</el-button><el-button type="primary" :disabled="!envChangeCount || Boolean(customEnvError)" :loading="saving === 'env'" @click="saveEnv">保存环境配置</el-button></template>
         </SettingsLayout>
       </el-tab-pane>
 
@@ -139,6 +139,12 @@ export default {
       loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", envFieldEffects: {}, customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], simpleChanges: {}, groupSearch: "", selectedGroup: "", launcherManaged: false,
       rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalidPaths: [], pluginIssues: [], orphanPanel: [], selectedOrphan: "",
       envFieldDefinitions: [
+        { key: 'CACHE_MODE', label: '缓存模式', options: [{value:'NONE',label:'关闭缓存'},{value:'MEMORY',label:'内存缓存'},{value:'REDIS',label:'Redis'}], help: '本体缓存的存储方式。' },
+        { key: 'REDIS_HOST', label: 'Redis 地址', help: 'Redis 服务的主机名或 IP 地址。' },
+        { key: 'REDIS_PORT', label: 'Redis 端口', help: 'Redis 服务监听的端口。' },
+        { key: 'REDIS_PASSWORD', label: 'Redis 密码', help: '用于连接 Redis，敏感值不回传。' },
+        { key: 'REDIS_EXPIRE', label: '缓存有效期', unit: '秒', help: 'Redis 普通缓存的默认有效期。' },
+        { key: 'DB_URL', label: '数据库连接', help: '数据库连接地址可能包含密码，请在配置原文中修改。' },
         { key: "HOST", label: "监听地址", placeholder: "0.0.0.0", help: "0.0.0.0 允许局域网访问，127.0.0.1 仅本机访问。" },
         { key: "PORT", label: "监听端口", type: "number", placeholder: "8080", help: "WebUI 与适配器共享的本地服务端口；启用 HTTPS 后该端口提供 HTTPS。" },
         { key: "WEBUI_HTTPS_ENABLED", label: "启用 HTTPS", type: "switch", help: "使用用户提供的可信 PEM 证书和私钥，需要重启生效。" },
@@ -147,6 +153,8 @@ export default {
         { key: "WEBUI_HTTP_MODE", label: "HTTP兼容入口", type: "http-mode", dependsOn: "WEBUI_HTTPS_ENABLED", launcherOnly: true, options: [{ value: "serve", label: "完整访问" }, { value: "redirect", label: "跳转HTTPS" }, { value: "disabled", label: "关闭" }], help: "完整访问由launcher边车代理API、静态资源和WebSocket；边车异常不会中断HTTPS和Bot。" },
         { key: "WEBUI_HTTP_REDIRECT_PORT", label: "HTTP兼容端口", type: "number", dependsOn: "WEBUI_HTTPS_ENABLED", httpModeRequired: true, launcherOnly: true, placeholder: "80", help: "默认80；端口冲突时HTTPS继续运行，HTTP入口进入降级并自动重试。" },
         { key: "LOG_LEVEL", label: "日志等级", placeholder: "INFO", help: "常用值为 DEBUG、INFO、WARNING。" },
+        { key: "API_TIMEOUT", label: "接口超时", unit: "秒", help: "适配器 API 调用的等待时间上限。" },
+        { key: "RUNTIME_WATCH_MODE", label: "代码自动更新", options: [{ value: "hot_only", label: "仅安全热重载（推荐）" }, { value: "disabled", label: "关闭文件监听" }, { value: "auto_restart", label: "热重载，必要时自动重启" }], help: "默认只重载可安全更新的插件；核心代码和依赖变更提示重启。自动重启模式需要 launcher，保存后应用。" },
         { key: "NICKNAME", label: "机器人昵称", placeholder: "[\"真寻\"]", help: "使用 dotenv 支持的列表格式。" },
         { key: "SELF_NICKNAME", label: "回复昵称", placeholder: "真寻", help: "回复消息中使用的自称。" },
         { key: "COMMAND_START", label: "命令前缀", placeholder: "[\"/\"]", help: "支持多个命令前缀。" },
@@ -154,7 +162,7 @@ export default {
         { key: "ALCONNA_USE_COMMAND_START", label: "Alconna 使用命令前缀", type: "switch", help: "修改后会重载受影响的 Alconna 插件。" },
         { key: "SUPERUSERS", label: "超级用户", placeholder: "[\"123456\"]", help: "平台用户 ID 列表。" },
         { key: "PLATFORM_SUPERUSERS", label: "平台超级用户", placeholder: "{\"qq\":[\"123456\"]}", help: "按平台分别配置超级用户。" },
-        { key: "SESSION_EXPIRE_TIMEOUT", label: "会话超时", placeholder: "120", help: "交互会话的超时秒数。" },
+        { key: "SESSION_EXPIRE_TIMEOUT", label: "会话超时", type: "number", unit: "秒", placeholder: "120", help: "交互会话的超时秒数。" },
         { key: "IMAGE_TO_BYTES", label: "图片字节发送", type: "switch", help: "仅在适配器需要时开启。" },
         { key: "EXT_PATH", label: "扩展插件路径", placeholder: "[]", help: "额外插件目录列表。" },
       ],
@@ -178,7 +186,7 @@ export default {
     envSaveHint() {
       const changedKeys = Object.keys(this.changedEnvFields())
       const needsRestart = this.customOperations.length > 0 || changedKeys.some((key) => ["restart_required", "worker_restart"].includes(this.envFieldEffects[key]))
-      if (!changedKeys.length && !this.customOperations.length && !Object.keys(this.originalEnvFields).some(key => this.envFields[key] === undefined)) return "仅实际变化会触发运行时操作"
+      if (!changedKeys.length && !this.customOperations.length && !Object.keys(this.originalEnvFields).some(key => this.envFields[key] === undefined)) return ""
       if (!needsRestart) return "保存后立即应用，必要时只重载相关插件或服务"
       return this.launcherManaged ? "包含启动期配置，保存后可确认重启" : "包含启动期配置，保存后需要手动重启"
     },
@@ -212,10 +220,10 @@ export default {
   mounted() { this.loadSummary() },
   beforeDestroy() { clearDirtyState("plugin-configuration"); clearDirtyState("environment-configuration"); clearDirtyState("raw-configuration") },
   methods: {
-    envFieldUi(field) { return { ...this.envMeta(field), description: this.envHelp(field), secret: field.sensitive } },
-    envFieldSource(field) { return (field.schema_sources || []).map(item => typeof item === 'string' ? item : item.source || item.model || item.module || '注册模型').join('、') || '配置模型' },
+    envFieldUi(field) { return { ...this.envMeta(field), description: this.envHelp(field) || (field.category === 'plugins' ? '插件未提供字段说明；请查看下方来源。' : ''), secret: field.sensitive } },
+    envFieldSource(field) { return (field.source_labels || field.schema_sources || []).map(item => typeof item === 'string' ? item : item.source || item.model || item.module || '注册模型').join('、') || '本体配置' },
     envFieldChanged(key) { return JSON.stringify(this.envFields[key]) !== JSON.stringify(this.originalEnvFields[key]) },
-    envPending(field) { return field.configured && !field.sensitive && Object.prototype.hasOwnProperty.call(field, 'effective_value') && JSON.stringify(this.originalEnvFields[field.key]) !== JSON.stringify(field.effective_value) },
+    envStateText(field) { return { restart_pending: '已保存，重启 Bot 后生效', applying: '正在应用', failed: '应用失败，请查看操作结果后重试', unknown: '运行状态未确认' }[field.apply_state] || '' },
     customMatches(item) { return !this.envSearch.trim() || `${item.key} 自定义变量`.toLowerCase().includes(this.envSearch.trim().toLowerCase()) },
     resetEnvironment() { this.envFields = JSON.parse(JSON.stringify(this.originalEnvFields)); this.customEnv = this.originalCustomEnv.map(item => ({ ...item })); this.envIssues = []; this.markEnvDirty() },
     focusEnvironmentIssue() { const issue = this.envIssues[0]; if (!issue) return; const group = this.envCategories.find(item => item.fields?.some(field => issue.path === field.key || String(issue.path).startsWith(field.key + '.'))); if (group) this.envCategory = group.key; this.envSearch = ''; this.focusIssue() },
@@ -259,15 +267,15 @@ export default {
     },
     effectMeta(effect) {
       return {
-        in_place: { label: "立即生效", type: "success" },
-        component_restart: { label: "重建组件", type: "success" },
-        plugin_reactivate: { label: "重载插件", type: "success" },
-        worker_restart: { label: "需要重启", type: "warning" },
-        hot_reload: { label: "立即生效", type: "success" },
-        plugin_reload: { label: "重载插件", type: "success" },
+        in_place: { label: "保存后自动应用", type: "success" },
+        component_restart: { label: "保存后自动重建相关组件", type: "success" },
+        plugin_reactivate: { label: "保存后自动重载相关插件", type: "success" },
+        worker_restart: { label: "保存后需重启 Bot", type: "warning" },
+        hot_reload: { label: "保存后自动应用", type: "success" },
+        plugin_reload: { label: "保存后自动重载相关插件", type: "success" },
         service_reload: { label: "重建服务", type: "success" },
-        restart_required: { label: "需要重启", type: "warning" },
-      }[effect] || { label: "需要重启", type: "warning" }
+        restart_required: { label: "保存后需重启 Bot", type: "warning" },
+      }[effect] || { label: "保存后需重启 Bot", type: "warning" }
     },
     normalizeCustomEnv(items) {
       return (items || []).map((item) => ({ ...item, clientId: `env-${++this.customEnvSequence}`, value: item.value || "", replacing: false, deleted: false, isNew: false }))
@@ -474,19 +482,19 @@ export default {
 </script>
 
 <style scoped>
-.configuration-center { min-height: 420px; }.configuration-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }.configuration-toolbar h2 { margin: 0; font-size: 20px; }.configuration-toolbar p { margin: 5px 0 0; color: var(--text-color-secondary); }
+.configuration-center { min-height:420px; padding:24px; border-radius:16px; max-width:1600px; margin:0 auto; background:var(--bg-color-secondary,#fff); box-sizing:border-box; }.configuration-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }.configuration-toolbar h2 { margin: 0; font-size: 20px; }.configuration-toolbar p { margin: 5px 0 0; color: var(--text-color-secondary); }
 .field-help { margin-top: 5px; color: var(--text-color-secondary); font-size: 12px; line-height: 1.5; }.plugin-config-workbench { display: grid; height: clamp(360px, calc(100vh - 370px), 680px); grid-template-columns: 230px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-color); border-radius: 8px; }.config-groups { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 14px; overflow-y: auto; border-right: 1px solid var(--border-color); }.config-groups .el-input { margin-bottom: 8px; }.config-groups button { display: flex; min-height: 54px; flex-direction: column; justify-content: center; padding: 7px 9px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.config-groups button:hover { background: var(--bg-color-hover); }.config-groups button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.config-groups button strong, .config-groups button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.config-groups button span { margin-top: 3px; color: var(--text-color-secondary); font-size: 11px; }.current-config-group { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 18px 20px 0; }.config-form-scroll { min-height: 0; flex: 1; padding-right: 5px; overflow-y: auto; }.group-heading { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color-light); }.group-heading h3 { margin: 0; font-size: 18px; }.group-heading p { margin: 4px 0 0; color: var(--text-color-secondary); font-size: 12px; }.group-empty, .current-config-empty { color: var(--text-color-secondary); text-align: center; }.group-empty { padding: 24px 4px; }.current-config-empty { display: grid; place-content: center; }.current-config-empty i { font-size: 36px; }.sensitive-placeholder { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 11px; border: 1px dashed var(--border-color); border-radius: 5px; color: var(--text-color-secondary); }
 
 .plaintext-warning { margin: 8px 0; }
 .action-bar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color-secondary); }.config-action-bar { position: static; flex: none; margin-top: 8px; }.action-bar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.raw-switch { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 10px; }.raw-editor ::v-deep textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; line-height: 1.55; }.inline-error { margin-top: 8px; color: var(--el-color-danger); }
 .validation-issues { margin: 10px 0 0; padding: 10px 14px 10px 34px; border: 1px solid rgba(224,82,96,.35); border-radius: 6px; color: var(--danger-color); background: rgba(224,82,96,.06); }.validation-issues li { margin: 4px 0; line-height: 1.55; }.validation-issues code { margin-right: 8px; }
 .custom-env-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }.custom-env-list { display: flex; flex-direction: column; gap: 10px; padding-bottom: 16px; }.custom-env-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(220px, 1.4fr) auto auto auto; align-items: center; gap: 9px; }.custom-env-row.deleted { opacity: .58; }.secret-configured { display: flex; min-height: 40px; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color-secondary); }.custom-env-empty { padding: 8px 0 20px; color: var(--text-color-secondary); text-align: center; }
-@media (max-width: 760px) { .configuration-toolbar, .custom-env-heading { align-items: flex-start; flex-direction: column; }.custom-env-row { grid-template-columns: 1fr auto; }.custom-env-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }.plugin-config-workbench { grid-template-columns: 1fr; }.config-groups { display: grid; max-height: 240px; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--border-color); }.config-groups .el-input { grid-column: 1 / -1; }.current-config-group { padding: 14px; }.group-heading { align-items: flex-start; flex-direction: column; }.action-bar { flex-wrap: wrap; }.action-bar span { width: 100%; }.raw-switch { gap: 10px; } }
+@media (max-width: 760px) { .configuration-center { padding:12px; } .configuration-toolbar, .custom-env-heading { align-items: flex-start; flex-direction: column; }.custom-env-row { grid-template-columns: 1fr auto; }.custom-env-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }.plugin-config-workbench { grid-template-columns: 1fr; }.config-groups { display: grid; max-height: 240px; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--border-color); }.config-groups .el-input { grid-column: 1 / -1; }.current-config-group { padding: 14px; }.group-heading { align-items: flex-start; flex-direction: column; }.action-bar { flex-wrap: wrap; }.action-bar span { width: 100%; }.raw-switch { gap: 10px; } }
 </style>
 
 <style scoped>
 .network-action-bar { position: static; }
-@media (max-width: 760px) {
+@media (max-width: 760px) { .configuration-center { padding:12px; }
   .plugin-config-workbench { height: auto; }
   .config-form-scroll { max-height: 70vh; }
 }
@@ -528,4 +536,8 @@ export default {
 
 <style scoped>
 .configuration-connection { display:flex; align-items:center; gap:16px; justify-content:space-between; padding:8px 0 14px; color:var(--text-color-secondary); font-size:12px; }.configuration-connection details { min-width:0; }.configuration-connection summary { cursor:pointer; }.environment-source { font-size:12px; color:var(--text-color-secondary); margin:4px 0 18px; overflow-wrap:anywhere; }.environment-source code { margin-left:8px; }.field-effect { font-size:11px; color:var(--text-color-secondary); margin-top:8px; }.changed-indicator { color:var(--primary-color,#5c83d6); }.setting-runtime { display:flex; flex-wrap:wrap; gap:4px 9px; margin-top:12px; font-size:11px; color:var(--text-color-secondary); line-height:1.6; }.setting-runtime > span { flex:none; }.setting-runtime code { min-width:0; overflow-wrap:anywhere; font-family:inherit; }.setting-status-note { font-size:11px; color:var(--warning-color,#b78236); line-height:1.6; margin:6px 0 0; }.category-empty { padding:40px 0; color:var(--text-color-secondary); font-size:13px; }.custom-env-section { min-width:0; }.custom-env-section .custom-env-row { grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; padding:18px 0; }.custom-env-section .custom-env-row .el-tag { display:none; }@media(max-width:768px) { .configuration-connection { align-items:flex-start; flex-wrap:wrap; }.custom-env-section .custom-env-row { grid-template-columns:minmax(0,1fr); } }
+</style>
+
+<style scoped>
+.setting-status-note.neutral { color:var(--text-color-secondary); }.environment-owner { font-size:13px; margin:20px 0 0; overflow-wrap:anywhere; color:var(--text-color-secondary); }
 </style>

@@ -18,6 +18,18 @@
           <el-select v-else-if="ambiguous" :id="controlId" :value="selectedVariant" placeholder="选择值的类型" @input="changeVariant">
             <el-option v-for="(option, index) in variants" :key="index" :label="option.title || option.type || `类型 ${index + 1}`" :value="index" />
           </el-select>
+          <template v-else-if="simpleArray">
+            <div class="direct-list">
+              <div v-for="(item, index) in arrayValue" :key="index" class="direct-list-item">
+                <el-select v-if="simpleItem.enum" :value="item" :aria-label="`${label} 第 ${index + 1} 项`" @input="updateItem(index, $event)"><el-option v-for="option in simpleItem.enum" :key="String(option)" :value="option" :label="String(option)" /></el-select>
+                <el-switch v-else-if="simpleItem.type === 'boolean'" :value="item === true" :aria-label="`${label} 第 ${index + 1} 项`" @input="updateItem(index, $event)" />
+                <el-input-number v-else-if="['number','integer'].includes(simpleItem.type)" :value="item" :precision="simpleItem.type === 'integer' ? 0 : undefined" :min="simpleItem.minimum" :max="simpleItem.maximum" :aria-label="`${label} 第 ${index + 1} 项`" controls-position="right" @change="updateItem(index, $event)" />
+                <el-input v-else :value="item" :aria-label="`${label} 第 ${index + 1} 项`" :placeholder="item === '' ? '空字符串（有效值）' : ''" @input="updateItem(index, $event)" />
+                <el-button type="text" icon="el-icon-delete" :aria-label="`删除第 ${index + 1} 项`" @click="removeItem(index)" />
+              </div>
+              <el-button size="small" icon="el-icon-plus" @click="emitValue([...arrayValue, emptyValue(simpleItem)])">添加条目</el-button>
+            </div>
+          </template>
           <template v-else-if="complex">
             <div class="structure-summary"><span>{{ summary(value) }}</span><el-button size="small" @click="openStructure">{{ inline ? (expanded ? '收起' : '展开') : '编辑' }}</el-button></div>
           </template>
@@ -45,7 +57,7 @@
       <slot name="status" />
       <div v-if="error" class="field-error" role="alert">{{ error }}</div>
     </div>
-    <div v-if="inline && complex && structureOpen && depth < 16" class="setting-structure">
+    <div v-if="inline && complex && !simpleArray && structureOpen && depth < 16" class="setting-structure">
       <template v-if="type === 'object'">
         <div v-for="key in keys" :key="key" class="structure-entry">
           <SettingsField :value="objectValue[key]" :schema="propertySchema(key)" :root-schema="root" :label="propertySchema(key).title || key" :path="`${path}.${key}`" :required="(resolved.required || []).includes(key)" :depth="depth + 1" :query="childQuery" :issues="issues" inline @input="updateKey(key, $event)" />
@@ -79,9 +91,9 @@ export default {
     value: { default: undefined }, schema: { type: Object, default: () => ({}) }, rootSchema: { type: Object, default: () => ({}) },
     label: { type: String, default: '' }, path: { type: String, default: '' }, ui: { type: Object, default: () => ({}) },
     query: { type: String, default: '' }, issues: { type: Array, default: () => [] }, readonly: { type: String, default: '' },
-    required: Boolean, inline: Boolean, initiallyOpen: Boolean, depth: { type: Number, default: 0 },
+    required: Boolean, inline: { type: Boolean, default: true }, initiallyOpen: Boolean, depth: { type: Number, default: 0 },
   },
-  data() { return { selectedVariant: null, selectedType: '', expanded: this.initiallyOpen, dialog: false, draft: undefined, draftIssues: [], newKey: '', localError: '' } },
+  data() { return { selectedVariant: null, selectedType: '', expanded: this.initiallyOpen || this.depth === 0, dialog: false, draft: undefined, draftIssues: [], newKey: '', localError: '' } },
   computed: {
     controlId() { return `setting-${this._uid}` },
     root() { return this.schema['x-root-schema'] || (Object.keys(this.rootSchema).length ? this.rootSchema : this.schema) },
@@ -99,6 +111,8 @@ export default {
     type() { return this.selectedType || (typeof this.resolved.type === 'string' ? this.resolved.type : null) || (this.resolved.properties ? 'object' : valueType(this.value)) },
     untyped() { return !this.base.type && !this.base.properties && !this.variants.length },
     complex() { return ['object', 'array'].includes(this.type) },
+    simpleItem() { return resolveReference(this.resolved.items || {}, this.root) },
+    simpleArray() { const item = this.simpleItem; return this.type === 'array' && !this.resolved.prefixItems && !Array.isArray(this.resolved.items) && (['string','number','integer','boolean'].includes(item.type) || (!item.type && this.arrayValue.length > 0 && this.arrayValue.every(value => typeof value === 'string'))) },
     nullable() { return this.base.type === 'null' || this.variants.some(item => item.type === 'null') || this.untyped },
     hasDefault() { return !this.ui.secret && !this.base.writeOnly && Object.prototype.hasOwnProperty.call(this.base, 'default') },
     displayValue() { return this.value === undefined && this.hasDefault ? this.base.default : this.value },
@@ -110,9 +124,9 @@ export default {
     error() { return this.localError || this.issues.find(item => item.path === this.path || String(item.path || '').startsWith(`${this.path}.`))?.message || '' },
     structureOpen() { return this.expanded || Boolean(this.query.trim() && this.matches) || Boolean(this.error) },
     properties() { return this.resolved.properties || {} },
-    objectValue() { return this.value && typeof this.value === 'object' && !Array.isArray(this.value) ? this.value : {} },
+    objectValue() { return this.displayValue && typeof this.displayValue === 'object' && !Array.isArray(this.displayValue) ? this.displayValue : {} },
     keys() { return [...new Set([...Object.keys(this.properties), ...Object.keys(this.objectValue)])] },
-    arrayValue() { return Array.isArray(this.value) ? this.value : [] },
+    arrayValue() { return Array.isArray(this.displayValue) ? this.displayValue : [] },
   },
   watch: { value() { this.localError = ''; this.selectedType = ''; this.selectedVariant = null } },
   methods: {
@@ -136,6 +150,7 @@ export default {
 </script>
 
 <style scoped>
+.direct-list { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }.direct-list-item { display:flex; gap:8px; width:100%; align-items:center; }.direct-list-item .el-input { flex:1; min-width:0; }
 .settings-field { display:grid; grid-template-columns:minmax(0,1fr) minmax(230px,.85fr); gap:18px 32px; padding:17px 0; border-bottom:1px solid var(--border-color-light,#edf0f3); color:var(--text-color,#253247); }
 .setting-info,.setting-edit,.setting-input { min-width:0; }.setting-info label { font-size:14px; font-weight:600; line-height:1.6; }.setting-info code { display:block; margin:4px 0 0; font-size:11px; color:var(--text-color-secondary,#84909f); overflow-wrap:anywhere; }.setting-info p { margin:5px 0; font-size:12px; line-height:1.7; color:var(--text-color-secondary,#758090); overflow-wrap:anywhere; }
 .setting-details { font-size:12px; color:var(--text-color-secondary,#758090); margin-top:9px; overflow-wrap:anywhere; }.setting-details summary { cursor:pointer; width:max-content; }.setting-details[open] { line-height:1.8; }.setting-controls { display:flex; gap:8px; align-items:center; }.setting-input { flex:1; }.setting-input ::v-deep .el-select,.setting-input ::v-deep .el-input { width:100%; }.setting-more { padding:9px; }.switch-control,.number-control { display:flex; align-items:center; gap:12px; }.switch-control span,.number-control > span { font-size:12px; color:var(--text-color-secondary,#758090); }.number-control ::v-deep .el-input-number { width:100%; min-width:0; }.setting-hint { margin-top:8px; font-size:11px; color:var(--text-color-secondary,#758090); }.structure-summary { display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px solid var(--border-color-light,#edf0f3); border-radius:8px; padding:8px 10px; }.structure-summary > span { font-size:12px; min-width:0; overflow-wrap:anywhere; }.setting-readonly { font-size:12px; line-height:1.6; }.field-error,.required-mark { color:var(--danger-color,#d94d57); font-size:12px; margin-top:8px; }.setting-structure { grid-column:1/-1; min-width:0; padding:0 14px 14px; border-left:2px solid var(--border-color-light,#edf0f3); }.structure-add { display:flex; gap:8px; max-width:400px; margin-top:12px; }.structure-entry { min-width:0; }.remove-entry { color:var(--danger-color,#d94d57); }.dialog-intro { margin-top:0; color:var(--text-color-secondary,#758090); font-size:12px; }.settings-field.is-nested { gap:12px 20px; }.has-error { border-bottom-color:var(--danger-color,#d94d57); }

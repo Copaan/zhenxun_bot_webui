@@ -48,7 +48,7 @@
         <strong>{{ environmentTitle }}</strong>
         <p>{{ environmentDescription }}</p>
       </div>
-      <el-button v-if="environment.repairable" type="warning" plain size="small" icon="el-icon-refresh" :loading="repairing" @click="repairEnvironment">同步依赖并重启</el-button>
+      <el-button v-if="environment.repairable" type="warning" plain size="small" icon="el-icon-refresh" :loading="repairing" @click="repairEnvironment">预览依赖修复</el-button>
     </div>
 
     <div v-if="error" class="inline-state is-error">
@@ -189,7 +189,7 @@
                   </div>
                 </div>
               </div>
-              <el-button v-if="analysis.environment && analysis.environment.repairable" type="warning" plain icon="el-icon-refresh" :loading="repairing" @click="repairEnvironment">同步锁定依赖并重启</el-button>
+              <el-button v-if="analysis.environment && analysis.environment.repairable" type="warning" plain icon="el-icon-refresh" :loading="repairing" @click="repairEnvironment">预览依赖修复</el-button>
             </el-alert>
             <template v-else-if="analysis.status === 'ready'">
               <section class="analysis-section core-ok">
@@ -296,6 +296,8 @@ const reasonLabels = {
   core_dependency_conflict: "安装会改变真寻核心依赖，已阻止操作。",
   third_party_dependency_conflict: "该插件与现有依赖约束冲突，未放宽或升级无关包。",
   plugin_dependency_invalid: "插件自身的依赖声明无法得到一致解。",
+  dependency_layer_state_mismatch: "依赖层记录与实际安装内容不一致，请先核对活动代际，不会覆盖记录或升级无关包。",
+  current_environment_dependency_conflict: "当前环境已有依赖冲突，请先查看约束来源并预览修复，再重新分析插件。",
   environment_drift: "当前运行环境与 uv.lock 不一致，请先同步项目依赖。",
   interpreter_mismatch: "当前worker不是由项目.venv启动，请使用uv run zx。",
   project_dependency_conflict: "插件依赖超出真寻声明的兼容范围。",
@@ -346,10 +348,10 @@ export default {
       return labels[this.analysis?.status] || "准备中"
     },
     analysisStatusType() { return this.analysis?.status === "ready" ? "success" : ["blocked", "failed"].includes(this.analysis?.status) ? "danger" : "info" },
-    environmentTone() { return ["immutable_drift", "incompatible_shared_drift", "project_lock_stale", "interpreter_mismatch", "failed"].includes(this.environment?.status) ? "danger" : this.environment?.status === "compatible_shared_drift" ? "warning" : "info" },
+    environmentTone() { return ["dependency_layer_state_mismatch", "current_environment_dependency_conflict", "immutable_drift", "incompatible_shared_drift", "project_lock_stale", "interpreter_mismatch", "failed"].includes(this.environment?.status) ? "danger" : this.environment?.status === "compatible_shared_drift" ? "warning" : "info" },
     environmentIcon() { return this.environmentTone === "danger" ? "el-icon-warning-outline" : this.environmentTone === "warning" ? "el-icon-info" : "el-icon-circle-check" },
     environmentTitle() {
-      const labels = { healthy: "项目依赖环境正常", extra_packages: "项目依赖正常，存在额外包", compatible_shared_drift: "共享依赖与锁文件不同但仍兼容", immutable_drift: "不可变核心依赖需要修复", incompatible_shared_drift: "共享依赖已超出兼容范围", project_lock_stale: "项目锁文件需要更新", interpreter_mismatch: "当前启动解释器不正确", failed: "依赖环境检测失败" }
+      const labels = { dependency_layer_state_mismatch: "活动依赖层与记录不一致", current_environment_dependency_conflict: "当前环境已有依赖冲突", healthy: "项目依赖环境正常", extra_packages: "项目依赖正常，存在额外包", compatible_shared_drift: "共享依赖与锁文件不同但仍兼容", immutable_drift: "不可变核心依赖需要修复", incompatible_shared_drift: "共享依赖已超出兼容范围", project_lock_stale: "项目锁文件需要更新", interpreter_mismatch: "当前启动解释器不正确", failed: "依赖环境检测失败" }
       return labels[this.environment?.status] || "正在检查依赖环境"
     },
     environmentDescription() {
@@ -452,6 +454,8 @@ export default {
       return apiErrorDetail(error, fallback)
     },
     driftDescription(item) {
+      if (item.requirement) return `${item.owner || '本体'} 要求 ${item.requirement} · 实际 ${item.actual || '未安装'} · ${item.layer === 'active_generation' ? '活动依赖层' : '基础环境'}`
+      if (Object.prototype.hasOwnProperty.call(item, 'recorded')) return `记录 ${item.recorded || '无'} · 实际 ${item.actual || '未安装'} · 代际 ${item.generation ?? '无'}`
       if (item.kind === "constraint_conflict") return `插件要求 ${item.expected || item.requirement || "-"} · 当前 ${item.actual || "未安装"}`
       const relation = { missing: "缺失", older: "版本偏低", newer: "版本偏高", version_mismatch: "版本不一致" }[item.kind] || "不一致"
       return `${relation} · 期望 ${item.expected || item.from || "-"} · 实际 ${item.actual || item.to || "未安装"}`
@@ -570,14 +574,20 @@ export default {
     async repairEnvironment() {
       const environment = this.analysis?.environment || this.environment
       if (!environment?.repairable || this.repairing) return
-      const changed = [...(environment.immutable_drift || []), ...(environment.incompatible_shared_drift || [])]
-      const summary = changed.slice(0, 8).map((item) => `${item.name}: ${item.actual || "缺失"} → ${item.expected}`).join("\n")
-      const confirmed = await this.$cuteConfirm({ title: "同步锁定依赖并重启", message: `${summary}\n\n同步使用 --locked --inexact，不会删除额外包。确认继续？`, confirmButtonText: "同步并重启", cancelButtonText: "取消", type: "warning" })
-      if (!confirmed) return
       this.repairing = true
       try {
-        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair`, { expected_fingerprint: environment.fingerprint, confirmed: true })
+        const inspected = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair/preview`, {})
+        if (!inspected.suc) throw new Error(inspected.info || "修复预览失败")
+        const preview = inspected.data
+        const summary = preview.changes.map(item => `${item.name}: ${item.from || item.actual || "缺失"} → ${item.to || item.expected} (${item.source === "active_generation" ? "活动依赖层" : "基础环境"})${item.requirements?.length ? "\n  " + item.requirements.map(value => `${value.owner || "本体"}: ${value.requirement}`).join("；") : ""}`).join("\n")
+        const layer = preview.mode === "layer"
+        const confirmed = await this.$cuteConfirm({ title: "依赖修复预览", message: `${summary}\n\n${layer ? "生成新的依赖层，准备完成后由你重启 Bot 生效。" : "同步锁定依赖并重启 Bot。"}`, confirmButtonText: layer ? "准备定向修复" : "同步并重启", cancelButtonText: "取消", type: "warning" })
+        if (!confirmed) return
+        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair`, { expected_fingerprint: preview.fingerprint, preview_id: preview.preview_id, confirmed: true })
         if (!response.suc) throw new Error(response.info || "依赖修复请求失败")
+        if (response.data.apply_mode === "restart_pending") {
+          this.$message.success(response.info); notifyRestartStatusChanged(); return
+        }
         startRestartRecovery({
           bootId: response.data.boot_id,
           launcherBootId: response.data.launcher_boot_id,
