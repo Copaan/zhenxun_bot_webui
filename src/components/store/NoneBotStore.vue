@@ -48,19 +48,19 @@
         <strong>{{ environmentTitle }}</strong>
         <p>{{ environmentDescription }}</p>
       </div>
-      <el-button v-if="environment.repairable" type="warning" plain size="small" icon="el-icon-refresh" :loading="repairing" @click="repairEnvironment">预览依赖修复</el-button>
     </div>
 
     <div v-if="environment && (environment.candidate_built || environment.startup_verification?.dependency_verification)" class="verification-status">
+      <span>最近依赖事务：</span>
       <el-tag v-if="environment.candidate_built" type="info" size="small">候选已构建，等待重启验证</el-tag>
       <el-tag v-if="environment.startup_verification?.dependency_verification" :type="environment.startup_verification.dependency_verification.state === 'passed' ? 'success' : 'warning'" size="small">{{ environment.startup_verification.dependency_verification.state === 'passed' ? '依赖核验通过' : environment.startup_verification.dependency_verification.state === 'partial' ? '所选依赖已核验，仍有冲突' : '依赖核验未通过' }}</el-tag>
       <el-tag v-if="environment.startup_verification?.plugin_verification" :type="environment.startup_verification.plugin_verification === 'passed' ? 'success' : 'danger'" size="small">{{ environment.startup_verification.plugin_verification === 'passed' ? '插件加载通过' : '插件加载失败' }}</el-tag>
     </div>
     <details v-if="environmentIssues.length" class="environment-details">
-      <summary>环境问题详情（{{ environmentIssues.length }} 项）</summary>
+      <summary>核心依赖详情（{{ environmentIssues.length }} 项）</summary>
       <div v-for="(item, index) in environmentIssues" :key="`${item.owner}-${item.name}-${index}`" class="dependency-change">
-        <code>{{ item.name }}</code>
-        <span>{{ item.owner || "本体" }} 要求 {{ item.requirement || item.expected }}；实际 {{ item.actual || "缺失" }}（{{ item.layer === "active_generation" ? "活动依赖层" : "基础环境" }}）</span>
+        <code>{{ item.name || "核心环境" }}</code>
+        <span>{{ coreIssueDescription(item) }}</span>
       </div>
     </details>
 
@@ -371,10 +371,11 @@ export default {
     }
   },
   computed: {
+    coreSummary() {
+      return this.environment?.core_summary || { status: "unconfirmed", checked_count: 0, issues: [] }
+    },
     environmentIssues() {
-      const env = this.environment || {}
-      const items = [...(env.requirement_conflicts || []), ...(env.immutable_drift || []), ...(env.layer_mismatch || [])]
-      return items.filter((item, index) => items.findIndex(other => other.owner === item.owner && other.name === item.name && other.requirement === item.requirement) === index)
+      return this.coreSummary.issues || []
     },
     drawerSize() { return window.innerWidth <= 680 ? "94%" : "600px" },
     analysisStatusLabel() {
@@ -382,20 +383,16 @@ export default {
       return labels[this.analysis?.status] || "准备中"
     },
     analysisStatusType() { return this.analysis?.status === "ready" ? "success" : ["blocked", "failed"].includes(this.analysis?.status) ? "danger" : "info" },
-    environmentTone() { return ["dependency_layer_state_mismatch", "current_environment_dependency_conflict", "immutable_drift", "incompatible_shared_drift", "project_lock_stale", "interpreter_mismatch", "failed"].includes(this.environment?.status) ? "danger" : this.environment?.status === "compatible_shared_drift" ? "warning" : "info" },
+    environmentTone() { return this.coreSummary.status === "incompatible" ? "danger" : this.coreSummary.status === "healthy" ? "info" : "warning" },
     environmentIcon() { return this.environmentTone === "danger" ? "el-icon-warning-outline" : this.environmentTone === "warning" ? "el-icon-info" : "el-icon-circle-check" },
     environmentTitle() {
-      const labels = { dependency_layer_state_mismatch: "活动依赖层与记录不一致", current_environment_dependency_conflict: "当前环境已有依赖冲突", healthy: "项目依赖环境正常", extra_packages: "项目依赖正常，存在额外包", compatible_shared_drift: "共享依赖与锁文件不同但仍兼容", immutable_drift: "不可变核心依赖需要修复", incompatible_shared_drift: "共享依赖已超出兼容范围", project_lock_stale: "项目锁文件需要更新", interpreter_mismatch: "当前启动解释器不正确", failed: "依赖环境检测失败" }
-      return labels[this.environment?.status] || "正在检查依赖环境"
+      const labels = { healthy: "本体核心依赖检查通过", incompatible: "本体核心依赖存在问题", unconfirmed: "核心依赖状态未确认" }
+      return labels[this.coreSummary.status] || labels.unconfirmed
     },
     environmentDescription() {
-      if (!this.environment) return ""
-      if (this.environment.status === "extra_packages") return `检测到 ${this.environment.extra_count || 0} 个额外包；它们不会阻止插件安装，安全同步也不会删除。`
-      if (this.environment.status === "compatible_shared_drift") return "实际版本仍满足真寻声明，将参与插件联合求解。"
-      if (this.environment.status === "healthy") return `已保护 ${this.environment.immutable_count || 0} 个核心包，${this.environment.shared_count || 0} 个共享包可协调。`
-      if (this.environment.status === "interpreter_mismatch") return "请通过项目launcher启动；同步项目.venv无法修复其他解释器。"
-      if (this.environment.status === "project_lock_stale") return "WebUI不会自动修改uv.lock，请先在终端更新并审查锁文件。"
-      return "查看依赖分析中的具体包差异，修复前不会安装插件。"
+      if (this.coreSummary.status === "healthy") return `已核对 ${this.coreSummary.checked_count || 0} 个本体核心依赖；安装插件时会进一步检查整体兼容性。`
+      if (this.coreSummary.status === "incompatible") return "请展开核心依赖详情核对版本和来源；此检查不会自动修改环境。"
+      return "尚未确认核心依赖的版本或来源，请查看详情或重新加载。此状态不代表检查通过。"
     },
     sharedChanges() { return this.analysis?.plan?.shared_changes || [] },
     compatibilityOverrides() { return this.analysis?.plan?.compatibility_overrides || [] },
@@ -431,6 +428,22 @@ export default {
   mounted() { this.loadEnvironment(); this.loadPlugins(false); this.restoreAnalysis() },
   beforeDestroy() { this.componentDestroyed = true; this.queuedPluginLoad = null; clearTimeout(this.searchTimer); clearTimeout(this.analysisTimer) },
   methods: {
+    coreIssueDescription(item) {
+      const labels = {
+        interpreter_mismatch: "当前解释器不是项目 .venv，尚未确认目标环境。",
+        project_lock_stale: "项目声明与锁文件的一致性尚未确认。",
+        core_scope_unavailable: "未取得核心依赖清单。",
+        source_unverified: "依赖来源无法确认。",
+        duplicate_metadata: "发现多份发行包元数据，实际来源需要核对。",
+        loaded_source_mismatch: "已加载模块与目标依赖来源不同，尚未确认生效状态。",
+        environment_check_failed: "核心依赖检测未完成，请重新加载后检查。",
+      }
+      if (item.kind === "layer_mismatch") return `活动依赖层与记录不一致；记录 ${item.recorded || "无"}，实际 ${item.actual || "缺失"}。`
+      if (labels[item.kind]) return labels[item.kind]
+      if (item.kind === "requires_python") return `${item.owner} 要求 ${item.requirement}，当前 Python 不满足此要求。`
+      const layer = item.layer === "active_generation" ? "活动依赖层" : item.layer === "base" ? "基础环境" : "来源未确认"
+      return `${item.owner || "本体"} 要求 ${item.requirement || item.expected}；实际 ${item.actual || "缺失"}（${layer}）`
+    },
     dependencySource(name) {
       const source = this.analysis?.plan?.change_sources?.[name]
       if (source?.kind === "requested_plugin") return "本次选择的插件"

@@ -5,9 +5,10 @@
       <el-button icon="el-icon-refresh" @click="loadRuntime">重新检查</el-button>
     </header>
 
+    <DatabaseConnectionStatus :result="{ runtime: runtime.database?.connection }" :checking="loading" />
     <section class="settings-band">
       <div class="section-heading">
-        <div><h2>数据库连接</h2></div>
+        <div><h2>编辑连接配置</h2><p>以下为已保存配置及编辑草稿，保存后按实际应用结果生效。</p></div>
         <span class="status-pill" :class="`is-${databaseStatus.status || 'unknown'}`">
           <i></i>{{ statusLabel(databaseStatus.status) }}
           <em v-if="databaseStatus.latency_ms != null">{{ databaseStatus.latency_ms }} ms</em>
@@ -99,6 +100,7 @@
 </template>
 
 <script>
+import DatabaseConnectionStatus from "@/components/system/DatabaseConnectionStatus.vue"
 import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 
@@ -111,6 +113,7 @@ const createDatabaseDrafts = () => ({
 
 export default {
   name: "DatabaseManage",
+  components: { DatabaseConnectionStatus },
   data() {
     return {
       loading: false, saving: false, probing: false, cacheAction: "", revision: "", launcherManaged: false, runtime: {}, operationError: "",
@@ -128,7 +131,7 @@ export default {
   computed: {
     activeDatabase() { return this.databaseDrafts[this.databaseMode] },
     activeProbeResult() { return this.probeResults[this.databaseMode] || {} },
-    databaseStatus() { return this.activeProbeResult.database || (this.databaseMode === this.savedDatabaseMode ? this.runtime.database?.connection : {}) || {} },
+    databaseStatus() { return this.activeProbeResult.database || {} },
     pageError() { return this.operationError || this.databaseProbeErrors[this.databaseMode] || "" },
     cacheStatus() {
       if (this.activeProbeResult.cache) return this.activeProbeResult.cache
@@ -146,8 +149,8 @@ export default {
   mounted() { this.loadRuntime() },
   beforeDestroy() { clearDirtyState("database-configuration") },
   watch: {
-    databaseDrafts: { deep: true, handler() { this.updateDirtyState() } },
-    cache: { deep: true, handler() { this.updateDirtyState() } },
+    databaseDrafts: { deep: true, handler() { this.probeResults = {}; this.databaseProbeErrors = {}; this.updateDirtyState() } },
+    cache: { deep: true, handler() { this.probeResults = {}; this.databaseProbeErrors = {}; this.updateDirtyState() } },
   },
   methods: {
     statusLabel(status) { return { ok: "连接正常", warning: "需要注意", error: "连接异常" }[status] || "尚未检查" },

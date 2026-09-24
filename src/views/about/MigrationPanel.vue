@@ -21,12 +21,15 @@
       <el-button icon="el-icon-upload2" :disabled="!capability || capability.upload === false || busy" @click="$refs.file.click()">选择迁移包</el-button>
       <input ref="file" class="migration-file-input" type="file" accept=".zx" @change="selectFile" />
     </div>
-    <el-dialog title="确认导出实例" :visible.sync="exportDialog" width="min(560px, 94vw)" :close-on-click-modal="false">
+    <el-dialog title="确认导出实例" :visible.sync="exportDialog" custom-class="migration-export-dialog" top="5vh" width="min(560px, 94vw)" :close-on-click-modal="false">
+      <DatabaseConnectionStatus :result="exportConnection" :checking="connectionChecking" migration />
+      <el-button size="small" :loading="connectionChecking" :disabled="exportBusy" @click="checkExportConnection">重新检测当前连接</el-button>
       <p v-if="exportPreview">将导出 {{ exportPreview.total }} 个文件，排除 {{ exportPreview.excluded_total }} 项。明文包包含管理员凭据、数据库及插件代码。</p>
+      <p v-if="error" class="migration-error-code" role="alert">{{ error }}</p>
       <p>先停止业务、建立快照，再恢复原实例并打包。</p>
       <el-checkbox v-model="allowForcedShutdown">关闭超时后允许强制停止 Bot</el-checkbox>
       <p v-if="allowForcedShutdown" class="migration-error-code">将终止整个业务进程树，可能丢失尚未落盘数据。进程退出与数据库核验通过后才继续导出；迁移包会标记强制停止来源。</p>
-      <span slot="footer"><el-button @click="exportDialog = false">取消</el-button><el-button type="primary" :loading="exportBusy" @click="confirmExport">确认导出明文包</el-button></span>
+      <span slot="footer"><el-button @click="exportDialog = false">取消</el-button><el-button type="primary" :loading="exportBusy" :disabled="connectionChecking || !exportConnection?.ready || !exportPreview" @click="confirmExport">确认导出明文包</el-button></span>
     </el-dialog>
     <div class="migration-source">
       <el-select v-model="discoveredPath" :disabled="busy || !capability || capability.discovery === false" placeholder="选择本机已发现的迁移包" clearable @change="selectDiscovered">
@@ -127,6 +130,7 @@
 </template>
 
 <script>
+import DatabaseConnectionStatus from "@/components/system/DatabaseConnectionStatus.vue"
 import { apiErrorDetail } from "@/utils/api-error"
 import { getBaseUrl } from "@/utils/api"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
@@ -136,12 +140,13 @@ import MigrationRestoreWizard from "./MigrationRestoreWizard.vue"
 
 export default {
   name: "MigrationPanel",
-  components: { MigrationRestoreWizard, MigrationTaskStatus },
+  components: { MigrationRestoreWizard, MigrationTaskStatus, DatabaseConnectionStatus },
   props: { firstDeployment: Boolean },
-  data: () => ({ exportDialog: false, exportPreview: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
+  data: () => ({ exportConnection: null, connectionChecking: false, connectionSequence: 0, exportDialog: false, exportPreview: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
   created() { this.sequence = 0; this.readSequence = 0; this.activeExportId = sessionStorage.getItem(this.exportStorageKey()) || ""; this.exportTracking = Boolean(this.activeExportId); this.refresh() },
-  beforeDestroy() { this.sequence += 1; this.readSequence += 1; this.exportSequence = (this.exportSequence || 0) + 1; this.recoverySequence = (this.recoverySequence || 0) + 1; this.controller?.abort(); clearTimeout(this.poll); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
+  beforeDestroy() { this.connectionSequence += 1; this.sequence += 1; this.readSequence += 1; this.exportSequence = (this.exportSequence || 0) + 1; this.recoverySequence = (this.recoverySequence || 0) + 1; this.controller?.abort(); clearTimeout(this.poll); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
   watch: {
+    exportDialog(value) { if (!value) { this.connectionSequence += 1; this.previewSequence = (this.previewSequence || 0) + 1; this.connectionChecking = false } },
     recoveryUsername() { this.recoveryDirty() },
     recoveryPassword() { this.recoveryDirty() },
     recoveryConfirmed() { this.recoveryDirty() },
@@ -149,22 +154,39 @@ export default {
   methods: {
     exportStorageKey() { return `migration-export:${getBaseUrl()}` },
     trackExport(id) { this.activeExportId = id; this.exportTracking = Boolean(id); if (id) sessionStorage.setItem(this.exportStorageKey(), id); else sessionStorage.removeItem(this.exportStorageKey()) },
+    async checkExportConnection() {
+      if (this.connectionChecking) return
+      const sequence = ++this.connectionSequence
+      this.connectionChecking = true; this.exportConnection = null
+      try {
+        const result = await migrationRequest('/export/connection-check', { method: 'post', data: {} })
+        if (sequence === this.connectionSequence && this.exportDialog) this.exportConnection = result
+      } catch (error) {
+        if (sequence === this.connectionSequence) this.exportConnection = { ready: false, code: this.message(error) }
+      } finally { if (sequence === this.connectionSequence) this.connectionChecking = false }
+    },
     async exportInstance() {
       if (this.exportBusy || this.exportTracking) return
-      this.exportBusy = true; this.error = ''
-      try { this.exportPreview = await migrationRequest('/export/preview'); this.allowForcedShutdown = false; this.exportDialog = true }
-      catch (error) { this.error = this.message(error) }
+      const sequence = this.previewSequence = (this.previewSequence || 0) + 1
+      this.exportBusy = true; this.error = ''; this.exportPreview = null; this.exportDialog = true; this.allowForcedShutdown = false
+      try {
+        const [preview] = await Promise.all([migrationRequest('/export/preview'), this.checkExportConnection()])
+        if (sequence === this.previewSequence && this.exportDialog) this.exportPreview = preview
+      } catch (error) { if (sequence === this.previewSequence) this.error = this.message(error) }
       finally { this.exportBusy = false }
     },
     async confirmExport() {
-      if (this.exportBusy || this.exportTracking) return
+      if (this.exportBusy || this.exportTracking || this.connectionChecking || !this.exportConnection?.ready || !this.exportPreview) return
       const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('')
       const sequence = this.exportSequence = (this.exportSequence || 0) + 1
       this.exportBusy = true; this.exportDialog = false; this.exportSubmittedAt = Date.now(); this.trackExport(id)
-      try { await migrationRequest('/export', { method: 'post', data: { task_id: id, confirm_secrets: true, dependencies: true, allow_forced_shutdown: this.allowForcedShutdown } }) }
+      try { await migrationRequest('/export', { method: 'post', data: { task_id: id, connection_fingerprint: this.exportConnection.fingerprint, confirm_secrets: true, dependencies: true, allow_forced_shutdown: this.allowForcedShutdown } }) }
       catch (error) {
         if (sequence !== this.exportSequence) return
-        if (error.response && error.response.status < 500) { this.trackExport(''); this.error = this.message(error) }
+        if (error.response && error.response.status < 500) {
+          this.trackExport(''); this.error = this.message(error)
+          this.exportConnection = null; this.exportDialog = true
+        }
         else this.connectionNotice = '提交结果暂未确认，正在查询原任务；不会自动重复导出。'
       } finally { if (sequence === this.exportSequence) { this.exportBusy = false; await this.refresh() } }
     },
@@ -308,6 +330,9 @@ export default {
 </script>
 
 <style scoped>
+::v-deep .migration-export-dialog { display: flex; flex-direction: column; max-height: 90vh; margin-bottom: 0; }
+::v-deep .migration-export-dialog .el-dialog__body { overflow-y: auto; min-height: 0; }
+::v-deep .migration-export-dialog .el-dialog__header, ::v-deep .migration-export-dialog .el-dialog__footer { flex-shrink: 0; }
 .migration-section { padding: 28px 0; border-top: 1px solid #dce2e8; color: #35424d; }
 .migration-heading, .migration-actions, .migration-source { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .migration-heading h2 { font-size: 21px; margin: 0 0 6px; }
