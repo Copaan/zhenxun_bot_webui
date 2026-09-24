@@ -101,6 +101,7 @@
 </template>
 
 <script>
+import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 const DashboardAnalytics = () =>
   import("@/components/dashboard/DashboardAnalytics.vue")
 const DashboardRuntimeDetails = () =>
@@ -117,9 +118,22 @@ export default {
     analyticsVisible: false,
     detailsOpen: false,
     overviewTimer: null,
+    overviewRequest: null,
+    overviewResumePending: false,
+    pageActive: true,
+    pageDisposed: false,
+    networkUnsubscribe: null,
     analyticsObserver: null,
   }),
   computed: {
+    cacheModeDescription() {
+      const cache = this.overview?.cache || {}
+      const actual = cache.actual_mode || cache.mode || "未取得"
+      const states = { invalid: "配置模式无效", externally_overridden: "被外部环境覆盖", restart_pending: "重启后生效", unconfirmed: "应用状态未确认" }
+      return cache.application_status && cache.application_status !== "applied"
+        ? `当前 ${actual} · 配置 ${cache.configured_mode || "未设置"} · ${states[cache.application_status] || "状态未确认"}`
+        : actual
+    },
     overallStatus() {
       return this.overview?.overall_status || "loading"
     },
@@ -152,7 +166,7 @@ export default {
           key: "database", ...this.overview.database,
           meta: this.overview.database.latency_ms == null ? "" : `${this.overview.database.latency_ms} ms`,
         },
-        { key: "cache", ...this.overview.cache, meta: this.overview.cache.mode || "" },
+        { key: "cache", ...this.overview.cache, meta: this.cacheModeDescription },
         {
           key: "protocol", label: "协议连接",
           status: this.overview.protocols.connection_count ? "ok" : "warning",
@@ -170,31 +184,63 @@ export default {
     },
   },
   mounted() {
-    this.loadOverview(false)
+    document.addEventListener("visibilitychange", this.syncOverviewPolling)
+    this.networkUnsubscribe = onBusinessNetworkChange(this.syncOverviewPolling)
+    this.syncOverviewPolling()
     this.loadMetrics()
-    this.overviewTimer = window.setInterval(() => this.loadOverview(false), 30000)
     this.$nextTick(this.observeAnalytics)
   },
+  activated() { this.pageActive = true; this.syncOverviewPolling() },
+  deactivated() { this.pageActive = false; this.syncOverviewPolling() },
   beforeDestroy() {
-    if (this.overviewTimer) window.clearInterval(this.overviewTimer)
+    this.pageDisposed = true
+    this.stopOverviewPolling()
+    document.removeEventListener("visibilitychange", this.syncOverviewPolling)
+    this.networkUnsubscribe?.()
     this.analyticsObserver?.disconnect()
   },
   methods: {
-    async loadOverview(force) {
-      if (force) this.refreshing = true
+    stopOverviewPolling() {
+      if (this.overviewTimer) window.clearInterval(this.overviewTimer)
+      this.overviewTimer = null
+    },
+    canPollOverview() {
+      return !this.pageDisposed && this.pageActive && !document.hidden && !isBusinessNetworkFrozen()
+    },
+    syncOverviewPolling() {
+      if (!this.canPollOverview()) { this.stopOverviewPolling(); return }
+      if (this.overviewTimer) return
+      if (this.overviewRequest) this.overviewResumePending = true
+      this.loadOverview(false)
+      this.overviewTimer = window.setInterval(() => this.loadOverview(false), 30000)
+    },
+    loadOverview(force) {
+      if (!this.canPollOverview()) return Promise.resolve()
+      if (this.overviewRequest) return this.overviewRequest
+      this.refreshing = !!force
+      this.overviewRequest = this.fetchOverview(force).finally(() => {
+        this.overviewRequest = null
+        this.refreshing = false
+        if (this.overviewResumePending) {
+          this.overviewResumePending = false
+          this.loadOverview(false)
+        }
+      })
+      return this.overviewRequest
+    },
+    async fetchOverview(force) {
       try {
         const response = await this.getRequest(
           `${this.$root.prefix}/dashboard/overview`,
           { force: force ? "true" : "false" },
           { suppressErrorToast: true }
         )
+        if (!this.canPollOverview()) return
         if (!response.suc || !response.data) throw new Error(response.info || "运行状态暂时不可用")
         this.overview = response.data
         this.loadError = ""
       } catch (error) {
-        this.loadError = error?.response?.data?.detail || error.message || "运行状态暂时不可用"
-      } finally {
-        this.refreshing = false
+        if (this.canPollOverview()) this.loadError = error?.response?.data?.detail || error.message || "运行状态暂时不可用"
       }
     },
     async loadMetrics() {

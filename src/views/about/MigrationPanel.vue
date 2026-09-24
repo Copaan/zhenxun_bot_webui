@@ -72,7 +72,7 @@
       <article v-for="job in jobs" :key="job.id" class="migration-job">
         <div><strong>{{ job.action === 'export' ? '导出实例' : '完整替换迁移' }}</strong><span>{{ stage(job.stage) }}</span></div>
         <code>{{ job.id }}</code>
-        <p v-if="job.first_error" class="migration-error-code">{{ jobFailureSummary(job) }}</p><details v-if="job.first_error"><summary>任务错误详情</summary><code>{{ job.first_error }}</code></details>
+        <migration-task-status :job="job" />
         <p v-if="job.progress && job.progress.snapshot_mode === 'forced_stop'">强制停止后导出 · 仅核验已持久化数据</p>
         <p v-if="job.progress && job.progress.original_worker_resumed">原实例已恢复并就绪</p>
         <details v-if="job.shutdown_diagnostic && job.shutdown_diagnostic.result !== 'confirmed'">
@@ -84,7 +84,7 @@
           </p>
           <p v-if="job.shutdown_diagnostic.forced">业务进程曾被强制终止。</p>
           <p v-if="job.progress && job.progress.export_recovered">已结束失败任务，允许原实例重新启动。</p>
-          <p v-else-if="!(job.progress && job.progress.snapshot_mode)">关闭尚未确认，迁移快照未开始。</p>
+          <p v-else-if="job.first_error === 'migration_shutdown_unconfirmed' && !(job.progress && job.progress.snapshot_mode)">关闭尚未确认，迁移快照未开始。</p>
         </details>
         <p v-if="job.rollback_error" class="migration-error-code">回滚错误：{{ job.rollback_error }}</p>
         <p v-if="job.progress && job.progress.last_recovery_error" class="migration-error-code">最近一次恢复核验：{{ job.progress.last_recovery_error }}</p>
@@ -130,12 +130,13 @@
 import { apiErrorDetail } from "@/utils/api-error"
 import { getBaseUrl } from "@/utils/api"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
-import { migrationLogin, downloadMigration, migrationRequest, migrationStages, recoveryDatabase, terminalMigrationStages, uploadMigration } from "@/utils/migration"
+import { migrationLogin, downloadMigration, migrationRequest, migrationStages, migrationPollDelay, recoveryDatabase, terminalMigrationStages, uploadMigration } from "@/utils/migration"
+import MigrationTaskStatus from "./MigrationTaskStatus.vue"
 import MigrationRestoreWizard from "./MigrationRestoreWizard.vue"
 
 export default {
   name: "MigrationPanel",
-  components: { MigrationRestoreWizard },
+  components: { MigrationRestoreWizard, MigrationTaskStatus },
   props: { firstDeployment: Boolean },
   data: () => ({ exportDialog: false, exportPreview: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
   created() { this.sequence = 0; this.readSequence = 0; this.activeExportId = sessionStorage.getItem(this.exportStorageKey()) || ""; this.exportTracking = Boolean(this.activeExportId); this.refresh() },
@@ -146,12 +147,6 @@ export default {
     recoveryConfirmed() { this.recoveryDirty() },
   },
   methods: {
-    jobFailureSummary(job) {
-      const shutdown = job.shutdown_diagnostic || {}, progress = job.progress || {}
-      const components = (shutdown.failed_components || []).slice(0, 3).map(item => item.component_id).join('、')
-      const reason = components ? `关闭阻塞：${components}` : job.first_error === 'migration_shutdown_unconfirmed' ? '关闭未通过核验' : '任务执行失败'
-      return `${reason}。${shutdown.forced ? '已强制停止；' : ''}${progress.snapshot_generated ? '快照已生成；' : '快照未确认生成；'}${progress.original_worker_resumed ? '原实例已恢复并就绪。' : '原实例恢复状态未确认。'}`
-    },
     exportStorageKey() { return `migration-export:${getBaseUrl()}` },
     trackExport(id) { this.activeExportId = id; this.exportTracking = Boolean(id); if (id) sessionStorage.setItem(this.exportStorageKey(), id); else sessionStorage.removeItem(this.exportStorageKey()) },
     async exportInstance() {
@@ -266,7 +261,7 @@ export default {
           this.connectionNotice = `管理连接暂时中断，正在查询原任务。${this.lastConnectedAt ? '上次连接：' + new Date(this.lastConnectedAt).toLocaleTimeString() : '暂未取得任务状态。'}`
         } else this.error = this.message(error)
       } finally {
-        if (sequence === this.readSequence) { this.loading = false; if (this.activeExportId || this.connectionNotice || this.jobs.some(job => !terminalMigrationStages.has(job.stage))) this.poll = setTimeout(() => this.refresh(), 5000) }
+        if (sequence === this.readSequence) { this.loading = false; if (this.activeExportId || this.connectionNotice || this.jobs.some(job => !terminalMigrationStages.has(job.stage))) this.poll = setTimeout(() => this.refresh(), migrationPollDelay(this.jobs, Boolean(this.connectionNotice))) }
       }
     },
     async selectFile(event) {

@@ -51,6 +51,35 @@
       <el-button v-if="environment.repairable" type="warning" plain size="small" icon="el-icon-refresh" :loading="repairing" @click="repairEnvironment">预览依赖修复</el-button>
     </div>
 
+    <div v-if="environment && (environment.candidate_built || environment.startup_verification?.dependency_verification)" class="verification-status">
+      <el-tag v-if="environment.candidate_built" type="info" size="small">候选已构建，等待重启验证</el-tag>
+      <el-tag v-if="environment.startup_verification?.dependency_verification" :type="environment.startup_verification.dependency_verification.state === 'passed' ? 'success' : 'warning'" size="small">{{ environment.startup_verification.dependency_verification.state === 'passed' ? '依赖核验通过' : environment.startup_verification.dependency_verification.state === 'partial' ? '所选依赖已核验，仍有冲突' : '依赖核验未通过' }}</el-tag>
+      <el-tag v-if="environment.startup_verification?.plugin_verification" :type="environment.startup_verification.plugin_verification === 'passed' ? 'success' : 'danger'" size="small">{{ environment.startup_verification.plugin_verification === 'passed' ? '插件加载通过' : '插件加载失败' }}</el-tag>
+    </div>
+    <details v-if="environmentIssues.length" class="environment-details">
+      <summary>环境问题详情（{{ environmentIssues.length }} 项）</summary>
+      <div v-for="(item, index) in environmentIssues" :key="`${item.owner}-${item.name}-${index}`" class="dependency-change">
+        <code>{{ item.name }}</code>
+        <span>{{ item.owner || "本体" }} 要求 {{ item.requirement || item.expected }}；实际 {{ item.actual || "缺失" }}（{{ item.layer === "active_generation" ? "活动依赖层" : "基础环境" }}）</span>
+      </div>
+    </details>
+
+    <el-dialog title="依赖修复预览" :visible.sync="repairVisible" width="min(800px, 94vw)" append-to-body>
+      <p>只调整勾选组的依赖，不更换插件版本。未解决的冲突继续保留，准备完成后需重启验证。</p>
+      <el-alert v-if="repairError" :title="repairError" type="error" :closable="false" class="repair-error" />
+      <div v-for="group in repairPreview ? repairPreview.groups || [] : []" :key="group.id" class="repair-group">
+        <el-checkbox v-model="repairSelected" :label="group.id" :disabled="group.status !== 'repairable'">{{ group.roots.join('、') }}</el-checkbox>
+        <el-tag size="mini" :type="group.status === 'repairable' ? 'success' : 'danger'">{{ group.status === 'repairable' ? '可定向修复' : '需要处理约束或环境问题' }}</el-tag>
+        <div v-for="item in group.changes" :key="item.name" class="dependency-change"><code>{{ item.name }}</code><span>{{ item.from || '缺失' }} → {{ item.to }}</span></div>
+        <details v-if="group.issues.length"><summary>约束来源</summary><p v-for="(item, index) in group.issues" :key="index">{{ item.owner || '本体' }}：{{ item.requirement }}；实际 {{ item.actual || '缺失' }}</p></details>
+        <pre v-if="group.diagnostic">{{ group.diagnostic }}</pre>
+      </div>
+      <template #footer>
+        <el-button @click="repairVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="repairing" :disabled="!repairSelected.length || repairing" @click="applyEnvironmentRepair">准备所选修复</el-button>
+      </template>
+    </el-dialog>
+
     <div v-if="error" class="inline-state is-error">
       <i class="el-icon-warning-outline"></i><span>{{ error }}</span>
       <el-button type="text" @click="loadPlugins(false)">重新加载</el-button>
@@ -173,18 +202,18 @@
           <template v-else-if="analysis">
             <el-alert
               v-if="analysis.status === 'blocked' || analysis.status === 'failed'"
-              title="此插件不能安装"
+              :title="(analysis.blocked_reasons || []).some(reason => ['current_environment_dependency_conflict', 'dependency_layer_state_mismatch', 'core_dependency_conflict'].includes(reason.code)) ? '当前环境阻止安装' : '此插件不能安装'"
               type="error"
               :closable="false"
               show-icon
             >
-              <div v-for="reason in analysis.blocked_reasons || []" :key="reason.code" class="reason-item">
+              <div v-for="(reason, reasonIndex) in analysis.blocked_reasons || []" :key="`${reason.code}-${reasonIndex}`" class="reason-item">
                 <code>{{ reason.code }}</code>
                 <strong>{{ reasonLabel(reason) }}</strong>
                 <span v-if="reasonDetail(reason)">{{ reasonDetail(reason) }}</span>
                 <span v-if="archiveConflictDetail(reason)" class="archive-diagnostic">{{ archiveConflictDetail(reason) }}</span>
                 <div v-if="Array.isArray(reason.details) && reason.details.length" class="drift-list">
-                  <div v-for="item in reason.details" :key="`${reason.code}-${item.name}`" class="dependency-change">
+                  <div v-for="(item, itemIndex) in reason.details" :key="`${reason.code}-${item.owner}-${item.name}-${itemIndex}`" class="dependency-change">
                     <code>{{ item.name }}</code><span>{{ driftDescription(item) }}</span>
                   </div>
                 </div>
@@ -337,11 +366,16 @@ export default {
       analysis: null, analysisPlugin: null, analysisTimer: null, applying: false,
       confirmCode: false, confirmChanges: false, confirmSource: false, confirmCompatibility: false, confirmMigration: false,
       detailVisible: false, detailLoading: false, detail: null,
-      environment: null, repairing: false,
+      environment: null, repairing: false, repairVisible: false, repairPreview: null, repairSelected: [], repairError: "",
       pluginLoadInFlight: false, queuedPluginLoad: null, componentDestroyed: false, routeActionConsumed: false,
     }
   },
   computed: {
+    environmentIssues() {
+      const env = this.environment || {}
+      const items = [...(env.requirement_conflicts || []), ...(env.immutable_drift || []), ...(env.layer_mismatch || [])]
+      return items.filter((item, index) => items.findIndex(other => other.owner === item.owner && other.name === item.name && other.requirement === item.requirement) === index)
+    },
     drawerSize() { return window.innerWidth <= 680 ? "94%" : "600px" },
     analysisStatusLabel() {
       const labels = { queued: "等待分析", analyzing: "分析中", ready: "可应用", blocked: "已阻止", failed: "分析失败" }
@@ -574,17 +608,23 @@ export default {
     async repairEnvironment() {
       const environment = this.analysis?.environment || this.environment
       if (!environment?.repairable || this.repairing) return
-      this.repairing = true
+      this.repairing = true; this.repairVisible = true; this.repairPreview = null; this.repairSelected = []; this.repairError = ""
       try {
         const inspected = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair/preview`, {})
         if (!inspected.suc) throw new Error(inspected.info || "修复预览失败")
-        const preview = inspected.data
-        const summary = preview.changes.map(item => `${item.name}: ${item.from || item.actual || "缺失"} → ${item.to || item.expected} (${item.source === "active_generation" ? "活动依赖层" : "基础环境"})${item.requirements?.length ? "\n  " + item.requirements.map(value => `${value.owner || "本体"}: ${value.requirement}`).join("；") : ""}`).join("\n")
-        const layer = preview.mode === "layer"
-        const confirmed = await this.$cuteConfirm({ title: "依赖修复预览", message: `${summary}\n\n${layer ? "生成新的依赖层，准备完成后由你重启 Bot 生效。" : "同步锁定依赖并重启 Bot。"}`, confirmButtonText: layer ? "准备定向修复" : "同步并重启", cancelButtonText: "取消", type: "warning" })
-        if (!confirmed) return
-        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair`, { expected_fingerprint: preview.fingerprint, preview_id: preview.preview_id, confirmed: true })
+        this.repairPreview = inspected.data
+        this.repairSelected = (inspected.data.groups || []).filter(group => group.status === "repairable").map(group => group.id)
+      } catch (error) { this.repairError = error.response?.data?.detail || error.message || "修复预览失败" }
+      finally { this.repairing = false }
+    },
+    async applyEnvironmentRepair() {
+      if (this.repairing || !this.repairPreview || !this.repairSelected.length) return
+      this.repairing = true; this.repairError = ""
+      try {
+        const preview = this.repairPreview
+        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair`, { expected_fingerprint: preview.fingerprint, preview_id: preview.preview_id, group_ids: this.repairSelected, confirmed: true })
         if (!response.suc) throw new Error(response.info || "依赖修复请求失败")
+        this.repairVisible = false
         if (response.data.apply_mode === "restart_pending") {
           this.$message.success(response.info); notifyRestartStatusChanged(); return
         }
@@ -599,7 +639,7 @@ export default {
           returnRoute: this.$route.path,
           message: "正在同步锁定依赖并启动新的真寻进程。",
         })
-      } catch (error) { this.$message.error(error.response?.data?.detail || error.message || "依赖修复请求失败") }
+      } catch (error) { this.repairError = error.response?.data?.detail || error.message || "依赖修复请求失败" }
       finally { this.repairing = false }
     },
     async cancelPending(plugin) {
@@ -680,7 +720,7 @@ export default {
 .catalog-note { display: flex; align-items: center; gap: 7px; min-height: 34px; color: var(--text-color-secondary); font-size: 12px; }
 .environment-status { display: flex; align-items: flex-start; gap: 12px; margin: 12px 0; padding: 13px 14px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color-secondary); }.environment-status > i { margin-top: 2px; color: var(--success-color); font-size: 21px; }.environment-status > div { min-width: 0; flex: 1; }.environment-status strong { display: block; color: var(--text-color); }.environment-status p { margin: 4px 0 0; color: var(--text-color-secondary); font-size: 12px; line-height: 1.5; }.environment-status.is-warning { border-color: rgba(230,162,60,.45); }.environment-status.is-warning > i { color: var(--warning-color); }.environment-status.is-danger { border-color: rgba(245,108,108,.45); }.environment-status.is-danger > i { color: var(--danger-color); }
 .plugin-list { min-height: 320px; border-top: 1px solid var(--border-color); }
-.plugin-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; padding: 17px 4px; border-bottom: 1px solid var(--border-color); }
+.plugin-row { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(0, 2fr); gap: 18px; padding: 17px 4px; border-bottom: 1px solid var(--border-color); }
 .plugin-main { min-width: 0; }.plugin-title-line { display: flex; min-width: 0; align-items: center; gap: 7px; }.plugin-title-line h2 { margin: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .module-line { margin-top: 4px; color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .plugin-main > p { margin: 9px 0; color: var(--text-color-secondary); line-height: 1.55; }.meta-line { display: flex; flex-wrap: wrap; gap: 14px; color: var(--text-color-secondary); font-size: 12px; }.meta-line i { margin-right: 4px; }
@@ -690,8 +730,14 @@ export default {
 .analysis-loading { display: flex; min-height: 260px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-color-secondary); }.analysis-loading i { color: var(--primary-color); font-size: 34px; }.analysis-loading strong { color: var(--text-color); }
 .analysis-section { margin: 18px 0; }.analysis-section h3 { margin: 0 0 10px; font-size: 14px; }.analysis-section p { margin: 3px 0; color: var(--text-color-secondary); line-height: 1.55; }.core-ok { display: flex; gap: 10px; padding: 13px; border: 1px solid var(--success-color); border-radius: 6px; }.core-ok > i { color: var(--success-color); font-size: 22px; }.core-ok h3 { margin: 0; }
 .reason-item { display: flex; flex-direction: column; gap: 5px; margin: 7px 0; overflow-wrap: anywhere; }.reason-item > code { width: fit-content; }.reason-item > span { line-height: 1.5; }.drift-list { margin-top: 5px; padding: 0 10px; border: 1px solid rgba(245,108,108,.22); border-radius: 5px; }.shared-changes { padding: 12px; border: 1px solid rgba(230,162,60,.4); border-radius: 6px; }
-.dependency-change { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border-color); }.dependency-change code { overflow-wrap: anywhere; }.dependency-change span { color: var(--text-color-secondary); }.dependency-note, .muted { color: var(--text-color-secondary); font-size: 12px; }.confirmations { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; }.confirmations ::v-deep .el-checkbox { display: flex; height: auto; white-space: normal; }.confirmations ::v-deep .el-checkbox__label { line-height: 1.5; }
+.dependency-change { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(0, 2fr); gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border-color); }.dependency-change code { overflow-wrap: break-word; word-break: normal; } .dependency-change span { min-width: 0; overflow-wrap: anywhere; }.dependency-change span { color: var(--text-color-secondary); }.dependency-note, .muted { color: var(--text-color-secondary); font-size: 12px; }.confirmations { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; }.confirmations ::v-deep .el-checkbox { display: flex; height: auto; white-space: normal; }.confirmations ::v-deep .el-checkbox__label { line-height: 1.5; }
 .reason-item { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; overflow-wrap: anywhere; }.drawer-actions { position: absolute; right: 0; bottom: 0; left: 0; display: flex; justify-content: flex-end; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--border-color); background: var(--bg-color); }.detail-drawer h3 { margin: 20px 0 7px; font-size: 14px; }.detail-drawer p { color: var(--text-color-secondary); line-height: 1.65; }
 @media (max-width: 900px) { .store-toolbar { grid-template-columns: 1fr 1fr; }.plugin-row { grid-template-columns: 1fr; }.plugin-actions { justify-content: flex-end; } }
 @media (max-width: 680px) { .nonebot-store { padding: 14px; }.store-header { align-items: flex-start; }.store-header h1 { font-size: 20px; }.store-toolbar { grid-template-columns: 1fr; }.environment-status { flex-wrap: wrap; }.environment-status .el-button { width: 100%; }.plugin-title-line { flex-wrap: wrap; }.plugin-actions, .pending-actions { flex-wrap: wrap; justify-content: flex-start; }.dependency-change { grid-template-columns: 1fr; gap: 3px; }.analysis-drawer, .detail-drawer { padding-right: 16px; padding-left: 16px; } }
+.environment-details { margin: 12px 0 20px; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; }
+.environment-details summary, .repair-group summary { cursor: pointer; }
+.repair-group { padding: 16px 0; border-bottom: 1px solid var(--border-color); }
+.repair-group .el-checkbox { max-width: 100%; white-space: normal; margin-bottom: 10px; }
+.repair-group pre, .repair-error { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.verification-status { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 </style>

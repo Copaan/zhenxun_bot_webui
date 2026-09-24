@@ -105,3 +105,20 @@ export const migrationStages = {
 }
 
 export const terminalMigrationStages = new Set(["completed", "partial", "rolled_back", "cancelled", "failed", "needs_preflight"])
+
+export function migrationFailureSummary(job) {
+  const progress = job.progress || {}, shutdown = job.shutdown_diagnostic || {}
+  const database = job.database_diagnostic || {}
+  const code = job.first_error || ''
+  const components = (shutdown.failed_components || []).slice(0, 3).map(item => item.component_id).join('、')
+  const reason = code.startsWith('migration_database_')
+    ? `数据库迁移失败${database.tool ? `（${database.tool}）` : ''}，请查看工具详情`
+    : code === 'migration_shutdown_unconfirmed' ? `关闭未通过核验${components ? `：${components}` : ''}`
+      : code.startsWith('migration_dependency_') || code === 'migration_dependencies_incomplete' ? '依赖恢复失败，请查看依赖结果' : '迁移执行失败，请查看任务首因'
+  if (job.action !== 'export') return `${reason}。`
+  return `${reason}。${shutdown.forced ? '曾强制停止；' : ''}${progress.snapshot_generated ? '快照已生成；' : '快照未确认生成；'}${progress.original_worker_resumed ? '原实例已恢复并就绪。' : '原实例恢复状态未确认。'}`
+}
+
+export function migrationPollDelay(jobs, disconnected = false) {
+  return !disconnected && jobs.some(job => !terminalMigrationStages.has(job.stage) && !['recovery_required', 'awaiting_credentials', 'awaiting_confirmation'].includes(job.stage)) ? 1500 : 5000
+}

@@ -15,7 +15,7 @@
       <article v-for="job in jobs" :key="job.id">
         <div class="task-heading"><h3>{{ job.action === 'restore' ? '完整替换迁移' : '导出实例' }}</h3><el-tag>{{ stage(job.stage) }}</el-tag></div>
         <code>{{ job.id }}</code>
-        <p v-if="job.first_error" class="error-text">首次错误：{{ job.first_error }}</p>
+        <migration-task-status :job="job" />
         <p v-if="job.progress && job.progress.snapshot_mode === 'forced_stop'">强制停止后导出 · 仅核验已持久化数据</p><p v-if="job.progress && job.progress.original_worker_resumed">原实例已恢复并就绪</p>
         <details v-if="job.shutdown_diagnostic && job.shutdown_diagnostic.result !== 'confirmed'">
           <summary>查看关闭阻塞原因</summary>
@@ -26,7 +26,7 @@
           </p>
           <p v-if="job.shutdown_diagnostic.forced">业务进程曾被强制终止。</p>
           <p v-if="job.progress && job.progress.export_recovered">已结束失败任务，允许原实例重新启动。</p>
-          <p v-else-if="!(job.progress && job.progress.snapshot_mode)">关闭尚未确认，迁移快照未开始。</p>
+          <p v-else-if="job.first_error === 'migration_shutdown_unconfirmed' && !(job.progress && job.progress.snapshot_mode)">关闭尚未确认，迁移快照未开始。</p>
         </details>
         <p v-if="job.rollback_error" class="error-text">回滚错误：{{ job.rollback_error }}</p>
         <p v-if="job.progress && job.progress.last_recovery_error" class="error-text">最近一次恢复核验：{{ job.progress.last_recovery_error }}</p>
@@ -64,10 +64,11 @@
 
 <script>
 import { getBaseUrl } from '@/utils/api'
-const terminal = new Set(["completed", "partial", "rolled_back", "cancelled", "failed"])
-const stages = { queued: "等待执行", preparing: "准备中", quiescing: "停止业务中", snapshotting: "快照中", resuming: "恢复原实例中", compressing: "压缩中", applying: "应用中", verifying: "维护验证中", committing: "提交中", committed: "已提交，等待收尾", completed: "完成", partial: "部分完成", rolling_back: "回滚中", rolled_back: "已回滚", awaiting_credentials: "等待凭据", recovery_required: "恢复受阻", cancelled: "已取消", failed: "失败" }
+import MigrationTaskStatus from './MigrationTaskStatus.vue'
+import { migrationStages as stages, terminalMigrationStages as terminal, migrationPollDelay } from '@/utils/migration'
 export default {
   name: "MigrationMaintenance",
+  components: { MigrationTaskStatus },
   data: () => ({ username: "", password: "", token: "", busy: false, loading: false, error: "", connectionNotice: "", lastConnectedAt: 0, activeTaskId: "", jobs: [], total: 0, page: 1, recovery: null, databaseUser: "", databasePassword: "", confirmed: false, ready: false, terminal }),
   created() { this.sequence = 0; this.sessionRevision = 0; this.activeTaskId = sessionStorage.getItem(`migration-export:${getBaseUrl()}`) || ''; this.onLeave = event => { if (this.databasePassword || this.confirmed) { event.preventDefault(); event.returnValue = "" } }; window.addEventListener("beforeunload", this.onLeave) },
   beforeDestroy() { this.sequence += 1; clearTimeout(this.poll); window.removeEventListener("beforeunload", this.onLeave); this.token = "" },
@@ -115,7 +116,7 @@ export default {
         if (!this.activeTaskId) this.activeTaskId = this.jobs.find(job => !terminal.has(job.stage))?.id || ''
         this.lastConnectedAt = Date.now(); this.connectionNotice = ''
       } catch (error) { if (sequence === this.sequence) { if (error.connectionUnavailable) this.connectionNotice = `管理连接暂时中断，正在查询原任务。${this.lastConnectedAt ? '上次连接：' + new Date(this.lastConnectedAt).toLocaleTimeString() : ''}`; else this.error = error.message } }
-      finally { if (sequence === this.sequence) { this.loading = false; if (!this.ready) this.poll = setTimeout(() => this.refresh(), 5000) } }
+      finally { if (sequence === this.sequence) { this.loading = false; if (!this.ready) this.poll = setTimeout(() => this.refresh(), migrationPollDelay(this.jobs, Boolean(this.connectionNotice))) } }
     },
     changePage(value) { this.page = value; this.refresh() },
     clearRecovery() { this.recovery = null; this.databaseUser = ""; this.databasePassword = ""; this.confirmed = false },
