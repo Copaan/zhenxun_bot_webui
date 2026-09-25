@@ -24,6 +24,9 @@
     <el-dialog title="确认导出实例" :visible.sync="exportDialog" custom-class="migration-export-dialog" top="5vh" width="min(560px, 94vw)" :close-on-click-modal="false">
       <DatabaseConnectionStatus :result="exportConnection" :checking="connectionChecking" migration />
       <el-button size="small" :loading="connectionChecking" :disabled="exportBusy" @click="checkExportConnection">重新检测当前连接</el-button>
+      <el-alert v-if="connectionInspectionTask && ['queued', 'running'].includes(connectionInspectionTask.status)" :title="`迁移工具连接检查${connectionInspectionTask.phase === 'queued' ? '排队中' : '进行中'}：已耗时 ${connectionInspectionTask.elapsed_seconds || 0}s`" type="info" :closable="false" show-icon />
+      <el-alert v-if="previewTask && ['queued', 'running'].includes(previewTask.status)" :title="`导出预览${previewTask.phase === 'queued' ? '排队中' : '检查中'}：已耗时 ${previewTask.elapsed_seconds || 0}s`" type="info" :closable="false" show-icon />
+      <el-alert v-if="previewTask && ['failed', 'expired'].includes(previewTask.status)" :title="`导出预览失败：${previewTask.error?.code || '检查失败'}，请关闭后重试。`" type="error" :closable="false" show-icon />
       <p v-if="exportPreview">将导出 {{ exportPreview.total }} 个文件，排除 {{ exportPreview.excluded_total }} 项。明文包包含管理员凭据、数据库及插件代码。</p>
       <p v-if="error" class="migration-error-code" role="alert">{{ error }}</p>
       <p>先停止业务、建立快照，再恢复原实例并打包。</p>
@@ -48,6 +51,7 @@
         <el-button v-else icon="el-icon-close" @click="clearSelection">清除选择</el-button>
       </div>
       <el-progress v-if="file && busy && !sealed" :percentage="progress" />
+      <el-alert v-if="inspectionTask && ['queued', 'running'].includes(inspectionTask.status)" :title="`迁移包检查${inspectionTask.phase === 'queued' ? '排队中' : '进行中'}：已耗时 ${inspectionTask.elapsed_seconds || 0}s`" type="info" :closable="false" show-icon />
     </el-form>
     <div v-if="inspection" class="migration-inspection">
       <h3>迁移包核验结果</h3><el-alert v-if="inspection.source.snapshot_mode === 'forced_stop'" title="此包在强制停止 Bot 后生成，可能不包含尚未落盘的内容。" type="warning" :closable="false" />
@@ -142,11 +146,11 @@ export default {
   name: "MigrationPanel",
   components: { MigrationRestoreWizard, MigrationTaskStatus, DatabaseConnectionStatus },
   props: { firstDeployment: Boolean },
-  data: () => ({ exportConnection: null, connectionChecking: false, connectionSequence: 0, exportDialog: false, exportPreview: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
+  data: () => ({ exportConnection: null, connectionChecking: false, connectionSequence: 0, connectionInspectionTask: null, exportDialog: false, exportPreview: null, previewTask: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, inspectionTask: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
   created() { this.sequence = 0; this.readSequence = 0; this.activeExportId = sessionStorage.getItem(this.exportStorageKey()) || ""; this.exportTracking = Boolean(this.activeExportId); this.refresh() },
   beforeDestroy() { this.connectionSequence += 1; this.sequence += 1; this.readSequence += 1; this.exportSequence = (this.exportSequence || 0) + 1; this.recoverySequence = (this.recoverySequence || 0) + 1; this.controller?.abort(); clearTimeout(this.poll); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
   watch: {
-    exportDialog(value) { if (!value) { this.connectionSequence += 1; this.previewSequence = (this.previewSequence || 0) + 1; this.connectionChecking = false } },
+    exportDialog(value) { if (!value) { this.connectionSequence += 1; this.previewSequence = (this.previewSequence || 0) + 1; this.connectionChecking = false; this.connectionInspectionTask = null; this.previewTask = null } },
     recoveryUsername() { this.recoveryDirty() },
     recoveryPassword() { this.recoveryDirty() },
     recoveryConfirmed() { this.recoveryDirty() },
@@ -159,8 +163,11 @@ export default {
       const sequence = ++this.connectionSequence
       this.connectionChecking = true; this.exportConnection = null
       try {
-        const result = await migrationRequest('/export/connection-check', { method: 'post', data: {} })
-        if (sequence === this.connectionSequence && this.exportDialog) this.exportConnection = result
+        const task = await migrationRequest('/export/connection-check', { method: 'post', data: {} })
+        this.connectionInspectionTask = task
+        const state = await this.waitInspection(task, sequence, 'connection')
+        if (state?.status === 'succeeded' && sequence === this.connectionSequence && this.exportDialog) this.exportConnection = state.result
+        else if (state?.status !== 'succeeded' && sequence === this.connectionSequence) this.exportConnection = { ready: false, ...(state?.result || {}), code: state?.error?.code || 'migration_inspection_failed', diagnostic: state?.diagnostic || state?.result?.native?.diagnostic }
       } catch (error) {
         if (sequence === this.connectionSequence) this.exportConnection = { ready: false, code: this.message(error) }
       } finally { if (sequence === this.connectionSequence) this.connectionChecking = false }
@@ -170,8 +177,16 @@ export default {
       const sequence = this.previewSequence = (this.previewSequence || 0) + 1
       this.exportBusy = true; this.error = ''; this.exportPreview = null; this.exportDialog = true; this.allowForcedShutdown = false
       try {
-        const [preview] = await Promise.all([migrationRequest('/export/preview'), this.checkExportConnection()])
-        if (sequence === this.previewSequence && this.exportDialog) this.exportPreview = preview
+        const previewState = await migrationRequest('/export/preview')
+        this.previewTask = previewState
+        const [preview] = await Promise.all([
+          this.waitInspection(previewState, sequence, 'preview'),
+          this.checkExportConnection(),
+        ])
+        if (sequence === this.previewSequence && this.exportDialog) {
+          if (preview?.status === 'succeeded') this.exportPreview = preview.result
+          else this.error = `导出预览失败：${preview?.error?.code || '检查失败'}`
+        }
       } catch (error) { if (sequence === this.previewSequence) this.error = this.message(error) }
       finally { this.exportBusy = false }
     },
@@ -247,7 +262,31 @@ export default {
     },
     stage(value) { return migrationStages[value] || value },
     size(value) { return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MiB` : `${(value / 1024).toFixed(1)} KiB` },
-    message(error) { if (error.response?.status === 401) this.authRequired = true; return apiErrorDetail(error, "迁移请求失败") },
+    async waitInspection(initial, sequence, target = 'inspection') {
+      let state = initial
+      while (state && ['queued', 'running'].includes(state.status)) {
+        const currentSequence = target === true || target === 'connection' ? this.connectionSequence : target === 'preview' ? this.previewSequence : this.sequence
+        if (sequence !== currentSequence) return null
+        await new Promise(resolve => setTimeout(resolve, 700))
+        state = await migrationRequest(`/inspections/${state.id}`, { timeout: 10000 })
+        if (target === 'connection') this.connectionInspectionTask = state
+        else if (target === 'preview') this.previewTask = state
+        else this.inspectionTask = state
+      }
+      return state
+    },
+    message(error) {
+      if (error.response?.status === 401) this.authRequired = true
+      const detail = error.response?.data?.detail
+      if (detail?.code === 'migration_inspection_busy' && detail.inspection) {
+        const inspection = detail.inspection
+        const started = inspection.started_at || inspection.created_at
+        const startedText = started ? `，开始于 ${new Date(started * 1000).toLocaleString()}` : ''
+        const remaining = inspection.remaining_seconds == null ? '未知' : `${inspection.remaining_seconds}s`
+        return `已有迁移检查正在进行：${inspection.phase || '处理中'}，任务 ${inspection.id}，已耗时 ${inspection.elapsed_seconds || 0}s，剩余约 ${remaining}${startedText}。请稍后刷新。`
+      }
+      return apiErrorDetail(error, "迁移请求失败")
+    },
     canCancel(job) { return !terminalMigrationStages.has(job.stage) && !["committed", "recovery_required"].includes(job.stage) && !job.cancel_requested },
     async refresh() {
       const sequence = ++this.readSequence
@@ -295,7 +334,7 @@ export default {
     selectDiscovered(path) { this.clearSelection(); this.discoveredPath = path; setDirtyState("migration", Boolean(path)) },
     clearSelection() {
       this.sequence += 1; this.file = null; this.discoveredPath = ""; this.uploadId = null; this.sealed = false
-      this.password = ""; this.sensitiveConfirmed = false; this.inspection = null; this.error = ""; this.progress = 0
+      this.password = ""; this.sensitiveConfirmed = false; this.inspection = null; this.inspectionTask = null; this.error = ""; this.progress = 0
       clearDirtyState("migration")
     },
     pause() { this.controller?.abort() },
@@ -310,9 +349,13 @@ export default {
           if (sequence !== this.sequence) return
           this.sealed = true
         }
-        const value = await migrationRequest("/inspect", { method: "post", signal: controller.signal, data: { upload_id: this.file ? this.uploadId : null, path: this.discoveredPath || null, password: this.password || null, offset: (page - 1) * 50, limit: 50 } })
+        const task = await migrationRequest("/inspect", { method: "post", signal: controller.signal, data: { upload_id: this.file ? this.uploadId : null, path: this.discoveredPath || null, password: this.password || null, offset: (page - 1) * 50, limit: 50 } })
         if (sequence !== this.sequence) return
-        this.inspection = value; this.page = page
+        this.inspectionTask = task
+        const value = await this.waitInspection(task, sequence)
+        if (sequence !== this.sequence || !value) return
+        if (value.status === 'succeeded') { this.inspection = value.result; this.page = page }
+        else this.error = value.error?.code || '迁移包检查失败；请查看检查状态后重试。'
       } catch (error) { if (sequence === this.sequence) this.error = controller.signal.aborted ? "请求已停止；已确认上传的分块保留，可继续核验。" : this.message(error) }
       finally { if (sequence === this.sequence) { this.busy = false; this.controller = null } }
     },
