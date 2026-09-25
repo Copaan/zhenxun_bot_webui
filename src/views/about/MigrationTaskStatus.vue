@@ -23,12 +23,20 @@
         <dl class="task-metrics">
           <dt>工具</dt><dd>{{ diagnostic.tool }} · {{ diagnostic.tool_version || '版本未取得' }} · {{ diagnostic.engine }}</dd>
           <dt>执行阶段</dt><dd>{{ diagnostic.phase }} / {{ diagnostic.operation }}</dd>
-          <dt>执行结果</dt><dd>{{ diagnostic.error_code || (job.first_error ? '工具执行成功；后续迁移步骤失败，请查看任务首因' : '工具执行成功；结果仍须通过迁移校验') }}</dd>
+          <dt>执行结果</dt><dd>{{ diagnostic.operation === 'policy' ? '工具执行成功；权限策略检查未通过' : (diagnostic.error_code || (job.first_error ? '工具执行成功；后续迁移步骤失败，请查看任务首因' : '工具执行成功；结果仍须通过迁移校验')) }}</dd>
           <dt>退出码</dt><dd>{{ diagnostic.return_code == null ? '未取得' : diagnostic.return_code }}</dd>
           <dt>耗时</dt><dd>{{ duration(diagnostic.duration_seconds) }}</dd>
           <dt>环境</dt><dd>{{ diagnostic.environment || '未记录' }}</dd>
           <dt>输出大小</dt><dd>stdout {{ bytes(diagnostic.stdout_bytes) }} · stderr {{ bytes(diagnostic.stderr_bytes) }}</dd>
         </dl>
+        <template v-if="permissionChecks">
+          <p class="task-error">权限策略阻断：{{ permissionSummary }}</p>
+          <dl class="task-metrics">
+            <dt>高权限角色</dt><dd>{{ permissionChecks.privileged_roles }}</dd>
+            <dt>直接角色成员</dt><dd>{{ permissionChecks.direct_role_memberships }}</dd>
+            <dt>其他库 CREATE</dt><dd>{{ permissionChecks.other_database_create }}</dd>
+          </dl>
+        </template>
         <p v-if="diagnostic.cleanup_error" class="task-error">工具资源清理：{{ diagnostic.cleanup_error }}</p>
         <p class="task-muted">stderr（凭据已脱敏）{{ diagnostic.truncated ? ' · 输出超过上限，已截断' : '' }}</p>
         <pre v-if="detailsOpen" tabindex="0">{{ diagnostic.stderr || '工具未提供 stderr' }}</pre>
@@ -55,6 +63,13 @@ export default {
     terminal() { return terminalMigrationStages.has(this.job.stage) || this.job.stage === 'recovery_required' },
     phaseLabel() { return migrationStages[this.job.stage] || this.job.stage },
     diagnostic() { return this.job.database_diagnostic || null },
+    permissionChecks() { return this.diagnostic?.permission_checks || null },
+    permissionSummary() {
+      const checks = this.permissionChecks
+      if (!checks) return ''
+      const labels = { privileged_roles: '高权限角色', direct_role_memberships: '直接角色成员', other_database_create: '其他数据库 CREATE' }
+      return Object.keys(labels).filter(key => checks[key]).map(key => `${labels[key]}=${checks[key]}`).join('；') || '未发现具体命中项'
+    },
     verification() { return this.job.progress?.validation?.evidence || null },
     progressStatus() { return this.job.stage === 'completed' ? 'success' : this.job.first_error ? 'exception' : undefined },
   },

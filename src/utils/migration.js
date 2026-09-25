@@ -111,8 +111,12 @@ export function migrationFailureSummary(job) {
   const database = job.database_diagnostic || {}
   const code = job.first_error || ''
   const components = (shutdown.failed_components || []).slice(0, 3).map(item => item.component_id).join('、')
+  const permissionLabels = { privileged_roles: '高权限角色', direct_role_memberships: '直接角色成员关系', other_database_create: '其他数据库 CREATE 权限' }
+  const permissionReasons = (database.privilege_reasons || []).map(reason => permissionLabels[reason] || reason).join('、')
   const reason = code.startsWith('migration_database_')
-    ? `数据库迁移失败${database.tool ? `（${database.tool}）` : ''}，请查看工具详情`
+    ? code === 'migration_database_privileges_unsupported'
+      ? `数据库账号权限不符合迁移要求${permissionReasons ? `：${permissionReasons}` : ''}`
+      : `数据库迁移失败${database.tool ? `（${database.tool}）` : ''}，请查看工具详情`
     : code === 'migration_shutdown_unconfirmed' ? `关闭未通过核验${components ? `：${components}` : ''}`
       : code.startsWith('migration_dependency_') || code === 'migration_dependencies_incomplete' ? '依赖恢复失败，请查看依赖结果' : '迁移执行失败，请查看任务首因'
   if (job.action !== 'export') return `${reason}。`
