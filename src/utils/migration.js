@@ -123,6 +123,35 @@ const permissionLabels = {
   same_account_or_database: '目标与候选账号或数据库未隔离', same_database: '目标与候选指向同一实际数据库',
 }
 
+const legacyPermissionReasons = new Set(['privileged_roles', 'direct_role_memberships', 'other_database_create', 'global_privileges', 'global_grantable', 'role_inheritance', 'schema_scope', 'table_privileges_grants', 'column_privileges_grants', 'other_account_can_connect', 'same_account_or_database'])
+
+export function migrationPermissionPolicy(diagnostic = {}) {
+  const reasons = [...(diagnostic.privilege_reasons || []), ...(diagnostic.isolation_reasons || []), ...Object.keys(diagnostic.permission_checks || {}).filter(key => diagnostic.permission_checks[key] > 0)]
+  if (!diagnostic.policy_version && reasons.some(key => legacyPermissionReasons.has(key))) return 'legacy'
+  if (diagnostic.policy_version >= 2 || diagnostic.capability_checks || diagnostic.missing_restore_privileges?.length) return 'actual'
+  return 'unknown'
+}
+
+export function migrationDatabaseErrorSummary(code, diagnostic = {}) {
+  if (code === 'migration_database_tool_failed') return '数据库工具执行失败，请查看退出码和诊断详情'
+  if (code === 'migration_database_preflight_stale') return '检查策略或运行实例已变化，请重新检测'
+  if (code === 'migration_database_capability_unconfirmed') return '未能确认账号的有效操作能力，请重新检测并查看详情'
+  if (code === 'migration_database_objects_unsupported') return '数据库包含当前迁移格式不支持的对象，请查看结构核验详情'
+  if (!['migration_database_privileges_unsupported', 'migration_database_candidate_isolation_required', 'migration_database_read_permission_denied', 'migration_database_privilege_scope_wildcard'].includes(code)) return ''
+  const policy = migrationPermissionPolicy(diagnostic)
+  const detail = migrationPermissionSummary(diagnostic)
+  if (policy === 'legacy') return `此结果使用旧权限规则，请核对后端版本并重新检测${detail ? `；原始拒绝项：${detail}` : ''}`
+  if (code === 'migration_database_candidate_isolation_required' && policy === 'actual') return `目标与候选必须是两个不同的实际数据库，可使用同一账号${detail ? `：${detail}` : ''}`
+  if (policy === 'unknown' && code !== 'migration_database_read_permission_denied') return `权限检查未通过，检查策略与实际能力状态未确认，请重新检测${detail ? `：${detail}` : ''}`
+  return `账号缺少迁移所需的实际能力${detail ? `：${detail}` : ''}`
+}
+
+export function migrationConnectionMatches(result, capabilities) {
+  return Boolean(result?.worker_generation && capabilities?.worker_generation &&
+    result.worker_generation === capabilities.worker_generation &&
+    result.policy_version >= 2 && result.policy_version === capabilities.database_policy_version)
+}
+
 export function migrationPermissionSummary(diagnostic = {}) {
   const missing = diagnostic.missing_restore_privileges || []
   const reasons = [...new Set([...(diagnostic.privilege_reasons || []), ...Object.keys(diagnostic.permission_checks || {}).filter(key => diagnostic.permission_checks[key] > 0), ...(diagnostic.restore_privilege_reasons || []), ...(diagnostic.isolation_reasons || [])])]
@@ -131,7 +160,7 @@ export function migrationPermissionSummary(diagnostic = {}) {
 
 export function migrationPermissionDetails(diagnostic = {}) {
   const rows = Object.entries(diagnostic.permission_checks || {}).map(([key, value]) => ({ key, label: permissionLabels[key] || key, value: value == null ? '未检查' : value }))
-  const capabilityLabels = { connection_inventory: '其他连接完整可见', object_inventory: '对象清单完整可见', table_select: '表读取权限' }
+  const capabilityLabels = { connection_inventory: '其他连接完整可见', object_inventory: '对象清单完整可见', table_select: '表与序列读取权限', schema_usage: 'public schema 访问权限' }
   Object.entries(diagnostic.capability_checks || {}).filter(([key]) => capabilityLabels[key]).forEach(([key, value]) => rows.push({ key: `capability-${key}`, label: capabilityLabels[key], value: value === 1 ? '满足' : value === 0 ? '不满足' : '未检查' }))
   if (diagnostic.policy_version) rows.push({ key: 'policy-version', label: '能力检查策略', value: `v${diagnostic.policy_version}` })
   if (diagnostic.grant_sources?.length) {
@@ -154,15 +183,12 @@ export function migrationFailureSummary(job) {
   const database = job.database_diagnostic || {}
   const code = job.first_error || ''
   const components = (shutdown.failed_components || []).slice(0, 3).map(item => item.component_id).join('、')
-  const permissionReasons = migrationPermissionSummary(database)
+  const databaseReason = migrationDatabaseErrorSummary(code, database)
   const reason = database.operation === 'filesystem'
     ? 'SQLite 文件或目录未通过恢复条件检查，请查看具体错误；这不是数据库账号权限错误'
-    : code === 'migration_database_capability_unconfirmed' ? '未能确认账号的有效操作能力，请重新检测并查看详情'
-    : code === 'migration_database_preflight_stale' ? '检查策略已更新，原预检已失效，请重新预检'
+    : databaseReason ? databaseReason
     : code.startsWith('migration_database_')
-    ? ['migration_database_privileges_unsupported', 'migration_database_candidate_isolation_required', 'migration_database_read_permission_denied', 'migration_database_privilege_scope_wildcard'].includes(code)
-      ? `数据库账号权限不符合迁移要求${permissionReasons ? `：${permissionReasons}` : ''}`
-      : `数据库迁移失败${database.tool ? `（${database.tool}）` : ''}，请查看工具详情`
+    ? `数据库迁移失败${database.tool ? `（${database.tool}）` : ''}，请查看工具详情`
     : code === 'migration_shutdown_unconfirmed' ? `关闭未通过核验${components ? `：${components}` : ''}`
       : code.startsWith('migration_dependency_') || code === 'migration_dependencies_incomplete' ? '依赖恢复失败，请查看依赖结果' : '迁移执行失败，请查看任务首因'
   if (code && code === database.error_code && ['restore_preflight', 'export_preflight'].includes(database.phase)) {
@@ -178,7 +204,7 @@ export function migrationPollDelay(jobs, disconnected = false) {
 
 export function migrationDiagnosticResult(diagnostic = {}) {
   if (diagnostic.operation === 'policy') return diagnostic.return_code === 0
-    ? `权限查询工具执行成功；${diagnostic.error_code ? (diagnostic.policy_version ? '实际能力检查未通过' : '历史权限策略检查未通过') : '能力检查完成'}`
+    ? `权限查询工具执行成功；${diagnostic.error_code ? (migrationPermissionPolicy(diagnostic) === 'legacy' ? '旧权限规则拒绝操作，请核对后端版本并重新检测' : migrationPermissionPolicy(diagnostic) === 'actual' ? '实际能力检查未通过' : '权限检查未通过，策略状态未确认') : '能力检查完成'}`
     : '能力检查未通过；工具退出状态未确认'
   return diagnostic.error_code || (diagnostic.return_code === 0 ? '工具执行成功；结果仍须通过迁移校验' : '工具执行状态未确认')
 }

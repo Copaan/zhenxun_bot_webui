@@ -23,6 +23,8 @@
     </div>
     <el-dialog title="确认导出实例" :visible.sync="exportDialog" custom-class="migration-export-dialog" top="5vh" width="min(560px, 94vw)" :close-on-click-modal="false">
       <DatabaseConnectionStatus :result="exportConnection" :checking="connectionChecking" migration />
+      <p v-if="capability?.database_policy_version">后端能力检查策略：v{{ capability.database_policy_version }}</p>
+      <p>按当前连接的数据库类型导出；已转换为 PostgreSQL 的数据库按 PostgreSQL 检查。迁移包不支持跨数据库引擎直接恢复。</p>
       <el-button size="small" :loading="connectionChecking" :disabled="exportBusy" @click="checkExportConnection">重新检测当前连接</el-button>
       <el-alert v-if="connectionInspectionTask && ['queued', 'running'].includes(connectionInspectionTask.status)" :title="`迁移工具连接检查${connectionInspectionTask.phase === 'queued' ? '排队中' : '进行中'}：已耗时 ${connectionInspectionTask.elapsed_seconds || 0}s`" type="info" :closable="false" show-icon />
       <el-alert v-if="previewTask && ['queued', 'running'].includes(previewTask.status)" :title="`导出预览${previewTask.phase === 'queued' ? '排队中' : '检查中'}：已耗时 ${previewTask.elapsed_seconds || 0}s`" type="info" :closable="false" show-icon />
@@ -32,7 +34,7 @@
       <p>先停止业务、建立快照，再恢复原实例并打包。</p>
       <el-checkbox v-model="allowForcedShutdown">关闭超时后允许强制停止 Bot</el-checkbox>
       <p v-if="allowForcedShutdown" class="migration-error-code">将终止整个业务进程树，可能丢失尚未落盘数据。进程退出与数据库核验通过后才继续导出；迁移包会标记强制停止来源。</p>
-      <span slot="footer"><el-button @click="exportDialog = false">取消</el-button><el-button type="primary" :loading="exportBusy" :disabled="connectionChecking || !exportConnection?.ready || !exportPreview" @click="confirmExport">确认导出明文包</el-button></span>
+      <span slot="footer"><el-button @click="exportDialog = false">取消</el-button><el-button type="primary" :loading="exportBusy" :disabled="connectionChecking || !exportConnectionReady || !exportPreview" @click="confirmExport">确认导出明文包</el-button></span>
     </el-dialog>
     <div class="migration-source">
       <el-select v-model="discoveredPath" :disabled="busy || !capability || capability.discovery === false" placeholder="选择本机已发现的迁移包" clearable @change="selectDiscovered">
@@ -138,7 +140,7 @@ import DatabaseConnectionStatus from "@/components/system/DatabaseConnectionStat
 import { apiErrorDetail } from "@/utils/api-error"
 import { getBaseUrl } from "@/utils/api"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
-import { migrationLogin, downloadMigration, migrationRequest, migrationStages, migrationPollDelay, recoveryDatabase, terminalMigrationStages, uploadMigration } from "@/utils/migration"
+import { migrationLogin, downloadMigration, migrationRequest, migrationStages, migrationPollDelay, recoveryDatabase, terminalMigrationStages, uploadMigration, migrationConnectionMatches } from "@/utils/migration"
 import MigrationTaskStatus from "./MigrationTaskStatus.vue"
 import MigrationRestoreWizard from "./MigrationRestoreWizard.vue"
 
@@ -146,6 +148,9 @@ export default {
   name: "MigrationPanel",
   components: { MigrationRestoreWizard, MigrationTaskStatus, DatabaseConnectionStatus },
   props: { firstDeployment: Boolean },
+  computed: {
+    exportConnectionReady() { return this.exportConnection?.ready === true && migrationConnectionMatches(this.exportConnection, this.capability) },
+  },
   data: () => ({ exportConnection: null, connectionChecking: false, connectionSequence: 0, connectionInspectionTask: null, exportDialog: false, exportPreview: null, previewTask: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, inspectionTask: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
   created() { this.sequence = 0; this.readSequence = 0; this.activeExportId = sessionStorage.getItem(this.exportStorageKey()) || ""; this.exportTracking = Boolean(this.activeExportId); this.refresh() },
   beforeDestroy() { this.connectionSequence += 1; this.sequence += 1; this.readSequence += 1; this.exportSequence = (this.exportSequence || 0) + 1; this.recoverySequence = (this.recoverySequence || 0) + 1; this.controller?.abort(); clearTimeout(this.poll); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
@@ -162,14 +167,26 @@ export default {
       if (this.connectionChecking) return
       const sequence = ++this.connectionSequence
       this.connectionChecking = true; this.exportConnection = null
+      let checkedResult = null
       try {
         const task = await migrationRequest('/export/connection-check', { method: 'post', data: {} })
+        if (sequence !== this.connectionSequence || !this.exportDialog) return
         this.connectionInspectionTask = task
         const state = await this.waitInspection(task, sequence, 'connection')
-        if (state?.status === 'succeeded' && sequence === this.connectionSequence && this.exportDialog) this.exportConnection = state.result
-        else if (state?.status !== 'succeeded' && sequence === this.connectionSequence) this.exportConnection = { ready: false, ...(state?.result || {}), code: state?.error?.code || 'migration_inspection_failed', diagnostic: state?.diagnostic || state?.result?.native?.diagnostic }
+        if (sequence !== this.connectionSequence || !this.exportDialog) return
+        checkedResult = state?.result || {}
+        const readSequence = this.readSequence
+        const current = await migrationRequest('/capabilities', { timeout: 10000 })
+        if (sequence !== this.connectionSequence || !this.exportDialog) return
+        if (readSequence === this.readSequence) this.capability = current
+        const value = checkedResult
+        const mismatch = value.worker_generation && !migrationConnectionMatches(value, this.capability)
+        if (state?.status === 'succeeded') {
+          this.exportConnection = { ...value }
+          if (mismatch || (value.ready && !migrationConnectionMatches(value, this.capability))) this.exportConnection = { ...value, ready: false, code: 'migration_database_preflight_stale' }
+        } else this.exportConnection = { ...value, ready: false, code: state?.error?.code || 'migration_inspection_failed', diagnostic: state?.diagnostic || value.native?.diagnostic }
       } catch (error) {
-        if (sequence === this.connectionSequence) this.exportConnection = { ready: false, code: this.message(error) }
+        if (sequence === this.connectionSequence && this.exportDialog) this.exportConnection = { ...checkedResult, ready: false, code: this.message(error) }
       } finally { if (sequence === this.connectionSequence) this.connectionChecking = false }
     },
     async exportInstance() {
@@ -191,7 +208,7 @@ export default {
       finally { this.exportBusy = false }
     },
     async confirmExport() {
-      if (this.exportBusy || this.exportTracking || this.connectionChecking || !this.exportConnection?.ready || !this.exportPreview) return
+      if (this.exportBusy || this.exportTracking || this.connectionChecking || !this.exportConnectionReady || !this.exportPreview) return
       const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('')
       const sequence = this.exportSequence = (this.exportSequence || 0) + 1
       this.exportBusy = true; this.exportDialog = false; this.exportSubmittedAt = Date.now(); this.trackExport(id)
@@ -269,6 +286,8 @@ export default {
         if (sequence !== currentSequence) return null
         await new Promise(resolve => setTimeout(resolve, 700))
         state = await migrationRequest(`/inspections/${state.id}`, { timeout: 10000 })
+        const updatedSequence = target === true || target === 'connection' ? this.connectionSequence : target === 'preview' ? this.previewSequence : this.sequence
+        if (sequence !== updatedSequence) return null
         if (target === 'connection') this.connectionInspectionTask = state
         else if (target === 'preview') this.previewTask = state
         else this.inspectionTask = state
@@ -302,7 +321,14 @@ export default {
           this.activeExportId ? migrationRequest(`/tasks/${this.activeExportId}`, { timeout: 10000 }) : Promise.resolve(null),
         ])
         if (sequence !== this.readSequence) return
-        if (cap.status === 'fulfilled') this.capability = cap.value
+        if (cap.status === 'fulfilled') {
+          const changed = this.capability && (this.capability.worker_generation !== cap.value.worker_generation || this.capability.database_policy_version !== cap.value.database_policy_version)
+          this.capability = cap.value
+          if (changed && (this.exportConnection || this.connectionChecking)) {
+            this.connectionSequence += 1; this.connectionChecking = false; this.connectionInspectionTask = null
+            this.exportConnection = { ready: false, code: 'migration_database_preflight_stale' }
+          }
+        }
         if (listing.status === 'fulfilled') { this.jobs = listing.value.items; this.jobTotal = listing.value.total }
         if (tracked.status === 'fulfilled' && tracked.value) {
           if (!this.jobs.some(job => job.id === tracked.value.id)) this.jobs.unshift(tracked.value)
