@@ -13,25 +13,31 @@
       <time v-if="entry.value.checked_at">{{ new Date(entry.value.checked_at * 1000).toLocaleTimeString() }}</time>
       <p v-if="entry.value.status === 'error'">{{ errorLabel(entry.value.code) }}</p>
       <details v-if="entry.value.tools"><summary>工具版本</summary><p>服务端 {{ entry.value.server_version }}</p><p v-for="(version, tool) in entry.value.tools" :key="tool">{{ tool }} {{ version }}</p></details>
-      <details v-if="entry.value.diagnostic"><summary>工具诊断详情</summary><p>{{ entry.value.diagnostic.tool }} · {{ entry.value.diagnostic.phase }} · {{ entry.value.diagnostic.return_code }}</p><pre>{{ entry.value.diagnostic.stderr }}</pre></details>
+      <details v-if="entry.value.diagnostic"><summary>工具诊断详情</summary><p>{{ entry.value.diagnostic.tool }} · {{ databasePhases[entry.value.diagnostic.phase] || entry.value.diagnostic.phase }} · 退出码 {{ entry.value.diagnostic.return_code == null ? '未取得' : entry.value.diagnostic.return_code }}</p><p>{{ diagnosticResult(entry.value.diagnostic) }}</p><p>{{ permissionSummary(entry.value.diagnostic) }}</p><p v-for="item in permissionDetails(entry.value.diagnostic)" :key="item.key">{{ item.label }}：{{ item.value }}</p><pre>{{ entry.value.diagnostic.stderr }}</pre></details>
     </div>
     <p v-if="result && result.code" class="connection-error">{{ errorLabel(result.code) }}</p>
   </section>
 </template>
 
 <script>
+import { migrationDatabasePhases, migrationPermissionSummary, migrationPermissionDetails, migrationDiagnosticResult } from '@/utils/migration'
+
 export default {
   name: "DatabaseConnectionStatus",
   props: { result: { type: Object, default: null }, checking: Boolean, migration: Boolean },
+  data: () => ({ databasePhases: migrationDatabasePhases }),
   computed: {
     connection() { return this.result?.runtime?.connection || this.result?.native?.connection },
     entries() { return [{ key: "runtime", label: "Bot 运行连接", value: this.result?.runtime || {} }, ...(this.migration ? [{ key: "native", label: "迁移工具连接", value: this.result?.native || {} }] : [])] },
   },
   methods: {
+    permissionSummary: migrationPermissionSummary,
+    permissionDetails: migrationPermissionDetails,
+    diagnosticResult: migrationDiagnosticResult,
     sourceLabel(source) { return { url: "连接配置", environment: "环境覆盖", driver_default: "驱动默认", configuration_file: "启动时配置文件", target_configuration: "目标配置" }[source] || "来源未确认" },
     statusLabel(status) { return { ok: "检测通过", error: "检测失败" }[status] || "尚未检测" },
     errorLabel(code) {
-      const messages = { database_tls_not_negotiated: "数据库要求 TLS，但本次连接未确认加密，已阻止继续操作。", migration_database_tls_policy_not_equivalent: "当前驱动与迁移工具无法等价应用这组 TLS 选项，已阻止导出；请核对显式 SSL 配置。", database_tls_verification_failed: "数据库证书校验失败，请核对 CA、有效期及主机名。", database_tls_driver_incompatible: "当前 Windows 数据库驱动的 TLS 握手不兼容，未降级为明文。", database_timeout: "数据库检测超时。", database_connection_refused: "数据库拒绝连接，请核对地址、端口和监听状态。", migration_database_version_unsupported: "数据库工具与服务端版本不兼容。", database_runtime_unconfirmed: "未取得 Bot 当前连接，不能据此继续操作。", database_connection_changed: "连接策略或证书已变化，请重新检测。", migration_database_connection_changed: "连接策略或证书已变化，请重新检测。", database_tls_certificate_unreadable: "配置的证书文件不可读取，请核对证书路径与权限。", migration_database_tool_failed: "迁移工具连接失败，请展开查看具体原因；Bot 尚未停止。", migration_database_tool_missing: "缺少对应数据库的迁移工具。", migration_database_read_permission_denied: "迁移账号缺少必要的读取权限。", database_connection_failed: "当前数据库连接检查失败。" }; return messages[code] || messages[code?.replace(/^migration_/, "")] || code || "检测未完成，请重新检查。"
+      const messages = { migration_database_privileges_unsupported: "账号缺少迁移所需的实际能力，请展开查看；预检失败，未停止 Bot。", migration_database_capability_unconfirmed: "未能确认有效授权，已阻止继续操作，请查看诊断详情。", migration_database_preflight_stale: "检查策略已更新，请重新预检。", migration_database_candidate_isolation_required: "目标与候选必须是两个不同的实际数据库；可使用同一账号。", database_tls_not_negotiated: "数据库要求 TLS，但本次连接未确认加密，已阻止继续操作。", migration_database_tls_policy_not_equivalent: "当前驱动与迁移工具无法等价应用这组 TLS 选项，已阻止导出；请核对显式 SSL 配置。", database_tls_verification_failed: "数据库证书校验失败，请核对 CA、有效期及主机名。", database_tls_driver_incompatible: "当前 Windows 数据库驱动的 TLS 握手不兼容，未降级为明文。", database_timeout: "数据库检测超时。", database_connection_refused: "数据库拒绝连接，请核对地址、端口和监听状态。", migration_database_version_unsupported: "数据库工具与服务端版本不兼容。", database_runtime_unconfirmed: "未取得 Bot 当前连接，不能据此继续操作。", database_connection_changed: "连接策略或证书已变化，请重新检测。", migration_database_connection_changed: "连接策略或证书已变化，请重新检测。", database_tls_certificate_unreadable: "配置的证书文件不可读取，请核对证书路径与权限。", migration_database_tool_failed: "迁移工具连接失败，请展开查看具体原因；Bot 尚未停止。", migration_database_tool_missing: "缺少对应数据库的迁移工具。", migration_database_read_permission_denied: "迁移账号缺少必要的读取权限。", database_connection_failed: "当前数据库连接检查失败。" }; return messages[code] || messages[code?.replace(/^migration_/, "")] || code || "检测未完成，请重新检查。"
     },
   },
 }

@@ -48,7 +48,7 @@
         <el-form label-position="top" @submit.native.prevent="authorize">
           <template v-if="recovery.credentials_required">
             <p>{{ recovery.engine }} · {{ recovery.target.host }}:{{ recovery.target.port }} / {{ recovery.target.database }}</p>
-            <el-form-item label="目标数据库受限账号"><el-input v-model="databaseUser" autocomplete="off" :disabled="busy" maxlength="128" /></el-form-item>
+            <el-form-item label="目标数据库账号"><el-input v-model="databaseUser" autocomplete="off" :disabled="busy" maxlength="128" /></el-form-item>
             <el-form-item label="目标数据库密码"><el-input v-model="databasePassword" type="password" show-password autocomplete="new-password" :disabled="busy" maxlength="4096" /></el-form-item>
           </template>
           <p v-else>此任务无需外部数据库凭据。</p>
@@ -135,7 +135,7 @@ export default {
         let database = {}
         if (this.recovery.credentials_required) {
           const { engine, target } = this.recovery
-          if (!["mysql", "postgres"].includes(engine) || !this.databaseUser || !Number.isInteger(target.port)) throw new Error("请核对目标数据库及受限账号。")
+          if (!["mysql", "postgres"].includes(engine) || !this.databaseUser || !Number.isInteger(target.port)) throw new Error("请核对目标数据库及数据库账号。")
           const host = target.host.includes(":") ? `[${target.host}]` : target.host
           database = { target_url: `${engine}://${encodeURIComponent(this.databaseUser)}:${encodeURIComponent(this.databasePassword)}@${host}:${target.port}/${encodeURIComponent(target.database)}` }
         }

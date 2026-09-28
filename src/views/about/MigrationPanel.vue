@@ -120,7 +120,7 @@
         <el-form label-position="top" @submit.native.prevent>
           <template v-if="recoveryRequirements.credentials_required">
             <p class="migration-hash">{{ recoveryRequirements.engine }} · {{ recoveryRequirements.target.host }}:{{ recoveryRequirements.target.port }} / {{ recoveryRequirements.target.database }}</p>
-            <el-form-item label="目标数据库受限账号"><el-input v-model="recoveryUsername" autocomplete="off" :disabled="Boolean(recoveryBusy)" maxlength="128" /></el-form-item>
+            <el-form-item label="目标数据库账号"><el-input v-model="recoveryUsername" autocomplete="off" :disabled="Boolean(recoveryBusy)" maxlength="128" /></el-form-item>
             <el-form-item label="目标数据库密码"><el-input v-model="recoveryPassword" type="password" show-password autocomplete="new-password" :disabled="Boolean(recoveryBusy)" maxlength="4096" /></el-form-item>
           </template>
           <p v-else>此任务无需外部数据库凭据。</p>

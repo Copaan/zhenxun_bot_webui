@@ -36,14 +36,14 @@
         <p>数据库类型由包内清单确定，确认的目标连接优先于备份配置。</p>
         <el-form-item v-if="engine === 'sqlite'" label="项目内 SQLite 文件路径"><el-input v-model="draft.sqlitePath" placeholder="data/db/zhenxun.db" /></el-form-item>
         <template v-if="external">
-          <el-alert title="请预先准备目标库、空候选库及两个互相隔离的受限账号。禁止超级用户、服务器级权限和其他应用连接；迁移不会建库或终止连接。" type="info" :closable="false" />
+          <el-alert title="请预先准备目标库和空候选库，可使用同一具备操作权限的账号（包括管理员）。两者必须是不同的实际数据库；迁移不会建库或终止其他连接。" type="info" :closable="false" />
           <div v-for="scope in ['target', 'candidate']" :key="scope">
             <h4>{{ scope === 'target' ? '目标数据库' : '空候选数据库' }}</h4>
             <div class="restore-grid">
               <el-form-item label="服务器"><el-input v-model="draft[scope].host" /></el-form-item>
               <el-form-item label="端口"><el-input-number v-model="draft[scope].port" :min="1" :max="65535" /></el-form-item>
               <el-form-item label="数据库名称"><el-input v-model="draft[scope].database" /></el-form-item>
-              <el-form-item label="受限账号"><el-input v-model="draft[scope].username" autocomplete="off" /></el-form-item>
+              <el-form-item label="数据库账号"><el-input v-model="draft[scope].username" autocomplete="off" /></el-form-item>
               <el-form-item label="数据库密码"><el-input v-model="draft[scope].password" type="password" autocomplete="new-password" show-password /></el-form-item>
             </div>
           </div>

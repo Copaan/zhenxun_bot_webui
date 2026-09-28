@@ -114,8 +114,9 @@ export const migrationDatabasePhases = {
 
 const permissionLabels = {
   privileged_roles: '高权限角色', direct_role_memberships: '直接角色成员关系', other_database_create: '其他数据库 CREATE 权限',
-  global_privileges: '存在不支持的全局权限', global_grantable: '存在全局可转授权', process_privilege_missing: '缺少 PROCESS', role_inheritance: '存在角色继承',
+  global_privileges: '存在不支持的全局权限', global_grantable: '存在全局可转授权', process_privilege_missing: '缺少 PROCESS，无法完整核验其他连接', role_inheritance: '存在角色继承',
   schema_scope: '库级授权范围或转授权不符合要求', table_privileges_grants: '存在表级授权', column_privileges_grants: '存在列级授权',
+  object_inventory_unconfirmed: '无法确认完整对象清单', restore_privileges_missing: '缺少恢复所需权限',
   schema_usage_missing: '缺少 public schema USAGE', table_or_sequence_select_missing: '缺少表或序列 SELECT',
   schema_restore_privileges_missing: '缺少库级恢复权限', public_schema_restore_privileges_missing: '缺少 public schema 恢复权限',
   other_account_can_connect: '另一账号仍可连接本数据库（包含 PUBLIC CONNECT）',
@@ -130,6 +131,13 @@ export function migrationPermissionSummary(diagnostic = {}) {
 
 export function migrationPermissionDetails(diagnostic = {}) {
   const rows = Object.entries(diagnostic.permission_checks || {}).map(([key, value]) => ({ key, label: permissionLabels[key] || key, value: value == null ? '未检查' : value }))
+  const capabilityLabels = { connection_inventory: '其他连接完整可见', object_inventory: '对象清单完整可见', table_select: '表读取权限' }
+  Object.entries(diagnostic.capability_checks || {}).filter(([key]) => capabilityLabels[key]).forEach(([key, value]) => rows.push({ key: `capability-${key}`, label: capabilityLabels[key], value: value === 1 ? '满足' : value === 0 ? '不满足' : '未检查' }))
+  if (diagnostic.policy_version) rows.push({ key: 'policy-version', label: '能力检查策略', value: `v${diagnostic.policy_version}` })
+  if (diagnostic.grant_sources?.length) {
+    const sources = { global: '全局授权', database: '库级授权', table: '表级授权', enabled_role: '已启用角色', partial_revoke: '已计入部分撤权' }
+    rows.push({ key: 'grant-sources', label: '授权来源', value: diagnostic.grant_sources.map(key => sources[key] || key).join('、') })
+  }
   if (diagnostic.capability === 'restore' || diagnostic.restore_permission_checks) {
     const names = diagnostic.engine === 'mysql'
       ? { select: 'SELECT', create: 'CREATE', alter: 'ALTER', drop: 'DROP', index: 'INDEX', insert: 'INSERT', update: 'UPDATE', delete: 'DELETE', references: 'REFERENCES', lock_tables: 'LOCK TABLES' }
@@ -149,6 +157,8 @@ export function migrationFailureSummary(job) {
   const permissionReasons = migrationPermissionSummary(database)
   const reason = database.operation === 'filesystem'
     ? 'SQLite 文件或目录未通过恢复条件检查，请查看具体错误；这不是数据库账号权限错误'
+    : code === 'migration_database_capability_unconfirmed' ? '未能确认账号的有效操作能力，请重新检测并查看详情'
+    : code === 'migration_database_preflight_stale' ? '检查策略已更新，原预检已失效，请重新预检'
     : code.startsWith('migration_database_')
     ? ['migration_database_privileges_unsupported', 'migration_database_candidate_isolation_required', 'migration_database_read_permission_denied', 'migration_database_privilege_scope_wildcard'].includes(code)
       ? `数据库账号权限不符合迁移要求${permissionReasons ? `：${permissionReasons}` : ''}`
@@ -164,4 +174,11 @@ export function migrationFailureSummary(job) {
 
 export function migrationPollDelay(jobs, disconnected = false) {
   return !disconnected && jobs.some(job => !terminalMigrationStages.has(job.stage) && !['recovery_required', 'awaiting_credentials', 'awaiting_confirmation'].includes(job.stage)) ? 1500 : 5000
+}
+
+export function migrationDiagnosticResult(diagnostic = {}) {
+  if (diagnostic.operation === 'policy') return diagnostic.return_code === 0
+    ? `权限查询工具执行成功；${diagnostic.error_code ? (diagnostic.policy_version ? '实际能力检查未通过' : '历史权限策略检查未通过') : '能力检查完成'}`
+    : '能力检查未通过；工具退出状态未确认'
+  return diagnostic.error_code || (diagnostic.return_code === 0 ? '工具执行成功；结果仍须通过迁移校验' : '工具执行状态未确认')
 }

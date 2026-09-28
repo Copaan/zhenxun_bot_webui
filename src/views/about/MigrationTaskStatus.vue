@@ -32,7 +32,7 @@
           <dt>输出大小</dt><dd>stdout {{ bytes(diagnostic.stdout_bytes) }} · stderr {{ bytes(diagnostic.stderr_bytes) }}</dd>
         </dl>
         <template v-if="permissionSummary || permissionDetails.length">
-          <p v-if="permissionSummary" class="task-error">权限策略阻断：{{ permissionSummary }}</p>
+          <p v-if="permissionSummary" class="task-error">权限检查详情：{{ permissionSummary }}</p>
           <dl class="task-metrics">
             <template v-for="item in permissionDetails">
               <dt :key="`${item.key}-label`">{{ item.label }}</dt><dd :key="`${item.key}-value`">{{ item.value }}</dd>
@@ -54,7 +54,7 @@
 </template>
 
 <script>
-import { migrationStages, terminalMigrationStages, migrationFailureSummary, migrationDatabasePhases, migrationPermissionSummary, migrationPermissionDetails } from '@/utils/migration'
+import { migrationStages, terminalMigrationStages, migrationFailureSummary, migrationDatabasePhases, migrationPermissionSummary, migrationPermissionDetails, migrationDiagnosticResult } from '@/utils/migration'
 
 export default {
   name: 'MigrationTaskStatus',
@@ -65,10 +65,7 @@ export default {
     terminal() { return terminalMigrationStages.has(this.job.stage) || this.job.stage === 'recovery_required' },
     phaseLabel() { return migrationStages[this.job.stage] || this.job.stage },
     diagnostic() { return this.job.database_diagnostic || null },
-    diagnosticResult() {
-      if (this.diagnostic.operation === 'policy') return this.diagnostic.return_code === 0 ? '工具执行成功；权限策略检查未通过' : '权限策略检查未通过；工具退出状态未记录'
-      return this.diagnostic.error_code || (this.diagnostic.return_code === 0 ? '工具执行成功；结果仍须通过迁移校验' : '工具执行状态未确认')
-    },
+    diagnosticResult() { return migrationDiagnosticResult(this.diagnostic || {}) },
     databasePhase() { return migrationDatabasePhases[this.diagnostic?.phase] || this.diagnostic?.phase || '未记录' },
     accountRole() { return { target: '目标账号', candidate: '候选账号' }[this.diagnostic?.account_role] || '未记录' },
     permissionSummary() { return migrationPermissionSummary(this.diagnostic || {}) },
