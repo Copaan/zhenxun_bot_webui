@@ -21,20 +21,22 @@
       <p v-if="job.first_error">任务首因：<code>{{ job.first_error }}</code></p>
       <template v-if="diagnostic">
         <dl class="task-metrics">
-          <dt>工具</dt><dd>{{ diagnostic.tool }} · {{ diagnostic.tool_version || '版本未取得' }} · {{ diagnostic.engine }}</dd>
-          <dt>执行阶段</dt><dd>{{ diagnostic.phase }} / {{ diagnostic.operation }}</dd>
-          <dt>执行结果</dt><dd>{{ diagnostic.operation === 'policy' ? '工具执行成功；权限策略检查未通过' : (diagnostic.error_code || (job.first_error ? '工具执行成功；后续迁移步骤失败，请查看任务首因' : '工具执行成功；结果仍须通过迁移校验')) }}</dd>
+          <dt>工具</dt><dd>{{ diagnostic.operation === 'filesystem' ? 'SQLite 文件检查（无需外部工具）' : `${diagnostic.tool || '未启动'} · ${diagnostic.tool_version || '版本未取得'} · ${diagnostic.engine || '未记录'}` }}</dd>
+          <dt>执行阶段</dt><dd>{{ databasePhase }} / {{ diagnostic.operation }}</dd>
+          <dt>检查账号</dt><dd>{{ accountRole }}</dd>
+          <dt>能力要求</dt><dd>{{ diagnostic.capability === 'restore' ? '恢复' : diagnostic.capability === 'export' ? '导出' : '未记录' }}</dd>
+          <dt>执行结果</dt><dd>{{ diagnosticResult }}</dd>
           <dt>退出码</dt><dd>{{ diagnostic.return_code == null ? '未取得' : diagnostic.return_code }}</dd>
           <dt>耗时</dt><dd>{{ duration(diagnostic.duration_seconds) }}</dd>
           <dt>环境</dt><dd>{{ diagnostic.environment || '未记录' }}</dd>
           <dt>输出大小</dt><dd>stdout {{ bytes(diagnostic.stdout_bytes) }} · stderr {{ bytes(diagnostic.stderr_bytes) }}</dd>
         </dl>
-        <template v-if="permissionChecks">
-          <p class="task-error">权限策略阻断：{{ permissionSummary }}</p>
+        <template v-if="permissionSummary || permissionDetails.length">
+          <p v-if="permissionSummary" class="task-error">权限策略阻断：{{ permissionSummary }}</p>
           <dl class="task-metrics">
-            <dt>高权限角色</dt><dd>{{ permissionChecks.privileged_roles }}</dd>
-            <dt>直接角色成员</dt><dd>{{ permissionChecks.direct_role_memberships }}</dd>
-            <dt>其他库 CREATE</dt><dd>{{ permissionChecks.other_database_create }}</dd>
+            <template v-for="item in permissionDetails">
+              <dt :key="`${item.key}-label`">{{ item.label }}</dt><dd :key="`${item.key}-value`">{{ item.value }}</dd>
+            </template>
           </dl>
         </template>
         <p v-if="diagnostic.cleanup_error" class="task-error">工具资源清理：{{ diagnostic.cleanup_error }}</p>
@@ -52,7 +54,7 @@
 </template>
 
 <script>
-import { migrationStages, terminalMigrationStages, migrationFailureSummary } from '@/utils/migration'
+import { migrationStages, terminalMigrationStages, migrationFailureSummary, migrationDatabasePhases, migrationPermissionSummary, migrationPermissionDetails } from '@/utils/migration'
 
 export default {
   name: 'MigrationTaskStatus',
@@ -63,13 +65,14 @@ export default {
     terminal() { return terminalMigrationStages.has(this.job.stage) || this.job.stage === 'recovery_required' },
     phaseLabel() { return migrationStages[this.job.stage] || this.job.stage },
     diagnostic() { return this.job.database_diagnostic || null },
-    permissionChecks() { return this.diagnostic?.permission_checks || null },
-    permissionSummary() {
-      const checks = this.permissionChecks
-      if (!checks) return ''
-      const labels = { privileged_roles: '高权限角色', direct_role_memberships: '直接角色成员', other_database_create: '其他数据库 CREATE' }
-      return Object.keys(labels).filter(key => checks[key]).map(key => `${labels[key]}=${checks[key]}`).join('；') || '未发现具体命中项'
+    diagnosticResult() {
+      if (this.diagnostic.operation === 'policy') return this.diagnostic.return_code === 0 ? '工具执行成功；权限策略检查未通过' : '权限策略检查未通过；工具退出状态未记录'
+      return this.diagnostic.error_code || (this.diagnostic.return_code === 0 ? '工具执行成功；结果仍须通过迁移校验' : '工具执行状态未确认')
     },
+    databasePhase() { return migrationDatabasePhases[this.diagnostic?.phase] || this.diagnostic?.phase || '未记录' },
+    accountRole() { return { target: '目标账号', candidate: '候选账号' }[this.diagnostic?.account_role] || '未记录' },
+    permissionSummary() { return migrationPermissionSummary(this.diagnostic || {}) },
+    permissionDetails() { return migrationPermissionDetails(this.diagnostic || {}) },
     verification() { return this.job.progress?.validation?.evidence || null },
     progressStatus() { return this.job.stage === 'completed' ? 'success' : this.job.first_error ? 'exception' : undefined },
   },

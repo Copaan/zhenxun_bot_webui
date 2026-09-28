@@ -106,19 +106,58 @@ export const migrationStages = {
 
 export const terminalMigrationStages = new Set(["completed", "partial", "rolled_back", "cancelled", "failed", "needs_preflight"])
 
+export const migrationDatabasePhases = {
+  restore_preflight: '恢复前数据库预检', export_preflight: '导出前数据库预检',
+  restore_prepare: '恢复准备', restore_apply: '恢复写入', restore_rollback: '恢复回滚',
+  export_snapshot: '导出数据库快照',
+}
+
+const permissionLabels = {
+  privileged_roles: '高权限角色', direct_role_memberships: '直接角色成员关系', other_database_create: '其他数据库 CREATE 权限',
+  global_privileges: '存在不支持的全局权限', global_grantable: '存在全局可转授权', process_privilege_missing: '缺少 PROCESS', role_inheritance: '存在角色继承',
+  schema_scope: '库级授权范围或转授权不符合要求', table_privileges_grants: '存在表级授权', column_privileges_grants: '存在列级授权',
+  schema_usage_missing: '缺少 public schema USAGE', table_or_sequence_select_missing: '缺少表或序列 SELECT',
+  schema_restore_privileges_missing: '缺少库级恢复权限', public_schema_restore_privileges_missing: '缺少 public schema 恢复权限',
+  other_account_can_connect: '另一账号仍可连接本数据库（包含 PUBLIC CONNECT）',
+  same_account_or_database: '目标与候选账号或数据库未隔离', same_database: '目标与候选指向同一实际数据库',
+}
+
+export function migrationPermissionSummary(diagnostic = {}) {
+  const missing = diagnostic.missing_restore_privileges || []
+  const reasons = [...new Set([...(diagnostic.privilege_reasons || []), ...Object.keys(diagnostic.permission_checks || {}).filter(key => diagnostic.permission_checks[key] > 0), ...(diagnostic.restore_privilege_reasons || []), ...(diagnostic.isolation_reasons || [])])]
+  return [missing.length ? `缺少恢复权限：${missing.join('、')}` : '', ...reasons.map(reason => permissionLabels[reason] || reason)].filter(Boolean).join('；')
+}
+
+export function migrationPermissionDetails(diagnostic = {}) {
+  const rows = Object.entries(diagnostic.permission_checks || {}).map(([key, value]) => ({ key, label: permissionLabels[key] || key, value: value == null ? '未检查' : value }))
+  if (diagnostic.capability === 'restore' || diagnostic.restore_permission_checks) {
+    const names = diagnostic.engine === 'mysql'
+      ? { select: 'SELECT', create: 'CREATE', alter: 'ALTER', drop: 'DROP', index: 'INDEX', insert: 'INSERT', update: 'UPDATE', delete: 'DELETE', references: 'REFERENCES', lock_tables: 'LOCK TABLES' }
+      : diagnostic.engine === 'postgres'
+        ? { database_connect: '数据库 CONNECT', database_create: '数据库 CREATE', schema_usage: 'public USAGE', schema_create: 'public CREATE', schema_owner: 'public 所有者' } : {}
+    const checks = diagnostic.restore_permission_checks || {}
+    Object.entries(names).forEach(([key, label]) => rows.push({ key, label, value: checks[key] === 1 ? '满足' : checks[key] === 0 ? '不满足' : '未检查' }))
+  }
+  return rows
+}
+
 export function migrationFailureSummary(job) {
   const progress = job.progress || {}, shutdown = job.shutdown_diagnostic || {}
   const database = job.database_diagnostic || {}
   const code = job.first_error || ''
   const components = (shutdown.failed_components || []).slice(0, 3).map(item => item.component_id).join('、')
-  const permissionLabels = { privileged_roles: '高权限角色', direct_role_memberships: '直接角色成员关系', other_database_create: '其他数据库 CREATE 权限' }
-  const permissionReasons = (database.privilege_reasons || []).map(reason => permissionLabels[reason] || reason).join('、')
-  const reason = code.startsWith('migration_database_')
-    ? code === 'migration_database_privileges_unsupported'
+  const permissionReasons = migrationPermissionSummary(database)
+  const reason = database.operation === 'filesystem'
+    ? 'SQLite 文件或目录未通过恢复条件检查，请查看具体错误；这不是数据库账号权限错误'
+    : code.startsWith('migration_database_')
+    ? ['migration_database_privileges_unsupported', 'migration_database_candidate_isolation_required', 'migration_database_read_permission_denied', 'migration_database_privilege_scope_wildcard'].includes(code)
       ? `数据库账号权限不符合迁移要求${permissionReasons ? `：${permissionReasons}` : ''}`
       : `数据库迁移失败${database.tool ? `（${database.tool}）` : ''}，请查看工具详情`
     : code === 'migration_shutdown_unconfirmed' ? `关闭未通过核验${components ? `：${components}` : ''}`
       : code.startsWith('migration_dependency_') || code === 'migration_dependencies_incomplete' ? '依赖恢复失败，请查看依赖结果' : '迁移执行失败，请查看任务首因'
+  if (code && code === database.error_code && ['restore_preflight', 'export_preflight'].includes(database.phase)) {
+    return `${migrationDatabasePhases[database.phase]}失败，未停止 Bot。${reason}。`
+  }
   if (job.action !== 'export') return `${reason}。`
   return `${reason}。${shutdown.forced ? '曾强制停止；' : ''}${progress.snapshot_generated ? '快照已生成；' : '快照未确认生成；'}${progress.original_worker_resumed ? '原实例已恢复并就绪。' : '原实例恢复状态未确认。'}`
 }
