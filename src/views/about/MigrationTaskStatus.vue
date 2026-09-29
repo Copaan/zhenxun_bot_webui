@@ -16,6 +16,7 @@
     </template>
     <p v-else class="task-muted">{{ phaseLabel }} · {{ job.stage === 'completed' ? '流程已完成' : '当前阶段未提供计数' }}</p>
     <p v-if="job.first_error" class="task-error">{{ failureSummary(job) }}</p>
+    <MigrationDatabases :items="job.databases || []" :stage="job.stage" />
     <details v-if="job.first_error || diagnostic" class="task-detail" @toggle="detailsOpen = $event.target.open">
       <summary>任务错误与数据库工具详情</summary>
       <p v-if="job.first_error">任务首因：<code>{{ job.first_error }}</code></p>
@@ -54,9 +55,11 @@
 </template>
 
 <script>
+import MigrationDatabases from "./MigrationDatabases.vue"
 import { migrationStages, terminalMigrationStages, migrationFailureSummary, migrationDatabasePhases, migrationPermissionSummary, migrationPermissionDetails, migrationDiagnosticResult } from '@/utils/migration'
 
 export default {
+  components: { MigrationDatabases },
   name: 'MigrationTaskStatus',
   props: { job: { type: Object, required: true } },
   data: () => ({ detailsOpen: false }),

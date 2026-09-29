@@ -16,6 +16,7 @@
         <el-alert v-if="inspection.source && inspection.source.snapshot_mode === 'forced_stop'" title="此迁移包来自强制停止：只包含可读取的持久化数据，不保证插件内存状态或业务级一致性。" type="warning" :closable="false" show-icon />
         <p class="restore-code">{{ inspection.package_id }}</p>
         <p class="restore-code">SHA-256：{{ inspection.sha256 }}</p>
+        <MigrationDatabases :items="inspection.databases || []" />
         <p>将完整替换迁移包声明的目录，目标独有文件和空目录先进入回滚区。包中未包含的类别不会清空。</p>
         <el-checkbox v-model="trusted">我信任包的来源，理解插件初始化和数据库对象可能产生无法撤销的外部副作用。</el-checkbox>
       </section>
@@ -52,6 +53,7 @@
       </el-form>
       <section v-if="step === 2 && preflight">
         <h3>替换预览</h3>
+        <MigrationDatabases :items="preflight.summary.databases || []" />
         <p>新增 {{ preflight.summary.files.add }}，替换 {{ preflight.summary.files.replace }}，移除 {{ preflight.summary.files.remove }} 个文件；移除 {{ preflight.summary.removed_directories }} 个空目录。</p>
         <p>依赖 {{ preflight.summary.dependencies }} 项，来源需处理 {{ preflight.summary.dependency_issues }} 项。核心依赖受保护；普通失败会放宽一次，仍失败时尝试初始化插件并隔离失败插件。</p>
         <el-select v-model="section" @change="loadDetails(1)"><el-option v-for="item in sections" :key="item.value" :label="item.label" :value="item.value" /></el-select>
@@ -76,11 +78,13 @@
 </template>
 
 <script>
+import MigrationDatabases from "./MigrationDatabases.vue"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 import { migrationLogin, migrationRequest, recoveryDatabase } from "@/utils/migration"
 
 const endpoint = () => ({ host: "127.0.0.1", port: 3306, database: "", username: "", password: "" })
 export default {
+  components: { MigrationDatabases },
   name: "MigrationRestoreWizard",
   props: { visible: Boolean, inspection: { type: Object, required: true }, uploadId: String, discoveredPath: String, archivePassword: String, capability: Object, sourceBusy: Boolean, firstDeployment: Boolean },
   data: () => ({ authRequired: false, loginUsername: "", loginPassword: "", step: 0, trusted: false, replacementConfirmed: false, busy: false, error: "", preflight: null, registeredId: null, section: "files", page: 1, details: { items: [], total: 0 }, draft: { username: "", password: "", host: "127.0.0.1", port: 8080, https: false, cert: "", key: "", sqlitePath: "data/db/zhenxun.db", confirmedName: "", target: endpoint(), candidate: endpoint() }, steps: ["选择包", "核对配置", "替换与依赖", "最终确认"], sections: [{ label: "文件", value: "files" }, { label: "移除目录", value: "directories" }, { label: "依赖", value: "dependencies" }, { label: "依赖风险", value: "dependency_issues" }, { label: "跳过项目", value: "skipped" }] }),

@@ -117,7 +117,7 @@ const permissionLabels = {
   global_privileges: '存在不支持的全局权限', global_grantable: '存在全局可转授权', process_privilege_missing: '缺少 PROCESS，无法完整核验其他连接', role_inheritance: '存在角色继承',
   schema_scope: '库级授权范围或转授权不符合要求', table_privileges_grants: '存在表级授权', column_privileges_grants: '存在列级授权',
   object_inventory_unconfirmed: '无法确认完整对象清单', restore_privileges_missing: '缺少恢复所需权限',
-  schema_usage_missing: '缺少 public schema USAGE', table_or_sequence_select_missing: '缺少表或序列 SELECT',
+  schema_usage_missing: '缺少用户 schema USAGE', table_or_sequence_select_missing: '缺少表或序列 SELECT',
   schema_restore_privileges_missing: '缺少库级恢复权限', public_schema_restore_privileges_missing: '缺少 public schema 恢复权限',
   other_account_can_connect: '另一账号仍可连接本数据库（包含 PUBLIC CONNECT）',
   same_account_or_database: '目标与候选账号或数据库未隔离', same_database: '目标与候选指向同一实际数据库',
@@ -137,6 +137,10 @@ export function migrationDatabaseErrorSummary(code, diagnostic = {}) {
   if (code === 'migration_database_preflight_stale') return '检查策略或运行实例已变化，请重新检测'
   if (code === 'migration_database_capability_unconfirmed') return '未能确认账号的有效操作能力，请重新检测并查看详情'
   if (code === 'migration_database_objects_unsupported') return '数据库包含当前迁移格式不支持的对象，请查看结构核验详情'
+  if (code === 'migration_database_feature_unavailable') return '目标 SQLite 缺少数据库所需模块或排序规则，原始备份仍保留'
+  if (code === 'migration_database_external_dependency') return '候选恢复包含订阅等外部依赖，需要单独处理；原始备份仍保留'
+  if (['migration_database_timeout', 'migration_database_revision_incomplete', 'migration_budget_exhausted'].includes(code)) return '数据库核验未完成，请查看阶段与预算；这不等于数据损坏'
+  if (code === 'migration_database_candidate_mismatch') return '候选恢复后的结构或数据与备份核验结果不同，请查看逐库详情'
   if (!['migration_database_privileges_unsupported', 'migration_database_candidate_isolation_required', 'migration_database_read_permission_denied', 'migration_database_privilege_scope_wildcard'].includes(code)) return ''
   const policy = migrationPermissionPolicy(diagnostic)
   const detail = migrationPermissionSummary(diagnostic)
@@ -160,20 +164,20 @@ export function migrationPermissionSummary(diagnostic = {}) {
 
 export function migrationPermissionDetails(diagnostic = {}) {
   const rows = Object.entries(diagnostic.permission_checks || {}).map(([key, value]) => ({ key, label: permissionLabels[key] || key, value: value == null ? '未检查' : value }))
-  const capabilityLabels = { connection_inventory: '其他连接完整可见', object_inventory: '对象清单完整可见', table_select: '表与序列读取权限', schema_usage: 'public schema 访问权限' }
+  const capabilityLabels = { connection_inventory: '其他连接完整可见', object_inventory: '对象清单完整可见', table_select: '表与序列读取权限', schema_usage: '用户 schema 访问权限' }
   Object.entries(diagnostic.capability_checks || {}).filter(([key]) => capabilityLabels[key]).forEach(([key, value]) => rows.push({ key: `capability-${key}`, label: capabilityLabels[key], value: value === 1 ? '满足' : value === 0 ? '不满足' : '未检查' }))
   if (diagnostic.policy_version) rows.push({ key: 'policy-version', label: '能力检查策略', value: `v${diagnostic.policy_version}` })
   if (diagnostic.grant_sources?.length) {
-    const sources = { global: '全局授权', database: '库级授权', table: '表级授权', enabled_role: '已启用角色', partial_revoke: '已计入部分撤权' }
+    const sources = { global: '全局授权', database: '库级授权', table: '表级授权', routine: '例程授权', enabled_role: '已启用角色', partial_revoke: '已计入部分撤权' }
     rows.push({ key: 'grant-sources', label: '授权来源', value: diagnostic.grant_sources.map(key => sources[key] || key).join('、') })
   }
   if (diagnostic.capability === 'restore' || diagnostic.restore_permission_checks) {
     const names = diagnostic.engine === 'mysql'
-      ? { select: 'SELECT', create: 'CREATE', alter: 'ALTER', drop: 'DROP', index: 'INDEX', insert: 'INSERT', update: 'UPDATE', delete: 'DELETE', references: 'REFERENCES', lock_tables: 'LOCK TABLES' }
+      ? { select: 'SELECT', create: 'CREATE', alter: 'ALTER', drop: 'DROP', index: 'INDEX', insert: 'INSERT', update: 'UPDATE', delete: 'DELETE', references: 'REFERENCES', lock_tables: 'LOCK TABLES', create_view: 'CREATE VIEW', show_view: 'SHOW VIEW', trigger: 'TRIGGER', event: 'EVENT', create_routine: 'CREATE ROUTINE', alter_routine: 'ALTER ROUTINE', execute: 'EXECUTE' }
       : diagnostic.engine === 'postgres'
-        ? { database_connect: '数据库 CONNECT', database_create: '数据库 CREATE', schema_usage: 'public USAGE', schema_create: 'public CREATE', schema_owner: 'public 所有者' } : {}
+        ? { database_connect: '数据库 CONNECT', database_create: '数据库 CREATE', schema_usage: 'public USAGE', schema_create: 'public CREATE', schema_owner: diagnostic.policy_version >= 3 ? '目标 schema 删除与重建权限' : 'public 所有者' } : {}
     const checks = diagnostic.restore_permission_checks || {}
-    Object.entries(names).forEach(([key, label]) => rows.push({ key, label, value: checks[key] === 1 ? '满足' : checks[key] === 0 ? '不满足' : '未检查' }))
+    Object.entries(names).filter(([key]) => diagnostic.policy_version < 3 || Object.prototype.hasOwnProperty.call(checks, key)).forEach(([key, label]) => rows.push({ key, label, value: checks[key] === 1 ? '满足' : checks[key] === 0 ? '不满足' : '未检查' }))
   }
   return rows
 }

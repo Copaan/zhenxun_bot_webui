@@ -30,6 +30,12 @@
       <el-alert v-if="previewTask && ['queued', 'running'].includes(previewTask.status)" :title="`导出预览${previewTask.phase === 'queued' ? '排队中' : '检查中'}：已耗时 ${previewTask.elapsed_seconds || 0}s`" type="info" :closable="false" show-icon />
       <el-alert v-if="previewTask && ['failed', 'expired'].includes(previewTask.status)" :title="`导出预览失败：${previewTask.error?.code || '检查失败'}，请关闭后重试。`" type="error" :closable="false" show-icon />
       <p v-if="exportPreview">将导出 {{ exportPreview.total }} 个文件，排除 {{ exportPreview.excluded_total }} 项。明文包包含管理员凭据、数据库及插件代码。</p>
+      <details v-if="exportPreview"><summary>数据库与同名普通文件（{{ exportPreview.database_files_total || 0 }} 项）</summary>
+        <p v-if="exportPreview.primary_engine">主库引擎：{{ exportPreview.primary_engine }}；原生备份完成后仍需在目标验证恢复兼容性。</p>
+        <p v-for="(value, kind) in exportPreview.database_file_summary" :key="kind">{{ databaseFileLabel(kind) }}：{{ value.count }} 项 · {{ size(value.bytes) }}</p>
+        <p v-for="item in exportPreview.database_files || []" :key="item.path" class="migration-hash">{{ item.path }} · {{ databaseFileLabel(item.database_file.kind) }} · {{ size(item.size) }}</p>
+        <p v-if="exportPreview.database_files_total > (exportPreview.database_files || []).length">此处仅展示前 {{ (exportPreview.database_files || []).length }} 项，导出范围包含全部已选文件。</p>
+      </details>
       <p v-if="error" class="migration-error-code" role="alert">{{ error }}</p>
       <p>先停止业务、建立快照，再恢复原实例并打包。</p>
       <el-checkbox v-model="allowForcedShutdown">关闭超时后允许强制停止 Bot</el-checkbox>
@@ -58,6 +64,7 @@
     <div v-if="inspection" class="migration-inspection">
       <h3>迁移包核验结果</h3><el-alert v-if="inspection.source.snapshot_mode === 'forced_stop'" title="此包在强制停止 Bot 后生成，可能不包含尚未落盘的内容。" type="warning" :closable="false" />
       <el-alert title="文件完整性已核验；来源可信性未验证。恢复尚未执行。" type="info" :closable="false" />
+      <MigrationDatabases :items="inspection.databases || []" />
       <dl>
         <dt>包 ID</dt><dd>{{ inspection.package_id }}</dd>
         <dt>SHA-256</dt><dd class="migration-hash">{{ inspection.sha256 }}</dd>
@@ -143,10 +150,11 @@ import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 import { migrationLogin, downloadMigration, migrationRequest, migrationStages, migrationPollDelay, recoveryDatabase, terminalMigrationStages, uploadMigration, migrationConnectionMatches } from "@/utils/migration"
 import MigrationTaskStatus from "./MigrationTaskStatus.vue"
 import MigrationRestoreWizard from "./MigrationRestoreWizard.vue"
+import MigrationDatabases from "./MigrationDatabases.vue"
 
 export default {
   name: "MigrationPanel",
-  components: { MigrationRestoreWizard, MigrationTaskStatus, DatabaseConnectionStatus },
+  components: { MigrationRestoreWizard, MigrationTaskStatus, DatabaseConnectionStatus, MigrationDatabases },
   props: { firstDeployment: Boolean },
   computed: {
     exportConnectionReady() { return this.exportConnection?.ready === true && migrationConnectionMatches(this.exportConnection, this.capability) },
@@ -161,6 +169,7 @@ export default {
     recoveryConfirmed() { this.recoveryDirty() },
   },
   methods: {
+    databaseFileLabel(kind) { return ({ sqlite: "SQLite 数据库", sqlite_empty: "尚未初始化的主库", empty_placeholder: "空占位文件，原样保留", ordinary_file: "普通文件，原样保留", invalid_primary: "主库格式异常" })[kind] || "状态未确认" },
     exportStorageKey() { return `migration-export:${getBaseUrl()}` },
     trackExport(id) { this.activeExportId = id; this.exportTracking = Boolean(id); if (id) sessionStorage.setItem(this.exportStorageKey(), id); else sessionStorage.removeItem(this.exportStorageKey()) },
     async checkExportConnection() {
