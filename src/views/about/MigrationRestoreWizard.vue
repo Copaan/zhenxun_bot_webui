@@ -80,7 +80,7 @@
 <script>
 import MigrationDatabases from "./MigrationDatabases.vue"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
-import { migrationLogin, migrationRequest, recoveryDatabase } from "@/utils/migration"
+import { migrationLogin, migrationErrorMessage, migrationRequest, recoveryDatabase } from "@/utils/migration"
 
 const endpoint = () => ({ host: "127.0.0.1", port: 3306, database: "", username: "", password: "" })
 export default {
@@ -89,18 +89,25 @@ export default {
   props: { visible: Boolean, inspection: { type: Object, required: true }, uploadId: String, discoveredPath: String, archivePassword: String, capability: Object, sourceBusy: Boolean, firstDeployment: Boolean },
   data: () => ({ authRequired: false, loginUsername: "", loginPassword: "", step: 0, trusted: false, replacementConfirmed: false, busy: false, error: "", preflight: null, registeredId: null, section: "files", page: 1, details: { items: [], total: 0 }, draft: { username: "", password: "", host: "127.0.0.1", port: 8080, https: false, cert: "", key: "", sqlitePath: "data/db/zhenxun.db", confirmedName: "", target: endpoint(), candidate: endpoint() }, steps: ["选择包", "核对配置", "替换与依赖", "最终确认"], sections: [{ label: "文件", value: "files" }, { label: "移除目录", value: "directories" }, { label: "依赖", value: "dependencies" }, { label: "依赖风险", value: "dependency_issues" }, { label: "跳过项目", value: "skipped" }] }),
   computed: {
+    operationReason() { return this.busy ? (this.step === 3 ? "正在确认恢复交接，请等待结果" : "正在进行恢复预检或授权，请等待完成") : "" },
     engine() { return this.inspection.database?.engine || null },
     external() { return ["mysql", "postgres"].includes(this.engine) },
     available() { return Boolean(this.capability?.restore && (!this.engine || this.capability?.databases?.[this.engine]?.restore_available)) },
     blockers() { return [...(this.capability?.restore_blockers || []), ...(this.capability?.databases?.[this.engine]?.online_restore_blockers || [])] },
   },
   watch: {
+    operationReason: { immediate: true, handler(value) { this.$emit("operation-state", value) } },
     draft: { deep: true, handler() { this.preflight = null; this.replacementConfirmed = false; setDirtyState("migration-restore", true) } },
     trusted() { setDirtyState("migration-restore", true) },
   },
-  created() { this.sequence = 0; if (this.engine === "postgres") this.draft.target.port = this.draft.candidate.port = 5432 },
-  beforeDestroy() { this.sequence += 1; clearDirtyState("migration-restore") },
+  created() { this.sequence = 0; this.requests = new Set(); if (this.engine === "postgres") this.draft.target.port = this.draft.candidate.port = 5432 },
+  beforeDestroy() { this.sequence += 1; this.detailSequence = (this.detailSequence || 0) + 1; for (const controller of this.requests) controller.abort(); this.$emit("operation-state", ""); clearDirtyState("migration-restore") },
   methods: {
+    async request(path, options = {}) {
+      const controller = new AbortController(); this.requests.add(controller)
+      try { return await migrationRequest(path, { ...options, signal: controller.signal }) }
+      finally { this.requests.delete(controller) }
+    },
     async login() {
       if (this.busy || !this.loginUsername || !this.loginPassword) return
       this.busy = true; const sequence = ++this.sequence
@@ -132,9 +139,9 @@ export default {
       try {
         const privateInput = this.privateInput()
         let upload = this.uploadId || this.registeredId
-        if (!upload) { const value = await migrationRequest("/packages/register", { method: "post", data: { path: this.discoveredPath, confirm_secrets: true } }); if (sequence !== this.sequence) return; this.registeredId = upload = value.id }
+        if (!upload) { const value = await this.request("/packages/register", { method: "post", data: { path: this.discoveredPath, confirm_secrets: true } }); if (sequence !== this.sequence) return; this.registeredId = upload = value.id }
         const database = this.engine ? { engine: this.engine, source_path: this.inspection.database.path, confirmed_name: this.draft.confirmedName, ...(this.engine === "sqlite" ? { target_path: this.draft.sqlitePath } : {}) } : null
-        const value = await migrationRequest("/preflight", { method: "post", data: { upload_id: upload, options: { first_deployment: this.firstDeployment === true, source_trusted: this.trusted, database }, private: privateInput } })
+        const value = await this.request("/preflight", { method: "post", data: { upload_id: upload, options: { first_deployment: this.firstDeployment === true, source_trusted: this.trusted, database }, private: privateInput } })
         if (sequence !== this.sequence) return
         this.preflight = value; this.step = 2; await this.loadDetails(1)
       } catch (error) { if (sequence === this.sequence) this.error = this.message(error) }
@@ -143,17 +150,31 @@ export default {
     async loadDetails(page) {
       if (!this.preflight) return
       const id = this.preflight.id; const section = this.section; const sequence = this.detailSequence = (this.detailSequence || 0) + 1
-      try { const value = await migrationRequest(`/preflights/${id}`, { params: { section, offset: (page - 1) * 50, limit: 50 } }); if (sequence === this.detailSequence && id === this.preflight?.id && section === this.section) { this.details = value; this.page = page } }
+      try { const value = await this.request(`/preflights/${id}`, { params: { section, offset: (page - 1) * 50, limit: 50 } }); if (sequence === this.detailSequence && id === this.preflight?.id && section === this.section) { this.details = value; this.page = page } }
       catch (error) { if (sequence === this.detailSequence) this.error = this.message(error) }
     },
     async confirm() {
       if (this.busy || this.authRequired || this.sourceBusy || !this.available || !this.replacementConfirmed || !this.preflight) return
       this.busy = true; this.error = ""; const sequence = ++this.sequence
-      try { const task = await migrationRequest(`/preflights/${this.preflight.id}/confirm`, { method: "post", data: { private: this.privateInput(), replacement_confirmed: true } }); if (sequence !== this.sequence) return; clearDirtyState("migration-restore"); this.$emit("submitted", task, { host: this.draft.host, port: this.draft.port, https: this.draft.https }) }
-      catch (error) { if (sequence === this.sequence) this.error = this.message(error) }
+      let submitted = false
+      try {
+        const privateInput = this.privateInput()
+        this.$emit("submit-start", this.preflight.id); submitted = true
+        const task = await this.request(`/preflights/${this.preflight.id}/confirm`, { method: "post", data: { private: privateInput, replacement_confirmed: true } })
+        if (sequence !== this.sequence) return
+        clearDirtyState("migration-restore"); this.$emit("submitted", task, { host: this.draft.host, port: this.draft.port, https: this.draft.https })
+      } catch (error) {
+        if (sequence !== this.sequence) return
+        this.error = this.message(error)
+        if (submitted) {
+          const status = error.response?.status
+          if (status >= 400 && status < 500 && status !== 408) this.$emit("submit-rejected")
+          else this.$emit("submit-uncertain")
+        }
+      }
       finally { if (sequence === this.sequence) this.busy = false }
     },
-    message(error) { if (error.response?.status === 401) this.authRequired = true; return error.response?.data?.detail || error.message || "请求失败，恢复草稿已保留" },
+    message(error) { if (error.response?.status === 401) this.authRequired = true; return migrationErrorMessage(error, "请求失败，恢复草稿已保留") },
     back() { this.step -= 1; if (this.step === 1) this.preflight = null },
     async close(done) {
       if (this.busy) return

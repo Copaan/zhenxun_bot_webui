@@ -9,9 +9,43 @@ let bootstrapSession = null
 
 export function clearMigrationSession() { bootstrapSession = null }
 
-export async function authorizeMigration(code) {
-  const response = await migrationRequest("/bootstrap/session", { method: "post", data: { code } })
+export async function authorizeMigration(code, { signal } = {}) {
+  const response = await migrationRequest("/bootstrap/session", { method: "post", data: { code }, signal })
+  if (signal?.aborted) return
   bootstrapSession = `${response.token_type} ${response.access_token}`
+}
+
+const migrationErrors = {
+  startup_in_progress: "当前启动状态不允许此操作，请刷新状态；首次配置恢复持续出现此错误时，请核对后端版本",
+  migration_management_not_ready: "管理面尚未就绪，请稍后刷新状态",
+  migration_first_deployment_unavailable: "首次部署迁移入口已关闭，请在正常管理页面登录后操作",
+  migration_bootstrap_status_unconfirmed: "后端尚未提供迁移就绪状态，请核对前后端版本后刷新",
+  migration_console_authorization_invalid: "授权码无效、已过期、已使用或所属实例已重启，请在目标实例重新运行 uv run zx migration authorize",
+  migration_console_authorization_required: "此操作需要目标实例的控制台迁移授权",
+  migration_login_required: "迁移会话已失效，请重新授权或登录",
+  migration_origin_forbidden: "请求来源与目标实例不一致，请从实例自己的管理入口操作",
+  migration_private_access_required: "此迁移入口仅允许本机或内网访问",
+  migration_worker_not_ready: "当前实例状态不满足恢复条件，请刷新实例状态",
+}
+
+export function migrationErrorMessage(error, fallback = "迁移请求失败") {
+  const body = error?.response?.data
+  const detail = body?.detail
+  const codePattern = /^(?:migration_|startup_)[a-z0-9_]+$/
+  const candidates = [detail?.code, detail, body?.code, body?.message, body?.info, error?.message]
+  const code = candidates.find(value => typeof value === "string" && codePattern.test(value))
+  const status = error?.response?.status
+  if (code === "migration_inspection_busy" && detail?.inspection) {
+    const task = detail.inspection
+    const started = task.started_at || task.created_at
+    return `已有迁移检查正在进行：${task.phase || "处理中"}，任务 ${task.id}，已耗时 ${task.elapsed_seconds || 0}s，剩余约 ${task.remaining_seconds == null ? "未知" : task.remaining_seconds + "s"}${started ? "，开始于 " + new Date(started * 1000).toLocaleString() : ""}。请稍后刷新。（${code}）`
+  }
+  const issues = Array.isArray(detail) ? detail : detail?.issues
+  const issueText = Array.isArray(issues) ? issues.map(item => item.message || item.msg).filter(value => typeof value === "string").join("；") : ""
+  const text = [issueText, detail?.message, detail, body?.message, body?.info].find(value => typeof value === "string" && value && !codePattern.test(value))
+  const statusText = { 401: "迁移会话已失效，请重新授权或登录", 403: "当前请求未获得迁移授权", 404: "迁移接口不存在，请核对前后端版本", 409: "迁移操作与当前实例状态冲突，请刷新状态后重试" }[status]
+  const message = migrationErrors[code] || text || statusText || (status ? fallback : error?.message) || fallback
+  return [message, code && !message.includes(code) ? `错误码：${code}` : "", status ? `HTTP ${status}` : ""].filter(Boolean).join("；")
 }
 
 export async function downloadMigration(identity) {
@@ -46,7 +80,11 @@ export async function migrationRequest(path, { method = "get", data, signal, par
     method, data, signal, params, ...(timeout === undefined ? {} : { timeout }), suppressErrorToast: true, authFailureMode: "local",
     headers: { ...(data instanceof ArrayBuffer ? { "Content-Type": "application/octet-stream" } : {}), ...(bootstrapSession ? { "X-Migration-Session": bootstrapSession } : {}) },
   })
-  if (!response?.suc) throw new Error(response?.info || "migration_request_failed")
+  if (!response?.suc) {
+    const error = new Error(response?.info || response?.message || "migration_request_failed")
+    error.response = { status: response?.code || 200, data: response }
+    throw error
+  }
   return response.data
 }
 

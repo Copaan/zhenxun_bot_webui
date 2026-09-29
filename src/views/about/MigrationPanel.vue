@@ -17,7 +17,7 @@
     <el-alert v-if="capability && capability.maintenance" title="实例维护中，迁移尚未完成。" type="info" :closable="false" show-icon />
     <el-alert v-if="capability && !capability.restore" :title="`当前运行条件暂不支持恢复：${(capability.restore_blockers || []).join('、')}。可先核验迁移包。`" type="warning" :closable="false" show-icon />
     <div class="migration-actions">
-      <el-button icon="el-icon-download" :disabled="!capability || !capability.online_export || busy || exportTracking" :loading="exportBusy" @click="exportInstance">导出实例</el-button>
+      <el-button v-if="!firstDeployment" icon="el-icon-download" :disabled="!capability || !capability.online_export || busy || exportTracking" :loading="exportBusy" @click="exportInstance">导出实例</el-button>
       <el-button icon="el-icon-upload2" :disabled="!capability || capability.upload === false || busy" @click="$refs.file.click()">选择迁移包</el-button>
       <input ref="file" class="migration-file-input" type="file" accept=".zx" @change="selectFile" />
     </div>
@@ -138,54 +138,103 @@
       </template>
       <span slot="footer"><el-button :disabled="Boolean(recoveryBusy)" @click="closeRecovery()">关闭</el-button><el-button type="primary" :loading="Boolean(recoveryBusy)" :disabled="!recoveryRequirements || !recoveryConfirmed" @click="reauthorize">提交授权</el-button></span>
     </el-dialog>
-    <migration-restore-wizard v-if="restoreVisible && inspection" :visible="restoreVisible" :inspection="inspection" :upload-id="uploadId" :discovered-path="discoveredPath" :archive-password="password" :capability="capability" :source-busy="busy" :first-deployment="firstDeployment" @reauthenticated="restoreReauthenticated" @close="restoreVisible = false" @submitted="restoreSubmitted" />
+    <migration-restore-wizard v-if="restoreVisible && inspection" :visible="active && restoreVisible" :inspection="inspection" :upload-id="uploadId" :discovered-path="discoveredPath" :archive-password="password" :capability="capability" :source-busy="busy || Boolean(pendingRestoreId)" :first-deployment="firstDeployment" @operation-state="wizardOperation = $event" @submit-start="pendingRestoreId = $event" @submit-rejected="pendingRestoreId = ''" @submit-uncertain="restoreUnconfirmed" @reauthenticated="restoreReauthenticated" @close="restoreVisible = false" @submitted="restoreSubmitted" />
   </section>
 </template>
 
 <script>
 import DatabaseConnectionStatus from "@/components/system/DatabaseConnectionStatus.vue"
-import { apiErrorDetail } from "@/utils/api-error"
 import { getBaseUrl } from "@/utils/api"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
-import { migrationLogin, downloadMigration, migrationRequest, migrationStages, migrationPollDelay, recoveryDatabase, terminalMigrationStages, uploadMigration, migrationConnectionMatches } from "@/utils/migration"
+import { migrationLogin, migrationErrorMessage, downloadMigration, migrationRequest, migrationStages, migrationPollDelay, recoveryDatabase, terminalMigrationStages, uploadMigration, migrationConnectionMatches } from "@/utils/migration"
 import MigrationTaskStatus from "./MigrationTaskStatus.vue"
 import MigrationRestoreWizard from "./MigrationRestoreWizard.vue"
 import MigrationDatabases from "./MigrationDatabases.vue"
+import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 
 export default {
   name: "MigrationPanel",
   components: { MigrationRestoreWizard, MigrationTaskStatus, DatabaseConnectionStatus, MigrationDatabases },
-  props: { firstDeployment: Boolean },
+  props: { firstDeployment: Boolean, active: { type: Boolean, default: true } },
   computed: {
     exportConnectionReady() { return this.exportConnection?.ready === true && migrationConnectionMatches(this.exportConnection, this.capability) },
+    running() { return this.active && !this.networkFrozen },
+    switchBlockedReason() {
+      if (this.pendingRestoreId) return "恢复已提交，正在核对任务结果，请勿重复配置"
+      if (this.wizardOperation) return this.wizardOperation
+      if (this.busy) return this.file && !this.sealed ? "正在上传迁移包，请等待完成" : "正在核验迁移包，请等待完成"
+      if (this.loginBusy || this.recoveryBusy || this.cancelling) return "正在处理迁移请求，请等待完成"
+      if (this.restoreVisible || this.recoveryVisible) return "请先完成或关闭当前恢复对话框"
+      if (this.jobs.some(job => !terminalMigrationStages.has(job.stage)) || this.capability?.maintenance) return "迁移尚未结束，请先处理当前任务"
+      return ""
+    },
   },
-  data: () => ({ exportConnection: null, connectionChecking: false, connectionSequence: 0, connectionInspectionTask: null, exportDialog: false, exportPreview: null, previewTask: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, inspectionTask: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
-  created() { this.sequence = 0; this.readSequence = 0; this.activeExportId = sessionStorage.getItem(this.exportStorageKey()) || ""; this.exportTracking = Boolean(this.activeExportId); this.refresh() },
-  beforeDestroy() { this.connectionSequence += 1; this.sequence += 1; this.readSequence += 1; this.exportSequence = (this.exportSequence || 0) + 1; this.recoverySequence = (this.recoverySequence || 0) + 1; this.controller?.abort(); clearTimeout(this.poll); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
+  data: () => ({ networkFrozen: isBusinessNetworkFrozen(), wizardOperation: "", pendingRestoreId: "", exportConnection: null, connectionChecking: false, connectionSequence: 0, connectionInspectionTask: null, exportDialog: false, exportPreview: null, previewTask: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, inspectionTask: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
+  created() {
+    this.sequence = 0; this.readSequence = 0; this.requests = new Set(); this.waiters = new Set()
+    this.activeExportId = this.firstDeployment ? "" : sessionStorage.getItem(this.exportStorageKey()) || ""; this.exportTracking = Boolean(this.activeExportId)
+    this.unsubscribeNetwork = onBusinessNetworkChange(value => { this.networkFrozen = value })
+    if (this.running) this.refresh()
+  },
+  beforeDestroy() { this.stopActivity(); this.unsubscribeNetwork?.(); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
   watch: {
-    exportDialog(value) { if (!value) { this.connectionSequence += 1; this.previewSequence = (this.previewSequence || 0) + 1; this.connectionChecking = false; this.connectionInspectionTask = null; this.previewTask = null } },
+    running(value) { if (value) this.refresh(); else this.stopActivity() },
+    switchBlockedReason: { immediate: true, handler(value) { this.$emit("switch-state", value) } },
+    exportDialog(value) { if (!value) { this.connectionSequence += 1; this.previewSequence = (this.previewSequence || 0) + 1; this.connectionChecking = false; this.connectionInspectionTask = null; this.previewTask = null; if (!this.exportTracking) this.exportBusy = false } },
     recoveryUsername() { this.recoveryDirty() },
     recoveryPassword() { this.recoveryDirty() },
     recoveryConfirmed() { this.recoveryDirty() },
   },
   methods: {
+    async request(path, options = {}) {
+      const controller = new AbortController()
+      const abort = () => controller.abort()
+      if (options.signal?.aborted) abort()
+      else options.signal?.addEventListener("abort", abort, { once: true })
+      this.requests.add(controller)
+      try { return await migrationRequest(path, { ...options, signal: controller.signal }) }
+      finally { this.requests.delete(controller); options.signal?.removeEventListener("abort", abort) }
+    },
+    stopActivity() {
+      this.connectionSequence++; this.sequence++; this.readSequence++
+      this.previewSequence = (this.previewSequence || 0) + 1
+      this.exportSequence = (this.exportSequence || 0) + 1; this.recoverySequence = (this.recoverySequence || 0) + 1
+      this.controller?.abort(); clearTimeout(this.poll)
+      for (const controller of this.requests) controller.abort()
+      for (const resolve of this.waiters) resolve()
+      this.refreshPromise = null; this.loading = false; this.busy = false; this.discoveryInFlight = false
+      this.connectionChecking = false; this.exportBusy = false; this.recoveryBusy = false
+    },
+    waitForPoll(signal) {
+      return new Promise(resolve => {
+        const finish = () => { clearTimeout(timer); this.waiters.delete(finish); signal?.removeEventListener("abort", finish); resolve() }
+        const timer = setTimeout(finish, 700)
+        this.waiters.add(finish)
+        if (signal?.aborted) finish(); else signal?.addEventListener("abort", finish, { once: true })
+      })
+    },
+    bootstrapAuthorized() {
+      this.authRequired = false; this.uploadId = null; this.sealed = false
+      this.inspection = null; this.inspectionTask = null; this.restoreVisible = false; this.wizardOperation = ""
+    },
+    restoreUnconfirmed() { this.connectionNotice = "恢复提交结果尚未确认，正在查询原任务；不会自动重复提交。"; this.refresh() },
     databaseFileLabel(kind) { return ({ sqlite: "SQLite 数据库", sqlite_empty: "尚未初始化的主库", empty_placeholder: "空占位文件，原样保留", ordinary_file: "普通文件，原样保留", invalid_primary: "主库格式异常" })[kind] || "状态未确认" },
     exportStorageKey() { return `migration-export:${getBaseUrl()}` },
     trackExport(id) { this.activeExportId = id; this.exportTracking = Boolean(id); if (id) sessionStorage.setItem(this.exportStorageKey(), id); else sessionStorage.removeItem(this.exportStorageKey()) },
     async checkExportConnection() {
-      if (this.connectionChecking) return
+      if (!this.running || this.connectionChecking) return
       const sequence = ++this.connectionSequence
       this.connectionChecking = true; this.exportConnection = null
       let checkedResult = null
       try {
-        const task = await migrationRequest('/export/connection-check', { method: 'post', data: {} })
+        const task = await this.request('/export/connection-check', { method: 'post', data: {} })
         if (sequence !== this.connectionSequence || !this.exportDialog) return
         this.connectionInspectionTask = task
         const state = await this.waitInspection(task, sequence, 'connection')
         if (sequence !== this.connectionSequence || !this.exportDialog) return
         checkedResult = state?.result || {}
         const readSequence = this.readSequence
-        const current = await migrationRequest('/capabilities', { timeout: 10000 })
+        const current = await this.request('/capabilities', { timeout: 10000 })
         if (sequence !== this.connectionSequence || !this.exportDialog) return
         if (readSequence === this.readSequence) this.capability = current
         const value = checkedResult
@@ -199,11 +248,12 @@ export default {
       } finally { if (sequence === this.connectionSequence) this.connectionChecking = false }
     },
     async exportInstance() {
-      if (this.exportBusy || this.exportTracking) return
+      if (!this.running || this.firstDeployment || this.exportBusy || this.exportTracking) return
       const sequence = this.previewSequence = (this.previewSequence || 0) + 1
       this.exportBusy = true; this.error = ''; this.exportPreview = null; this.exportDialog = true; this.allowForcedShutdown = false
       try {
-        const previewState = await migrationRequest('/export/preview')
+        const previewState = await this.request('/export/preview')
+        if (sequence !== this.previewSequence || !this.running || !this.exportDialog) return
         this.previewTask = previewState
         const [preview] = await Promise.all([
           this.waitInspection(previewState, sequence, 'preview'),
@@ -214,14 +264,14 @@ export default {
           else this.error = `导出预览失败：${preview?.error?.code || '检查失败'}`
         }
       } catch (error) { if (sequence === this.previewSequence) this.error = this.message(error) }
-      finally { this.exportBusy = false }
+      finally { if (sequence === this.previewSequence) this.exportBusy = false }
     },
     async confirmExport() {
-      if (this.exportBusy || this.exportTracking || this.connectionChecking || !this.exportConnectionReady || !this.exportPreview) return
+      if (!this.running || this.exportBusy || this.exportTracking || this.connectionChecking || !this.exportConnectionReady || !this.exportPreview) return
       const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('')
       const sequence = this.exportSequence = (this.exportSequence || 0) + 1
       this.exportBusy = true; this.exportDialog = false; this.exportSubmittedAt = Date.now(); this.trackExport(id)
-      try { await migrationRequest('/export', { method: 'post', data: { task_id: id, connection_fingerprint: this.exportConnection.fingerprint, confirm_secrets: true, dependencies: true, allow_forced_shutdown: this.allowForcedShutdown } }) }
+      try { await this.request('/export', { method: 'post', data: { task_id: id, connection_fingerprint: this.exportConnection.fingerprint, confirm_secrets: true, dependencies: true, allow_forced_shutdown: this.allowForcedShutdown } }) }
       catch (error) {
         if (sequence !== this.exportSequence) return
         if (error.response && error.response.status < 500) {
@@ -239,11 +289,13 @@ export default {
     },
     async restoreReauthenticated() { this.uploadId = null; this.sealed = false; await this.inspect(1) },
     restoreSubmitted(task, entry) {
+      this.pendingRestoreId = task.id
+      this.jobs = [task, ...this.jobs.filter(job => job.id !== task.id)]
       if (entry) {
         const host = ["0.0.0.0", "::", "127.0.0.1", "localhost"].includes(entry.host) ? window.location.hostname : entry.host
         try { const url = new URL(`${entry.https ? "https" : "http"}://${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${entry.port}`); if (!url.username && !url.password && url.pathname === "/") this.nextOrigin = url.origin } catch (_) { /* A failed URL never triggers navigation. */ }
       }
-      this.restoreVisible = false; this.clearSelection(); this.refresh()
+      this.restoreVisible = false; this.wizardOperation = ""; this.clearSelection(); this.refresh()
     },
     async login() {
       if (this.loginBusy || !this.loginUsername || !this.loginPassword) return
@@ -254,12 +306,12 @@ export default {
     },
     recoveryDirty() { setDirtyState("migration-recovery", Boolean(this.recoveryUsername || this.recoveryPassword || this.recoveryConfirmed)) },
     async openRecovery(job) {
-      if (this.recoveryBusy) return
+      if (!this.running || this.recoveryBusy) return
       const sequence = this.recoverySequence = (this.recoverySequence || 0) + 1
       this.recoveryBusy = true; this.recoveryError = ""; this.recoveryVisible = true
       this.recoveryRequirements = null
       try {
-        const requirements = await migrationRequest(`/tasks/${job.id}/recovery`)
+        const requirements = await this.request(`/tasks/${job.id}/recovery`)
         if (sequence !== this.recoverySequence) return
         this.recoveryRequirements = requirements
       } catch (error) { if (sequence === this.recoverySequence) this.recoveryError = this.message(error) }
@@ -273,12 +325,12 @@ export default {
       if (typeof done === "function") done()
     },
     async reauthorize() {
-      if (this.recoveryBusy || !this.recoveryConfirmed || !this.recoveryRequirements) return
+      if (!this.running || this.recoveryBusy || !this.recoveryConfirmed || !this.recoveryRequirements) return
       const sequence = this.recoverySequence
       this.recoveryBusy = true; this.recoveryError = ""
       try {
         const database = recoveryDatabase(this.recoveryRequirements, this.recoveryUsername, this.recoveryPassword)
-        await migrationRequest(`/tasks/${this.recoveryRequirements.task_id}/credentials`, { method: "post", data: { database } })
+        await this.request(`/tasks/${this.recoveryRequirements.task_id}/credentials`, { method: "post", data: { database } })
         if (sequence !== this.recoverySequence) return
         this.recoveryPassword = ""; this.recoveryUsername = ""; this.recoveryConfirmed = false; this.recoveryVisible = false
         clearDirtyState("migration-recovery")
@@ -290,11 +342,14 @@ export default {
     size(value) { return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MiB` : `${(value / 1024).toFixed(1)} KiB` },
     async waitInspection(initial, sequence, target = 'inspection') {
       let state = initial
+      const signal = target === 'inspection' ? this.controller?.signal : null
       while (state && ['queued', 'running'].includes(state.status)) {
         const currentSequence = target === true || target === 'connection' ? this.connectionSequence : target === 'preview' ? this.previewSequence : this.sequence
-        if (sequence !== currentSequence) return null
-        await new Promise(resolve => setTimeout(resolve, 700))
-        state = await migrationRequest(`/inspections/${state.id}`, { timeout: 10000 })
+        if (!this.running || signal?.aborted || sequence !== currentSequence) return null
+        await this.waitForPoll(signal)
+        const afterWait = target === true || target === 'connection' ? this.connectionSequence : target === 'preview' ? this.previewSequence : this.sequence
+        if (!this.running || signal?.aborted || sequence !== afterWait || this._isDestroyed) return null
+        state = await this.request(`/inspections/${state.id}`, { timeout: 10000, signal })
         const updatedSequence = target === true || target === 'connection' ? this.connectionSequence : target === 'preview' ? this.previewSequence : this.sequence
         if (sequence !== updatedSequence) return null
         if (target === 'connection') this.connectionInspectionTask = state
@@ -304,30 +359,33 @@ export default {
       return state
     },
     message(error) {
-      if (error.response?.status === 401) this.authRequired = true
-      const detail = error.response?.data?.detail
-      if (detail?.code === 'migration_inspection_busy' && detail.inspection) {
-        const inspection = detail.inspection
-        const started = inspection.started_at || inspection.created_at
-        const startedText = started ? `，开始于 ${new Date(started * 1000).toLocaleString()}` : ''
-        const remaining = inspection.remaining_seconds == null ? '未知' : `${inspection.remaining_seconds}s`
-        return `已有迁移检查正在进行：${inspection.phase || '处理中'}，任务 ${inspection.id}，已耗时 ${inspection.elapsed_seconds || 0}s，剩余约 ${remaining}${startedText}。请稍后刷新。`
+      if (error.response?.status === 401) {
+        this.authRequired = true
+        if (this.firstDeployment && !this.pendingRestoreId && !this.jobs.some(job => !terminalMigrationStages.has(job.stage))) this.$emit("authorization-expired")
       }
-      return apiErrorDetail(error, "迁移请求失败")
+      return migrationErrorMessage(error)
     },
     canCancel(job) { return !terminalMigrationStages.has(job.stage) && !["committed", "recovery_required"].includes(job.stage) && !job.cancel_requested },
     async refresh() {
+      if (!this.running || this._isDestroyed) return
+      if (this.refreshPromise) return this.refreshPromise
+      const promise = this.refreshState(); this.refreshPromise = promise
+      try { await promise } finally { if (this.refreshPromise === promise) this.refreshPromise = null }
+    },
+    async refreshState() {
       const sequence = ++this.readSequence
       clearTimeout(this.poll); this.loading = true
       try {
         if (!this.discoveryInFlight) {
           this.discoveryInFlight = true
-          migrationRequest('/discover', { timeout: 10000 }).then(value => { if (!this._isDestroyed) this.packages = value.items }).catch(() => {}).finally(() => { this.discoveryInFlight = false })
+          const discovery = this.request('/discover', { timeout: 10000 }); this.discoveryRequest = discovery
+          discovery.then(value => { if (sequence === this.readSequence && this.running && !this._isDestroyed) this.packages = value.items }).catch(() => {}).finally(() => { if (this.discoveryRequest === discovery) this.discoveryInFlight = false })
         }
+        const trackedId = this.pendingRestoreId || this.activeExportId
         const [cap, listing, tracked] = await Promise.allSettled([
-          migrationRequest('/capabilities', { timeout: 10000 }),
-          migrationRequest('/tasks', { timeout: 10000, params: { offset: (this.jobPage - 1) * 20, limit: 20 } }),
-          this.activeExportId ? migrationRequest(`/tasks/${this.activeExportId}`, { timeout: 10000 }) : Promise.resolve(null),
+          this.request('/capabilities', { timeout: 10000 }),
+          this.request('/tasks', { timeout: 10000, params: { offset: (this.jobPage - 1) * 20, limit: 20 } }),
+          trackedId ? this.request(`/tasks/${trackedId}`, { timeout: 10000 }) : Promise.resolve(null),
         ])
         if (sequence !== this.readSequence) return
         if (cap.status === 'fulfilled') {
@@ -342,22 +400,26 @@ export default {
         if (tracked.status === 'fulfilled' && tracked.value) {
           if (!this.jobs.some(job => job.id === tracked.value.id)) this.jobs.unshift(tracked.value)
           else this.jobs = this.jobs.map(job => job.id === tracked.value.id ? tracked.value : job)
-          if (terminalMigrationStages.has(tracked.value.stage)) this.trackExport('')
+          if (terminalMigrationStages.has(tracked.value.stage)) {
+            if (tracked.value.id === this.pendingRestoreId) this.pendingRestoreId = ""
+            else this.trackExport('')
+          }
         }
-        if (tracked.status === 'rejected' && tracked.reason.response?.status === 404 && (!this.exportSubmittedAt || Date.now() - this.exportSubmittedAt > 60000)) {
+        if (this.activeExportId && !this.pendingRestoreId && tracked.status === 'rejected' && tracked.reason.response?.status === 404 && (!this.exportSubmittedAt || Date.now() - this.exportSubmittedAt > 60000)) {
           this.trackExport(''); this.error = '未找到本次任务。请核对当前实例与任务历史后再提交。'
         }
         if (listing.status === 'rejected') throw listing.reason
         if (this.activeExportId && tracked.status === 'rejected') throw tracked.reason
-        if (!this.activeExportId) { const active = this.jobs.find(job => job.action === 'export' && !terminalMigrationStages.has(job.stage)); if (active) this.trackExport(active.id) }
+        if (this.pendingRestoreId && tracked.status === 'rejected') throw tracked.reason
+        if (!this.firstDeployment && !this.activeExportId) { const active = this.jobs.find(job => job.action === 'export' && !terminalMigrationStages.has(job.stage)); if (active) this.trackExport(active.id) }
         this.lastConnectedAt = Date.now(); this.connectionNotice = ''
       } catch (error) {
         if (sequence !== this.readSequence) return
-        if (!error.response || error.response.status >= 500 || (this.activeExportId && error.response.status === 404)) {
+        if (!error.response || error.response.status >= 500 || ((this.activeExportId || this.pendingRestoreId) && error.response.status === 404)) {
           this.connectionNotice = `管理连接暂时中断，正在查询原任务。${this.lastConnectedAt ? '上次连接：' + new Date(this.lastConnectedAt).toLocaleTimeString() : '暂未取得任务状态。'}`
         } else this.error = this.message(error)
       } finally {
-        if (sequence === this.readSequence) { this.loading = false; if (this.activeExportId || this.connectionNotice || this.jobs.some(job => !terminalMigrationStages.has(job.stage))) this.poll = setTimeout(() => this.refresh(), migrationPollDelay(this.jobs, Boolean(this.connectionNotice))) }
+        if (sequence === this.readSequence) { this.loading = false; if (this.running && !this._isDestroyed && (this.pendingRestoreId || this.activeExportId || this.connectionNotice || this.jobs.some(job => !terminalMigrationStages.has(job.stage)))) this.poll = setTimeout(() => this.refresh(), migrationPollDelay(this.jobs, Boolean(this.connectionNotice))) }
       }
     },
     async selectFile(event) {
@@ -374,7 +436,7 @@ export default {
     },
     pause() { this.controller?.abort() },
     async inspect(page) {
-      if (this.busy || !this.capability || this.capability.maintenance || (!this.file && !this.discoveredPath)) return
+      if (!this.running || this.busy || !this.capability || this.capability.maintenance || (!this.file && !this.discoveredPath)) return
       this.busy = true; this.error = ""
       const sequence = ++this.sequence
       const controller = new AbortController(); this.controller = controller
@@ -384,7 +446,7 @@ export default {
           if (sequence !== this.sequence) return
           this.sealed = true
         }
-        const task = await migrationRequest("/inspect", { method: "post", signal: controller.signal, data: { upload_id: this.file ? this.uploadId : null, path: this.discoveredPath || null, password: this.password || null, offset: (page - 1) * 50, limit: 50 } })
+        const task = await this.request("/inspect", { method: "post", signal: controller.signal, data: { upload_id: this.file ? this.uploadId : null, path: this.discoveredPath || null, password: this.password || null, offset: (page - 1) * 50, limit: 50 } })
         if (sequence !== this.sequence) return
         this.inspectionTask = task
         const value = await this.waitInspection(task, sequence)
@@ -399,7 +461,7 @@ export default {
       if (this.cancelling) return
       try { await this.$confirm("提交前取消会进入清理或回滚，提交后的结果不会撤销。", "请求取消迁移", { type: "warning" }) } catch (error) { return }
       this.cancelling = job.id
-      try { await migrationRequest(`/tasks/${job.id}/cancel`, { method: "post" }); await this.refresh() }
+      try { await this.request(`/tasks/${job.id}/cancel`, { method: "post" }); await this.refresh() }
       catch (error) { this.error = this.message(error) }
       finally { this.cancelling = null }
     },

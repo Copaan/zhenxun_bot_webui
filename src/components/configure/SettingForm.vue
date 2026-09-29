@@ -6,11 +6,14 @@
           <img :src="logoUrl" alt="真寻" class="brand-logo" />
           <div>
             <p class="brand-kicker">ZHENXUN BOT</p>
-            <h1>首次配置</h1>
+            <h1 ref="heading" tabindex="-1">首次配置</h1>
             <p>完成本体运行所需的基础设置</p>
           </div>
         </div>
-        <span class="state-badge">{{ stateLabel }}</span>
+        <div class="setup-header-actions">
+          <span class="state-badge">{{ stateLabel }}</span>
+          <slot name="header-actions" :blocked-reason="switchBlockedReason" />
+        </div>
       </header>
 
       <div v-if="!claimed && serverState === 'restart_pending'" class="pending-layout">
@@ -18,7 +21,7 @@
         <span class="section-number">配置已保存</span>
         <h2>真寻正在等待重启</h2>
         <p>当前浏览器没有可用的重启票据。可手动重启进程，然后重新检查服务状态。</p>
-        <el-button type="primary" @click="loadStatus">重新检查</el-button>
+        <el-button type="primary" @click="loadStatus()">重新检查</el-button>
       </div>
 
       <div v-else-if="!claimed" class="claim-layout">
@@ -38,7 +41,7 @@
           <el-button
             type="primary"
             class="primary-action"
-            @click="loadStatus"
+            @click="loadStatus()"
           >
             重新检查状态
           </el-button>
@@ -319,6 +322,7 @@ const ProbeResult = {
 export default {
   name: "SettingForm",
   components: { ProbeResult },
+  props: { active: { type: Boolean, default: true } },
   data() {
     return {
       logoUrl,
@@ -362,6 +366,13 @@ export default {
     }
   },
   computed: {
+    switchBlockedReason() {
+      if (this.applying) return "正在保存配置或确认重启，请等待完成"
+      if (this.serverState === "restart_pending") return "配置已保存，请完成当前重启流程"
+      if (Object.values(this.probing).some(Boolean)) return "正在检测连接，请等待完成"
+      if (this.initializing) return "正在核对配置状态"
+      return ""
+    },
     setupToken() {
       return window.sessionStorage.getItem(SETUP_TOKEN_KEY) || ""
     },
@@ -406,18 +417,29 @@ export default {
     },
   },
   watch: {
+    active(value) {
+      if (value) this.loadStatus(false)
+      else this.cancelReads()
+    },
     database: { deep: true, handler() { this.results.database = null } },
     cache: { deep: true, handler() { this.results.cache = null } },
     network: { deep: true, handler() { this.results.network = null } },
   },
-  async mounted() {
-    await this.loadStatus()
-  },
+  created() { this.readSequence = 0; this.requestControllers = new Set() },
+  mounted() { if (this.active) this.loadStatus() },
+  beforeDestroy() { this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.requestControllers.clear() },
   methods: {
-    async loadStatus() {
+    focusHeading() { this.$refs.heading?.focus() },
+    cancelReads() { this.readSequence++; this.statusController?.abort(); this.initializing = false },
+    async loadStatus(loadDraft = true) {
+      if (!this.active) return
+      const sequence = ++this.readSequence
+      this.statusController?.abort()
+      const controller = this.statusController = new AbortController()
       this.initializing = true
       try {
-        const response = await this.getRequest(`${this.$root.prefix}/configure/status`)
+        const response = await this.getRequest(`${this.$root.prefix}/configure/status`, null, { signal: controller.signal })
+        if (sequence !== this.readSequence || !this.active) return
         this.serverState = response.data.state
         if (this.serverState === "configured") {
           this.clearSetupState()
@@ -435,10 +457,12 @@ export default {
         }
         if (this.setupToken) {
           this.claimed = true
-          await this.loadDraft()
+          if (loadDraft === true) await this.loadDraft(sequence, controller.signal)
         }
+      } catch (error) {
+        if (sequence === this.readSequence && !controller.signal.aborted) this.accessError = "配置状态读取失败，请重新检查状态。"
       } finally {
-        this.initializing = false
+        if (sequence === this.readSequence) this.initializing = false
       }
     },
     clearSetupState() {
@@ -446,13 +470,14 @@ export default {
       window.sessionStorage.removeItem(RESTART_RECEIPT_KEY)
       window.sessionStorage.removeItem(RESTART_TARGETS_KEY)
     },
-    async loadDraft() {
+    async loadDraft(sequence, signal) {
       try {
         const response = await this.getRequest(
           `${this.$root.prefix}/configure/draft`,
           null,
-          { ...this.setupHeaders, suppressErrorToast: true }
+          { ...this.setupHeaders, signal, suppressErrorToast: true }
         )
+        if (sequence !== this.readSequence || !this.active) return
         const draft = response.data
         this.account.username = draft.username || "admin"
         Object.assign(this.database, draft.database || {})
@@ -460,6 +485,7 @@ export default {
         Object.assign(this.network, draft.network || {})
         this.detectedAddresses = draft.detected_addresses || []
       } catch (error) {
+        if (sequence !== this.readSequence || signal.aborted) return
         if (error.response && [401, 409].includes(error.response.status)) {
           this.clearSetupState()
           this.claimed = false
@@ -489,13 +515,20 @@ export default {
       if (mode === "postgres") this.database.port = 5432
     },
     async runProbe(key, path, payload) {
+      if (!this.active || this.probing[key]) return false
+      const controller = new AbortController(); this.requestControllers.add(controller)
       this.probing[key] = true
       try {
-        const response = await this.postRequest(`${this.$root.prefix}/configure/probe/${path}`, payload, this.setupHeaders)
+        const response = await this.postRequest(`${this.$root.prefix}/configure/probe/${path}`, payload, { ...this.setupHeaders, signal: controller.signal })
+        if (controller.signal.aborted || this._isDestroyed) return false
         this.results[key] = response.data
         return response.data.status !== "error"
+      } catch (error) {
+        if (!controller.signal.aborted && !this._isDestroyed) this.results[key] = { status: "error", message: "连接检测失败，请重新检测。" }
+        return false
       } finally {
-        this.probing[key] = false
+        this.requestControllers.delete(controller)
+        if (!this._isDestroyed) this.probing[key] = false
       }
     },
     probeDatabase() {
@@ -519,13 +552,14 @@ export default {
       return { ok: "正常", warning: "警告", error: "未通过" }[status]
     },
     async saveAndRestart() {
-      if (!this.canApply) return
+      if (!this.active || this.applying || !this.canApply) return
       if (this.serverState === "restart_pending") {
         const receipt = window.sessionStorage.getItem(RESTART_RECEIPT_KEY)
         if (receipt) await this.restartSavedConfiguration(receipt, false)
         return
       }
       this.applying = true
+      const controller = new AbortController(); this.requestControllers.add(controller)
       this.applyError = ""
       try {
         const response = await this.postRequest(
@@ -540,8 +574,9 @@ export default {
             network: this.network,
             accept_warnings: this.acceptWarnings,
           },
-          this.setupHeaders
+          { ...this.setupHeaders, signal: controller.signal }
         )
+        if (controller.signal.aborted || this._isDestroyed) return
         if (!response.suc) {
           this.applyError = response.info || "最终检查未通过。"
           if (response.data) {
@@ -555,9 +590,11 @@ export default {
         window.sessionStorage.setItem(RESTART_TARGETS_KEY, JSON.stringify(this.restartUrls))
         await this.restartSavedConfiguration(response.data.restart_receipt, true)
       } catch (error) {
+        if (controller.signal.aborted || this._isDestroyed) return
         this.applyError = (error.response && error.response.data && error.response.data.detail) || "保存配置时发生错误。"
       } finally {
-        this.applying = false
+        this.requestControllers.delete(controller)
+        if (!this._isDestroyed) this.applying = false
       }
     },
     async restartSavedConfiguration(receipt, askConfirmation) {
@@ -600,6 +637,7 @@ export default {
 .setup-shell { display: flex; height: 100%; min-height: 0; padding: 32px 20px; overflow: hidden; background: linear-gradient(145deg, #f7f8fb 0%, #fff4f7 100%); color: #30333a; }
 .setup-workspace { display: flex; width: min(960px, 100%); height: min(860px, 100%); min-height: 0; margin: auto; flex-direction: column; overflow: hidden; background: #fff; border: 1px solid #e8e9ee; border-radius: 8px; box-shadow: 0 18px 54px rgba(61, 66, 84, 0.1); }
 .setup-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 24px 32px; border-bottom: 1px solid #eceef2; }
+.setup-header-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin-left: 16px; }
 .brand-block { display: flex; align-items: center; gap: 18px; }
 .brand-logo { width: 108px; height: 52px; object-fit: contain; }
 .brand-kicker { margin: 0 0 2px; color: #c74e80; font-size: 11px; font-weight: 800; }
@@ -669,7 +707,8 @@ h1 { font-family: "fzrzFont", sans-serif; font-size: 25px; letter-spacing: 0; }
 @media (max-width: 700px) {
   .setup-shell { padding: 0; background: #fff; }
   .setup-workspace { width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
-  .setup-header { padding: 18px 16px; }
+  .setup-header { padding: 18px 16px; flex-wrap: wrap; gap: 12px; }
+  .setup-header-actions { width: 100%; margin-left: 0; align-items: flex-start; }
   .brand-logo { width: 82px; height: 42px; }
   .brand-block p:last-child, .state-badge { display: none; }
   .claim-layout { display: block; min-height: 0; padding: 48px 22px; }
