@@ -54,7 +54,8 @@
             @click="handleConfirm"
             class="fm-confirm-btn"
             :class="confirmBtnClass"
-            :text="confirmText"
+            :text="confirmLoading ? '处理中...' : confirmText"
+            :disabled="confirmDisabled || confirmLoading"
           />
         </div>
       </div>
@@ -93,6 +94,8 @@ export default {
       type: Boolean,
       default: true,
     },
+    confirmDisabled: Boolean,
+    confirmLoading: Boolean,
   },
   computed: {
     dialogBorderClass() {

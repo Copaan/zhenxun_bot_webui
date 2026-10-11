@@ -288,151 +288,14 @@
     </NeonDialog>
 
     <!-- 安装依赖对话框 -->
-    <NeonDialog
-      :visible.sync="showInstallDependencyDialog"
-      title="依赖管理"
-      icon-class="download"
-      @confirm="installDependency"
-      class="dependency-dialog"
-    >
-      <div class="flex flex-col gap-4">
-        <!-- 操作类型选择 -->
-        <div class="flex items-center gap-4">
-          <div
-            class="operation-selector flex rounded-lg overflow-hidden"
-            :style="{ border: '1px solid var(--border-color-light)' }"
-          >
-            <button
-              @click="dependencyOperation = 'install'"
-              class="px-4 py-2 text-sm font-medium transition-all duration-300 flex items-center"
-              :style="{
-                backgroundColor:
-                  dependencyOperation === 'install'
-                    ? 'var(--primary-color)'
-                    : 'var(--bg-color)',
-                color:
-                  dependencyOperation === 'install'
-                    ? 'var(--bg-color)'
-                    : 'var(--primary-color)',
-              }"
-            >
-              <i class="fas fa-download mr-2"></i>安装
-            </button>
-            <button
-              @click="dependencyOperation = 'uninstall'"
-              class="px-4 py-2 text-sm font-medium transition-all duration-300 flex items-center"
-              :style="{
-                backgroundColor:
-                  dependencyOperation === 'uninstall'
-                    ? 'var(--danger-color)'
-                    : 'var(--bg-color)',
-                color:
-                  dependencyOperation === 'uninstall'
-                    ? 'var(--bg-color)'
-                    : 'var(--danger-color)',
-              }"
-            >
-              <i class="fas fa-trash-alt mr-2"></i>卸载
-            </button>
-          </div>
-          <div class="flex-grow">
-            <NeonInput
-              v-model="dependencyName"
-              class="fm-input"
-              :placeholder="
-                dependencyOperation === 'install'
-                  ? '请输入要安装的依赖名称...'
-                  : '请输入要卸载的依赖名称...'
-              "
-            />
-          </div>
-        </div>
-
-        <!-- 提示信息 -->
-        <div
-          class="tip-container px-4 py-3 rounded-lg text-xs flex items-start"
-          :style="{
-            backgroundColor:
-              dependencyOperation === 'install'
-                ? 'var(--primary-color-light-9)'
-                : 'var(--danger-color-light)',
-            border: `1px dashed ${
-              dependencyOperation === 'install'
-                ? 'var(--primary-color-light)'
-                : 'var(--danger-color)'
-            }`,
-            color:
-              dependencyOperation === 'install'
-                ? 'var(--primary-color)'
-                : 'var(--danger-color)',
-          }"
-        >
-          <i class="fas fa-lightbulb mt-1 mr-3 text-base"></i>
-          <div class="flex-grow">
-            <span v-if="dependencyOperation === 'install'">
-              <div class="font-medium mb-1">安装依赖提示：</div>
-              <ul class="list-disc list-inside space-y-1">
-                <li>可以指定版本或安装多个依赖（使用空格分离）</li>
-                <li>
-                  指定版本使用等号：<code
-                    class="px-1 py-0.5 rounded bg-white bg-opacity-30"
-                    >httpx==0.27</code
-                  >
-                </li>
-                <li>
-                  安装多个依赖：<code
-                    class="px-1 py-0.5 rounded bg-white bg-opacity-30"
-                    >httpx requests</code
-                  >
-                </li>
-              </ul>
-            </span>
-            <span v-else>
-              <div class="font-medium mb-1">卸载依赖提示：</div>
-              <ul class="list-disc list-inside space-y-1">
-                <li>可以卸载多个依赖（使用空格分离）</li>
-                <li>
-                  卸载多个依赖：<code
-                    class="px-1 py-0.5 rounded bg-white bg-opacity-30"
-                    >httpx requests</code
-                  >
-                </li>
-                <li>请确认依赖名称正确，避免卸载系统依赖</li>
-              </ul>
-            </span>
-          </div>
-        </div>
-
-        <!-- 结果显示区域 -->
-        <div
-          class="result-container p-4 rounded-lg text-sm overflow-auto"
-          :style="{
-            backgroundColor: 'var(--bg-color)',
-            border: '1px solid var(--border-color-light)',
-            minHeight: '120px',
-          }"
-        >
-          <pre v-if="installResult" class="whitespace-pre-wrap">{{
-            installResult
-          }}</pre>
-          <div
-            v-else
-            class="flex items-center justify-center h-full text-center text-gray-400"
-          >
-            <div class="text-center">
-              <i class="fas fa-terminal text-2xl mb-2"></i>
-              <div>返回结果将显示在这里</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </NeonDialog>
+    <ManualDependencyDialog :visible.sync="showInstallDependencyDialog" />
   </div>
 </template>
 
 <script>
 import PluginListTemplate from "@/components/plugin/PluginListTemplate.vue"
 import PluginArchiveDialog from "@/components/plugin/PluginArchiveDialog.vue"
+import ManualDependencyDialog from "@/components/plugin/ManualDependencyDialog.vue"
 import CuteButton from "@/components/ui/CuteButton.vue"
 import NeonDialog from "@/components/ui/NeonDialog.vue"
 import NeonInput from "@/components/ui/NeonInput.vue"
@@ -442,6 +305,7 @@ export default {
   components: {
     PluginListTemplate,
     PluginArchiveDialog,
+    ManualDependencyDialog,
     NeonDialog,
     NeonInput,
     CuteButton,
@@ -470,9 +334,6 @@ export default {
       oldRenameMenuTypeName: "",
       showInstallDependencyDialog: false,
       showArchiveDialog: false,
-      dependencyName: "",
-      installResult: "",
-      dependencyOperation: "install",
     }
   },
   computed: {
@@ -782,46 +643,7 @@ export default {
           this.$message.error(`请求失败: ${error}`)
         })
     },
-    installDependency() {
-      const dependency = this.dependencyName.trim()
-      if (!dependency) {
-        this.$message.warning("依赖名称不能为空")
-        return
-      }
 
-      const isInstall = this.dependencyOperation === "install"
-      const operationText = isInstall ? "安装" : "卸载"
-
-      this.installResult = `正在${operationText}依赖，请稍候...`
-
-      const loading = this.getLoading(".result-container")
-
-      this.postRequest(`${this.$root.prefix}/plugin/install_dependencies`, {
-        dependencies: dependency.split(" "),
-        handle_type: this.dependencyOperation,
-      })
-        .then((resp) => {
-          loading.close()
-          if (!resp) {
-            this.installResult = `${operationText}失败：无效的响应`
-            return
-          }
-
-          if (resp.suc) {
-            this.installResult = resp.data || `${operationText}成功！`
-            this.$message.success(`依赖${operationText}执行成功`)
-          } else {
-            this.installResult =
-              resp.info || `${operationText}失败，请查看详细信息`
-            this.$message.error(resp.info || `${operationText}依赖失败`)
-          }
-        })
-        .catch((error) => {
-          loading.close()
-          this.installResult = `${operationText}失败: ${error}`
-          this.$message.error(`请求失败: ${error}`)
-        })
-    },
   },
 }
 </script>

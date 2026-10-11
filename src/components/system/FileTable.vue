@@ -30,6 +30,7 @@
         size="sm"
         type="primary"
         solid
+        :disabled="fileLoading || fileBusy"
         @click="clickRootAddFile"
         icon="add-file"
         :iconColor="'var(--button-icon-color-primary)'"
@@ -40,6 +41,7 @@
         size="sm"
         type="primary"
         solid
+        :disabled="fileLoading || fileBusy"
         @click="clickRootAddFolder"
         icon="add-folder"
         :iconColor="'var(--button-icon-color-primary)'"
@@ -50,6 +52,8 @@
         size="sm"
         type="info"
         solid
+        :loading="fileLoading"
+        :disabled="fileBusy"
         @click="refreshFiles"
         icon="refresh"
         :iconColor="'var(--button-icon-color-info)'"
@@ -111,6 +115,7 @@
             <el-button
               v-if="scope.row.is_file && !scope.row.is_image"
               @click.stop="editFile(scope.row)"
+              :disabled="fileLoading || fileBusy"
               type="text"
               icon="el-icon-edit"
               :style="{ color: 'var(--primary-color)' }"
@@ -119,6 +124,7 @@
             <el-button
               v-if="scope.row.is_file && scope.row.is_image"
               @click.stop="viewImage(scope.row)"
+              :disabled="fileLoading || fileBusy"
               type="text"
               icon="el-icon-view"
               :style="{ color: 'var(--success-color)' }"
@@ -126,6 +132,7 @@
             ></el-button>
             <el-button
               @click.stop="showRenameDialog(scope.row)"
+              :disabled="fileLoading || fileBusy"
               type="text"
               icon="el-icon-edit-outline"
               :style="{ color: 'var(--info-color)' }"
@@ -133,6 +140,7 @@
             ></el-button>
             <el-button
               @click.stop="showDeleteDialog(scope.row)"
+              :disabled="fileLoading || fileBusy"
               type="text"
               icon="el-icon-delete"
               :style="{ color: 'var(--danger-color)' }"
@@ -173,6 +181,8 @@
       :title="createType === 'file' ? '新建文件' : '新建文件夹'"
       :icon-class="createType === 'file' ? 'add-file1' : 'add-folder1'"
       @confirm="confirmCreate"
+      :confirm-loading="fileBusy"
+      :confirm-disabled="fileBusy"
     >
       <NeonInput
         v-model="newItemName"
@@ -188,6 +198,8 @@
       :title="renameType === 'file' ? '重命名文件' : '重命名文件夹'"
       icon-class="rename1"
       @confirm="confirmRename"
+      :confirm-loading="fileBusy"
+      :confirm-disabled="fileBusy"
     >
       <NeonInput
         v-model="renameValue"
@@ -208,6 +220,8 @@
       icon-class="warning"
       confirm-text="删除"
       @confirm="confirmDelete"
+      :confirm-loading="fileBusy"
+      :confirm-disabled="fileBusy"
     >
       <p>
         确定要永久删除
@@ -270,6 +284,8 @@ export default {
       editVisible: false,
       viewVisible: false,
       currentFile: {},
+      fileLoading: false,
+      fileBusy: false,
       iconMap: {
         folder: "folder",
         image: "image",
@@ -309,8 +325,10 @@ export default {
       }
     },
     async loadFiles(path = "") {
+      if (this.fileLoading) return
+      this.fileLoading = true
+      const loading = this.getLoading(".file-table-container")
       try {
-        var loading = this.getLoading(".file-table-container")
         const resp = await this.getRequest(
           `${this.$root.prefix}/system/get_dir_list`,
           { path: path || this.currentPath }
@@ -339,8 +357,10 @@ export default {
       } catch (error) {
         this.$message.error("加载文件列表失败")
         console.error(error)
+      } finally {
+        this.fileLoading = false
+        loading.close()
       }
-      loading.close()
     },
 
     refreshFiles() {
@@ -404,11 +424,13 @@ export default {
     },
 
     async confirmCreate() {
+      if (this.fileBusy) return
       if (!this.newItemName.trim()) {
         this.$message.warning("请输入名称")
         return
       }
 
+      this.fileBusy = true
       try {
         const endpoint = this.createType === "file" ? "add_file" : "add_folder"
         const resp = await this.postRequest(
@@ -429,6 +451,8 @@ export default {
       } catch (error) {
         this.$message.error("操作失败")
         console.error(error)
+      } finally {
+        this.fileBusy = false
       }
     },
 
@@ -446,11 +470,13 @@ export default {
     },
 
     async confirmRename() {
+      if (this.fileBusy) return
       if (!this.renameValue.trim()) {
         this.$message.warning("请输入新名称")
         return
       }
 
+      this.fileBusy = true
       try {
         const endpoint = this.itemToRename.is_file
           ? "rename_file"
@@ -474,6 +500,8 @@ export default {
       } catch (error) {
         this.$message.error("重命名失败")
         console.error(error)
+      } finally {
+        this.fileBusy = false
       }
     },
 
@@ -487,6 +515,8 @@ export default {
     },
 
     async confirmDelete() {
+      if (this.fileBusy) return
+      this.fileBusy = true
       try {
         const endpoint = this.itemToDelete.is_file
           ? "delete_file"
@@ -508,6 +538,8 @@ export default {
       } catch (error) {
         this.$message.error("删除失败")
         console.error(error)
+      } finally {
+        this.fileBusy = false
       }
     },
 

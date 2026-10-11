@@ -287,11 +287,12 @@
 </template>
 
 <script>
+import { getAuthToken } from "@/utils/auth-token"
+
 import logoUrl from "@/assets/image/logo.png"
 import { buildRestartTargets } from "@/utils/restart-targets"
 import { confirmAndRestart } from "@/utils/restart-flow"
 
-const SETUP_TOKEN_KEY = "zhenxunSetupToken"
 const RESTART_RECEIPT_KEY = "zhenxunSetupRestartReceipt"
 const RESTART_TARGETS_KEY = "zhenxunSetupRestartTargets"
 
@@ -374,10 +375,10 @@ export default {
       return ""
     },
     setupToken() {
-      return window.sessionStorage.getItem(SETUP_TOKEN_KEY) || ""
+      return getAuthToken() || ""
     },
     setupHeaders() {
-      return { headers: { "X-Setup-Token": this.setupToken } }
+      return { headers: { Authorization: this.setupToken } }
     },
     stateLabel() {
       return {
@@ -425,9 +426,9 @@ export default {
     cache: { deep: true, handler() { this.results.cache = null } },
     network: { deep: true, handler() { this.results.network = null } },
   },
-  created() { this.readSequence = 0; this.requestControllers = new Set() },
+  created() { this.readSequence = 0; this.requestControllers = new Set(); this.onExpired = () => { this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.claimed = false; this.accessError = "会话已过期，连接已断开。" }; window.addEventListener("zhenxun-auth-expired", this.onExpired) },
   mounted() { if (this.active) this.loadStatus() },
-  beforeDestroy() { this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.requestControllers.clear() },
+  beforeDestroy() { window.removeEventListener("zhenxun-auth-expired", this.onExpired); this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.requestControllers.clear() },
   methods: {
     focusHeading() { this.$refs.heading?.focus() },
     cancelReads() { this.readSequence++; this.statusController?.abort(); this.initializing = false },
@@ -466,7 +467,6 @@ export default {
       }
     },
     clearSetupState() {
-      window.sessionStorage.removeItem(SETUP_TOKEN_KEY)
       window.sessionStorage.removeItem(RESTART_RECEIPT_KEY)
       window.sessionStorage.removeItem(RESTART_TARGETS_KEY)
     },

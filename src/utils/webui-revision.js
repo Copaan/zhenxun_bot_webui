@@ -1,5 +1,6 @@
 import { Message } from "element-ui"
 import { hasDirtyState } from "./dirty-state"
+import { isAuthenticationExpired } from "./auth-session"
 import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "./restart-network"
 
 const EXPECTED_REVISION = process.env.VUE_APP_WEBUI_REVISION || ""
@@ -20,7 +21,7 @@ const closeDraftNotice = () => {
 }
 
 export const handleWebuiRevision = (value) => {
-  if (DEVELOPMENT || isBusinessNetworkFrozen() || document.hidden || reloadIssued) return
+  if (DEVELOPMENT || isAuthenticationExpired() || isBusinessNetworkFrozen() || document.hidden || reloadIssued) return
   const manifest = typeof value === "string" ? { revision: value } : (value || {})
   if (manifest.resources_ready === false) return
   const resource = manifest.resource_revision || ""
@@ -54,7 +55,7 @@ export const handleWebuiRevision = (value) => {
 }
 
 const checkManifest = async () => {
-  if (isBusinessNetworkFrozen() || document.hidden || reloadIssued) return
+  if (isAuthenticationExpired() || isBusinessNetworkFrozen() || document.hidden || reloadIssued) return
   if (requestController) {
     if (Date.now() - requestStartedAt < 10000) return
     requestController.abort()
@@ -83,7 +84,7 @@ const checkManifest = async () => {
 export const startWebuiRevisionPolling = () => {
   if (DEVELOPMENT) return
   pollingStarted = true
-  if (isBusinessNetworkFrozen() || document.hidden || pollTimer) return
+  if (isAuthenticationExpired() || isBusinessNetworkFrozen() || document.hidden || pollTimer) return
   checkManifest()
   pollTimer = window.setInterval(checkManifest, 3000)
 }
@@ -94,6 +95,11 @@ const stopPolling = () => {
   requestController?.abort()
   requestController = null
 }
+
+window.addEventListener("zhenxun-auth-expired", stopPolling)
+window.addEventListener("zhenxun-auth-token-changed", () => {
+  if (pollingStarted && !isAuthenticationExpired()) startWebuiRevisionPolling()
+})
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) stopPolling()

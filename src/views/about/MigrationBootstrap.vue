@@ -6,11 +6,9 @@
     </header>
     <div class="bootstrap-body">
       <template v-if="!authorized">
-        <p>在目标实例本机控制台运行 <code>uv run zx migration authorize</code>，输入一次性授权码。此授权仅用于迁移，与首次配置认领相互独立。</p>
+        <p>使用当前网页连接会话恢复，不需要先填写部署向导，也不需要额外迁移码。</p>
         <p role="status">{{ checking ? '正在检查迁移入口状态' : statusMessage }}</p>
-        <el-input v-model="code" type="password" autocomplete="new-password" placeholder="本机控制台授权码" :disabled="busy || !ready" />
-        <el-button type="primary" :loading="busy" :disabled="!ready || checking || !code.trim()" @click="authorize">授权并选择迁移包</el-button>
-        <el-button :loading="checking" :disabled="busy" @click="refreshStatus">刷新状态</el-button>
+        <el-button :loading="checking || busy" :disabled="busy" @click="enter">刷新状态</el-button>
       </template>
       <migration-panel v-if="panelMounted" v-show="authorized" ref="panel" first-deployment :active="active && authorized" @switch-state="panelBlockedReason = $event" @authorization-expired="authorizationExpired" />
       <p v-if="error" role="alert">{{ error }}</p>
@@ -19,27 +17,27 @@
 </template>
 
 <script>
-import { authorizeMigration, clearMigrationSession, migrationErrorMessage, migrationRequest } from "@/utils/migration"
+import { clearMigrationSession, migrationErrorMessage, migrationRequest } from "@/utils/migration"
+import { getAuthToken, hasValidAuthToken } from "@/utils/auth-token"
 import MigrationPanel from "./MigrationPanel.vue"
 export default {
   components: { MigrationPanel },
   props: { active: { type: Boolean, default: true } },
-  data: () => ({ available: false, ready: false, checking: false, statusMessage: "", authorized: false, panelMounted: false, panelBlockedReason: "", code: "", error: "", busy: false }),
+  data: () => ({ available: false, ready: false, checking: false, statusMessage: "", authorized: false, panelMounted: false, panelBlockedReason: "", error: "", busy: false }),
   computed: {
-    switchBlockedReason() { return this.busy ? "正在提交迁移授权，请等待完成" : this.authorized ? this.panelBlockedReason : "" },
+    switchBlockedReason() { return this.busy ? "正在检查迁移入口，请等待完成" : this.authorized ? this.panelBlockedReason : "" },
   },
   watch: {
-    active(value) { if (value) this.refreshStatus(); else this.stopReads() },
+    active(value) { if (value) this.enter(); else this.stopReads() },
   },
-  created() { this.statusSequence = 0; if (this.active) this.refreshStatus() },
-  beforeDestroy() { this.stopReads(); this.authorizationController?.abort(); clearMigrationSession() },
+  created() { this.statusSequence = 0; window.addEventListener("zhenxun-auth-expired", this.authorizationExpired); if (this.active) this.enter() },
+  beforeDestroy() { window.removeEventListener("zhenxun-auth-expired", this.authorizationExpired); this.stopReads(); this.authorizationController?.abort() },
   methods: {
     focusHeading() { this.$refs.heading?.focus() },
-    stopReads() { this.statusSequence++; this.statusController?.abort(); this.checking = false; this.ready = false },
+    stopReads() { this.statusSequence++; this.statusController?.abort(); this.authorizationController?.abort(); this.checking = false; this.busy = false; this.ready = false },
     authorizationExpired() {
-      this.authorized = false; clearMigrationSession()
+      this.stopReads(); this.authorized = false; clearMigrationSession()
       this.error = migrationErrorMessage(new Error("migration_login_required"))
-      if (this.active) this.refreshStatus()
     },
     async refreshStatus() {
       if (!this.active) return false
@@ -50,10 +48,11 @@ export default {
       try {
         const value = await migrationRequest("/bootstrap/status", { signal: controller.signal })
         if (sequence !== this.statusSequence || this._isDestroyed || !this.active) return false
+        if (value.session_auth_version !== 2) throw new Error("migration_session_protocol_obsolete")
         this.available = value.available === true
         this.ready = this.available && value.ready === true
-        this.statusMessage = this.ready ? "管理面已就绪，可以授权并恢复迁移包" : migrationErrorMessage(new Error(value.reason || (this.available ? "migration_bootstrap_status_unconfirmed" : "migration_first_deployment_unavailable")))
-        if (!this.available) { this.authorized = false; clearMigrationSession() }
+        this.statusMessage = this.ready ? "管理面已就绪，正在连接迁移服务" : migrationErrorMessage(new Error(value.reason || (this.available ? "migration_bootstrap_status_unconfirmed" : "migration_first_deployment_unavailable")))
+        if (!this.available) this.authorized = false
         return this.ready
       } catch (error) {
         if (sequence !== this.statusSequence || this._isDestroyed || controller.signal.aborted) return false
@@ -62,20 +61,21 @@ export default {
         return false
       } finally { if (sequence === this.statusSequence && !this._isDestroyed) this.checking = false }
     },
-    async authorize() {
-      if (!this.active || this.busy || this.checking || !this.ready || !this.code.trim()) return
+    async enter() {
+      if (!this.active || this.busy) return
       this.busy = true; this.error = ""
       const controller = this.authorizationController = new AbortController()
       try {
         if (!await this.refreshStatus() || controller.signal.aborted) return
-        await authorizeMigration(this.code.trim(), { signal: controller.signal })
+        if (this.authorized) return
+        if (!getAuthToken()) throw new Error("migration_setup_authorization_required")
+        if (!hasValidAuthToken()) throw new Error("migration_login_required")
         if (controller.signal.aborted || this._isDestroyed) return
-        this.code = ""; this.$refs.panel?.bootstrapAuthorized(); this.panelMounted = true; this.authorized = true
+        this.$refs.panel?.bootstrapAuthorized(); this.panelMounted = true; this.authorized = true
       } catch (error) {
         if (controller.signal.aborted || this._isDestroyed) return
         this.error = migrationErrorMessage(error)
-        await this.refreshStatus()
-      } finally { if (!this._isDestroyed) this.busy = false }
+      } finally { if (!this._isDestroyed && this.authorizationController === controller) this.busy = false }
     },
   },
 }

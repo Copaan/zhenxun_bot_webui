@@ -3,7 +3,7 @@
     <header class="store-header">
       <div>
         <h1>NoneBot 官方插件</h1>
-        <p>安装 Registry 已验证版本，核心依赖受保护，共享依赖变化需确认</p>
+        <p>优先复用现有依赖，确认摘要后准备，手动重启验证生效</p>
       </div>
       <el-button icon="el-icon-refresh" :loading="loading" @click="loadPlugins(true)">检查更新</el-button>
     </header>
@@ -42,12 +42,26 @@
       </el-tag>
     </div>
 
+    <el-alert v-if="registryMeta.unavailable" title="远端目录暂不可用，仍可管理和卸载本地托管插件。" type="warning" :closable="false" />
+    <el-alert v-if="environment && environment.orm_manual" title="等待控制台处理外部数据库结构" type="warning" :closable="false">
+      <p>停止本实例并完成数据库备份后，在 {{ environment.orm_manual.working_directory }} 执行以下命令，完成后重新启动。命令使用待处理候选环境，不安装或升级依赖。</p>
+      <pre class="console-command">{{ environment.orm_manual.command }}</pre>
+    </el-alert>
+    <div v-for="record in environment ? environment.cleanup_records || [] : []" :key="record.revision" class="environment-status is-warning">
+      <div><strong>{{ record.rollback_confirmed ? '原环境已恢复，临时文件待清理' : '变更已生效，临时文件待清理' }}</strong><p>{{ record.cleanup_state === 'deferred' ? '文件仍由其他任务或运行模块使用，释放后可重试清理。' : record.cleanup_error ? record.cleanup_error.diagnostic || record.cleanup_error.code : '清理不影响已确认的操作结果。' }}</p></div>
+      <el-button :loading="cleanupRevision === record.revision" :disabled="readsPaused || authExpired || Boolean(cleanupRevision)" @click="retryCleanup(record.revision)">重试清理</el-button>
+    </div>
+    <div v-if="environment && environment.sync && environment.sync.status === 'prepared'" class="environment-status is-warning">
+      <div><strong>基础环境修复已准备，等待手动重启</strong><p>可通过重启按钮执行，也可撤销后重新分析其他变更。</p></div>
+      <el-button :disabled="readsPaused || authExpired || repairing" @click="cancelPreparedRepair">撤销待执行修复</el-button>
+    </div>
     <div v-if="environment" class="environment-status" :class="`is-${environmentTone}`">
       <i :class="environmentIcon"></i>
       <div>
         <strong>{{ environmentTitle }}</strong>
         <p>{{ environmentDescription }}</p>
       </div>
+      <el-button v-if="environment.repairable" type="warning" plain :loading="repairing" @click="repairEnvironment">预览依赖修复</el-button>
     </div>
 
     <div v-if="environment && (environment.candidate_built || environment.startup_verification?.dependency_verification)" class="verification-status">
@@ -65,7 +79,11 @@
     </details>
 
     <el-dialog title="依赖修复预览" :visible.sync="repairVisible" width="min(800px, 94vw)" append-to-body>
-      <p>只调整勾选组的依赖，不更换插件版本。未解决的冲突继续保留，准备完成后需重启验证。</p>
+      <p v-if="repairPreview && repairPreview.mode === 'base'">基础环境将按项目锁文件同步并重启验证，保留额外安装的包；托管插件版本不在此处调整。</p>
+      <p v-else>只调整勾选组的依赖，不更换插件版本。未解决的冲突继续保留，准备完成后需重启验证。</p>
+      <div v-if="repairPreview && repairPreview.mode === 'base'">
+        <div v-for="item in repairPreview.changes || []" :key="item.name" class="dependency-change"><code>{{ item.name }}</code><span>{{ item.actual || '缺失' }} → {{ item.expected }}</span></div>
+      </div>
       <el-alert v-if="repairError" :title="repairError" type="error" :closable="false" class="repair-error" />
       <div v-for="group in repairPreview ? repairPreview.groups || [] : []" :key="group.id" class="repair-group">
         <el-checkbox v-model="repairSelected" :label="group.id" :disabled="group.status !== 'repairable'">{{ group.roots.join('、') }}</el-checkbox>
@@ -73,10 +91,12 @@
         <div v-for="item in group.changes" :key="item.name" class="dependency-change"><code>{{ item.name }}</code><span>{{ item.from || '缺失' }} → {{ item.to }}</span></div>
         <details v-if="group.issues.length"><summary>约束来源</summary><p v-for="(item, index) in group.issues" :key="index">{{ item.owner || '本体' }}：{{ item.requirement }}；实际 {{ item.actual || '缺失' }}</p></details>
         <pre v-if="group.diagnostic">{{ group.diagnostic }}</pre>
+        <p v-if="group.source_build_required">此项需要源码构建；确认准备同时确认本摘要中的构建与包变更。</p>
       </div>
       <template #footer>
         <el-button @click="repairVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="repairing" :disabled="!repairSelected.length || repairing" @click="applyEnvironmentRepair">准备所选修复</el-button>
+        <el-button v-if="!repairPreview" :disabled="readsPaused || repairing" @click="repairEnvironment">重新分析</el-button>
+        <el-button type="primary" :loading="repairing" :disabled="readsPaused || (!repairSelected.length && repairPreview?.mode !== 'base') || repairing" @click="applyEnvironmentRepair">确认准备修复</el-button>
       </template>
     </el-dialog>
 
@@ -106,6 +126,8 @@
           <div v-if="plugin.blocked_reasons.length" class="blocked-reason">
             {{ reasonLabel(plugin.blocked_reasons[0]) }}
           </div>
+          <p v-for="warning in plugin.warnings || []" :key="warning.code">{{ reasonLabel(warning) }}；安装时将实际验证。</p>
+          <p v-if="plugin.catalog_source === 'local'">远端目录无此条目，按本地托管记录管理。</p>
           <div v-if="plugin.failure_reasons && plugin.failure_reasons.length" class="blocked-reason">
             {{ reasonLabel(plugin.failure_reasons[0]) }}
             <span v-if="plugin.failure_reasons[0].paths && plugin.failure_reasons[0].paths.length">
@@ -117,17 +139,22 @@
           </div>
         </div>
         <div class="plugin-actions">
+          <el-alert v-if="plugin.apply_mode === 'recovery_required'" title="回滚未确认，请先处理事务诊断" type="error" :closable="false" />
+          <el-alert v-if="plugin.apply_mode === 'cleanup_pending'" title="变更已生效，备份清理待重试" type="warning" :closable="false" />
           <el-button type="text" @click="openDetail(plugin)">详情</el-button>
-          <el-tooltip v-if="plugin.apply_mode === 'restart_pending'" :content="plugin.transaction_state === 'migration_blocked' ? '外部数据库迁移尚未完成；手工迁移后再次重启即可重新检查' : '事务已保存，重启并通过启动验证后生效'" placement="top">
+          <el-button v-if="plugin.apply_mode === 'recovery_required'" disabled size="small">事务待处理</el-button>
+          <el-tooltip v-else-if="plugin.apply_mode === 'restart_pending'" :content="plugin.transaction_state === 'migration_blocked' ? '外部数据库迁移尚未完成；手工迁移后再次重启即可重新检查' : '事务已保存，重启并通过启动验证后生效'" placement="top">
             <span class="pending-actions">
               <el-button size="small" icon="el-icon-time" disabled>{{ plugin.transaction_state === "migration_blocked" ? "等待手工迁移" : "等待重启" }}</el-button>
-              <el-button size="small" type="danger" plain icon="el-icon-close" @click="cancelPending(plugin)">取消事务</el-button>
+              <el-button size="small" type="danger" plain icon="el-icon-close" :loading="transactionAction === (plugin.store_key || plugin.id)" :disabled="Boolean(transactionAction) || applying || readsPaused || authExpired" @click="cancelPending(plugin)">取消事务</el-button>
             </span>
           </el-tooltip>
-          <el-tooltip v-else-if="plugin.apply_mode === 'failed'" content="插件启动验证失败，当前运行版本已恢复" placement="top">
+          <el-tooltip v-else-if="plugin.apply_mode === 'failed'" :content="plugin.rollback_confirmed ? '插件启动验证失败，原运行版本已恢复' : '插件操作失败，请查看具体阶段与诊断'" placement="top">
             <span class="pending-actions">
-              <el-button size="small" icon="el-icon-warning-outline" disabled>已回滚</el-button>
-              <el-button size="small" type="danger" plain icon="el-icon-delete" @click="clearFailed(plugin)">清除失败记录</el-button>
+              <el-button size="small" icon="el-icon-warning-outline" disabled>{{ plugin.rollback_confirmed ? '已回滚' : '操作失败' }}</el-button>
+              <el-button v-if="plugin.rollback_confirmed" size="small" :disabled="Boolean(transactionAction) || applying || readsPaused || authExpired" @click="startAnalysis(plugin.managed ? 'update' : 'install', plugin)">重新分析</el-button>
+              <el-button v-if="plugin.dependency_retry_available" size="small" type="warning" :disabled="Boolean(transactionAction) || applying || readsPaused || authExpired" @click="startAnalysis(plugin.managed ? 'update' : 'install', plugin, false)">分析最小依赖调整</el-button>
+              <el-button v-else-if="!plugin.rollback_confirmed" size="small" type="danger" plain icon="el-icon-delete" :loading="transactionAction === (plugin.store_key || plugin.id)" :disabled="Boolean(transactionAction) || applying || readsPaused || authExpired" @click="clearFailed(plugin)">处理失败事务</el-button>
             </span>
           </el-tooltip>
           <el-button
@@ -135,6 +162,7 @@
             type="primary"
             size="small"
             icon="el-icon-download"
+            :disabled="analysisVisible || Boolean(transactionAction) || applying || readsPaused || authExpired"
             @click="startAnalysis('install', plugin)"
           >安装</el-button>
           <el-button
@@ -142,6 +170,7 @@
             type="warning"
             size="small"
             icon="el-icon-top"
+            :disabled="analysisVisible || Boolean(transactionAction) || applying || readsPaused || authExpired"
             @click="startAnalysis('update', plugin)"
           >更新插件</el-button>
           <el-tooltip v-else-if="plugin.install_state === 'external'" content="该分发包由 WebUI 外部安装，不能自动接管或卸载" placement="top">
@@ -150,8 +179,8 @@
           <el-tooltip v-else-if="plugin.install_state === 'blocked'" :content="reasonLabel(plugin.blocked_reasons[0])" placement="top">
             <span><el-button size="small" disabled>不可安装</el-button></span>
           </el-tooltip>
-          <el-dropdown v-else trigger="click" @command="startAnalysis($event, plugin)">
-            <el-button size="small">已安装<i class="el-icon-arrow-down el-icon--right" /></el-button>
+          <el-dropdown v-else trigger="click" :disabled="analysisVisible || Boolean(transactionAction) || applying || readsPaused || authExpired" @command="startAnalysis($event, plugin)">
+            <el-button size="small" :disabled="analysisVisible || Boolean(transactionAction) || applying || readsPaused || authExpired">已安装<i class="el-icon-arrow-down el-icon--right" /></el-button>
             <el-dropdown-menu slot="dropdown">
               <el-dropdown-item v-if="plugin.update_available" command="update">更新插件</el-dropdown-item>
               <el-dropdown-item command="uninstall">卸载</el-dropdown-item>
@@ -266,11 +295,8 @@
               </el-alert>
 
               <div class="confirmations">
-                <el-checkbox v-model="confirmCode">我了解插件代码与真寻运行在同一进程，并拥有同等权限</el-checkbox>
-                <el-checkbox v-if="analysis.plan.non_core_changes.length" v-model="confirmChanges">我已核对并接受上述非核心依赖变化</el-checkbox>
-                <el-checkbox v-if="analysis.plan.source_build_required" v-model="confirmSource">我已核对并接受源码构建风险</el-checkbox>
-                <el-checkbox v-if="compatibilityOverrides.length" v-model="confirmCompatibility">我了解插件未声明支持当前依赖版本，并接受兼容试运行</el-checkbox>
-                <el-checkbox v-if="analysis.plan.database_migration_possible" v-model="confirmMigration">我已了解并接受上述数据库迁移处理方式</el-checkbox>
+                <p>点击下方按钮即确认以上插件代码、依赖和构建范围。准备完成后，由你点击重启进行实际加载验证。</p>
+                <p>ORM 和数据库驱动版本保持不变；需要调整时请在控制台处理。</p>
               </div>
             </template>
           </template>
@@ -309,9 +335,11 @@
 </template>
 
 <script>
+import { isBusinessNetworkFrozen, onBusinessNetworkChange } from '@/utils/restart-network'
 import { notifyRestartStatusChanged } from "@/utils/apply-result"
 import { startRestartRecovery } from "@/utils/restart-recovery"
 import { apiErrorDetail } from "@/utils/api-error"
+import { pluginOperationResult } from "@/utils/plugin-operation"
 
 const reasonLabels = {
   registry_module_invalid: "Registry 中的模块名不是有效的 Python 导入路径。",
@@ -326,12 +354,15 @@ const reasonLabels = {
   third_party_dependency_conflict: "该插件与现有依赖约束冲突，未放宽或升级无关包。",
   plugin_dependency_invalid: "插件自身的依赖声明无法得到一致解。",
   dependency_layer_state_mismatch: "依赖层记录与实际安装内容不一致，请先核对活动代际，不会覆盖记录或升级无关包。",
-  current_environment_dependency_conflict: "当前环境已有依赖冲突，请先查看约束来源并预览修复，再重新分析插件。",
+  current_environment_dependency_conflict: "本次操作涉及的依赖存在实际冲突，请查看具体包和使用者。",
+  orm_dependency_console_required: "WebUI 不改变 ORM 或数据库驱动，请在控制台安装或调整后重新分析。",
   environment_drift: "当前运行环境与 uv.lock 不一致，请先同步项目依赖。",
-  interpreter_mismatch: "当前worker不是由项目.venv启动，请使用uv run zx。",
+  interpreter_mismatch: "当前解释器与实例绑定的虚拟环境不一致，请从该环境通过 uv run zx run 启动。",
   project_dependency_conflict: "插件依赖超出真寻声明的兼容范围。",
   project_lock_stale: "pyproject.toml与uv.lock不一致，请先更新锁文件。",
   source_build_required: "缺少兼容 Wheel，需要确认源码构建并重启。",
+  dependency_source_metadata_unavailable: "源码包缺少可静态读取的依赖元数据。请提供 Wheel 或在控制台安装后重新分析；预览不会执行构建代码。",
+  dependency_source_hash_mismatch: "源码归档与索引声明的校验值不一致，请检查包源后重新分析。",
   archive_source_build_transaction_conflict: "归档依赖的源码构建授权或环境修订已失效。",
   archive_dependency_conflict: "归档依赖与当前安装事务存在冲突。",
   archive_dependency_receipt_invalid: "归档安装收据无效，需要重新解析。",
@@ -345,13 +376,13 @@ const reasonLabels = {
   dependency_resolver_configuration: "依赖解析器参数配置异常，未执行版本放宽。",
   external_install_not_managed: "同名包由 WebUI 外部安装，不能自动接管。",
   plugin_not_managed: "该插件不由 WebUI 管理。",
-  plugin_configuration_required: "插件缺少启动所需配置，已恢复原运行版本。",
-  plugin_configuration_invalid: "插件启动配置无效，已恢复原运行版本。",
-  plugin_import_failed: "插件导入失败，已恢复原运行版本。",
-  plugin_startup_verification_failed: "插件未通过启动验证，已恢复原运行版本。",
-  nonebot_plugin_apply_failed: "插件应用失败，已恢复原运行版本。",
-  external_database_manual_migration_required: "外部数据库未完成迁移，请在控制台执行 `nb orm upgrade` 后再次重启。",
-  database_migration_failed: "数据库迁移失败，SQLite备份及原运行版本已恢复。",
+  plugin_configuration_required: "插件缺少启动所需配置，请查看事务与回滚状态。",
+  plugin_configuration_invalid: "插件启动配置无效，请查看事务与回滚状态。",
+  plugin_import_failed: "插件导入失败，请查看事务与回滚状态。",
+  plugin_startup_verification_failed: "插件未通过启动验证，请查看回滚结果。",
+  nonebot_plugin_apply_failed: "插件应用失败，请查看具体阶段和事务状态。",
+  external_database_manual_migration_required: "外部数据库未完成迁移，请停止实例并备份，使用页面提供的候选环境控制台命令处理后重启。",
+  database_migration_failed: "数据库迁移失败，请查看数据库回滚结果。",
 }
 
 export default {
@@ -364,10 +395,11 @@ export default {
       enabledAdapters: [],
       registryMeta: {}, searchTimer: null, analysisVisible: false, analysisLoading: false,
       analysis: null, analysisPlugin: null, analysisTimer: null, applying: false,
-      confirmCode: false, confirmChanges: false, confirmSource: false, confirmCompatibility: false, confirmMigration: false,
+      cleaning: false, cleanupRevision: "", transactionAction: "", retrySummary: null, retryingSummary: false,
       detailVisible: false, detailLoading: false, detail: null,
       environment: null, repairing: false, repairVisible: false, repairPreview: null, repairSelected: [], repairError: "",
       pluginLoadInFlight: false, queuedPluginLoad: null, componentDestroyed: false, routeActionConsumed: false,
+      readsPaused: false, readEpoch: 0, analysisEpoch: 0, detailEpoch: 0, repairEpoch: 0, repairSubmitting: false, authExpired: false,
     }
   },
   computed: {
@@ -407,27 +439,82 @@ export default {
       ].filter((item) => !shared.has(item.name))
     },
     canApply() {
-      if (!this.confirmCode || this.applying) return false
-      if (this.analysis?.plan?.non_core_changes?.length && !this.confirmChanges) return false
-      if (this.analysis?.plan?.source_build_required && !this.confirmSource) return false
-      if (this.compatibilityOverrides.length && !this.confirmCompatibility) return false
-      if (this.analysis?.plan?.database_migration_possible && !this.confirmMigration) return false
-      return true
+      return this.analysis?.status === 'ready' && !this.applying && !this.readsPaused && !this.authExpired
     },
     applyButtonLabel() {
       return { install: "安装插件", update: "更新插件", uninstall: "卸载插件" }[this.analysis?.action] || "应用"
     },
   },
   watch: {
+    analysisVisible(value) { if (!value) { this.analysisEpoch++; clearTimeout(this.analysisTimer); this.analysisLoading = false } },
+    detailVisible(value) { if (!value) { this.detailEpoch++; this.detailLoading = false } },
+    repairVisible(value) { if (!value && !this.repairSubmitting) { this.repairEpoch++; this.repairing = false } },
     search() { clearTimeout(this.searchTimer); this.searchTimer = setTimeout(() => { this.page = 1; this.loadPlugins(false) }, 350) },
     statusFilter() { this.page = 1; this.loadPlugins(false) },
     typeFilter() { this.page = 1; this.loadPlugins(false) },
     adapterFilter() { this.page = 1; this.loadPlugins(false) },
     includeIncompatible() { this.page = 1; this.loadPlugins(false) },
   },
-  mounted() { this.loadEnvironment(); this.loadPlugins(false); this.restoreAnalysis() },
-  beforeDestroy() { this.componentDestroyed = true; this.queuedPluginLoad = null; clearTimeout(this.searchTimer); clearTimeout(this.analysisTimer) },
+  mounted() {
+    this.readControllers = new Set()
+    this.onVisibility = () => { if (document.hidden) this.pauseReads(); else this.resumeReads() }
+    this.onExpired = () => { this.authExpired = true; this.pauseReads(); this.error = '登录已过期；已提交操作继续执行，请重新登录后查看。' }
+    document.addEventListener('visibilitychange', this.onVisibility)
+    window.addEventListener('zhenxun-auth-expired', this.onExpired)
+    this.unsubscribeNetwork = onBusinessNetworkChange(value => { if (value) this.pauseReads(); else this.resumeReads() })
+    this.resumeReads()
+  },
+  beforeDestroy() { this.componentDestroyed = true; this.pauseReads(); this.unsubscribeNetwork?.(); document.removeEventListener('visibilitychange', this.onVisibility); window.removeEventListener('zhenxun-auth-expired', this.onExpired) },
   methods: {
+    async cancelPreparedRepair() {
+      if (this.repairing || this.readsPaused || this.authExpired) return
+      const epoch = this.readEpoch
+      this.repairing = true
+      try {
+        const response = await this.deleteRequest(`${this.$root.prefix}/store/nonebot/transactions/pending/${this.environment.sync.operation_id}`, {})
+        if (epoch !== this.readEpoch) return
+        if (!response.suc) throw response
+        await this.loadEnvironment()
+      } catch (error) { if (epoch === this.readEpoch) this.$message.error(this.diagnostic(error)) }
+      finally { this.repairing = false }
+    },
+    async retryCleanup(revision) {
+      if (this.cleaning || this.cleanupRevision || this.readsPaused || this.authExpired) return
+      const epoch = this.readEpoch
+      this.cleaning = true; this.cleanupRevision = revision
+      try {
+        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/transactions/${encodeURIComponent(revision)}/cleanup/retry`, {})
+        if (epoch !== this.readEpoch) return
+        if (!response.suc) throw response
+        if (response.data.cleanup_state !== 'completed') this.$message.warning('清理尚未完成，操作结果保持不变，可稍后重试。')
+        await this.loadEnvironment()
+      } catch (error) { if (epoch === this.readEpoch) this.$message.error(this.diagnostic(error)) }
+      finally { this.cleaning = false; this.cleanupRevision = "" }
+    },
+    pauseReads() {
+      this.readsPaused = true; this.readEpoch++; this.analysisEpoch++; this.detailEpoch++; this.repairEpoch++
+      if (!this.repairSubmitting) this.repairing = false
+      this.queuedPluginLoad = null; clearTimeout(this.searchTimer); clearTimeout(this.analysisTimer)
+      for (const controller of this.readControllers || []) controller.abort()
+      this.readControllers?.clear(); this.loading = false; this.pluginLoadInFlight = false; this.analysisLoading = false; this.detailLoading = false
+    },
+    resumeReads() {
+      if (this.componentDestroyed || this.authExpired || document.hidden || isBusinessNetworkFrozen()) return
+      this.readsPaused = false; this.loadEnvironment(); this.loadPlugins(false)
+      if (this.analysisVisible && this.analysis?.analysis_id) this.pollAnalysis(this.analysis.analysis_id)
+      else this.restoreAnalysis()
+    },
+    async storeRead(path, params = {}) {
+      const controller = new AbortController(); this.readControllers.add(controller)
+      try { return await this.getRequest(path, params, { signal: controller.signal, suppressErrorToast: true }) }
+      finally { this.readControllers.delete(controller) }
+    },
+    diagnostic(error) {
+      const body = error?.response?.data || error || {}
+      const detail = body.detail || body.details
+      const code = typeof detail === 'string' ? detail : detail?.code || body.info || body.message || 'dependency_request_failed'
+      return [reasonLabels[code] || code, detail?.stage ? `阶段：${detail.stage}` : '', detail?.diagnostic || detail?.message, code !== reasonLabels[code] && reasonLabels[code] ? `错误码：${code}` : ''].filter(Boolean).join('\n')
+    },
     coreIssueDescription(item) {
       const labels = {
         interpreter_mismatch: "当前解释器不是项目 .venv，尚未确认目标环境。",
@@ -508,12 +595,16 @@ export default {
       return `${relation} · 期望 ${item.expected || item.from || "-"} · 实际 ${item.actual || item.to || "未安装"}`
     },
     async loadEnvironment() {
+      if (this.readsPaused) return
+      const epoch = this.readEpoch
       try {
-        const response = await this.getRequest(`${this.$root.prefix}/store/nonebot/environment`, {}, { suppressErrorToast: true })
-        if (response?.suc) this.environment = response.data
-      } catch (_) { this.environment = { status: "failed", repairable: false } }
+        const response = await this.storeRead(`${this.$root.prefix}/store/nonebot/environment`)
+        if (epoch === this.readEpoch && response?.suc) this.environment = response.data
+      } catch (_) { if (epoch === this.readEpoch) this.environment = { status: "failed", repairable: false } }
     },
     async loadPlugins(refresh = false) {
+      if (this.readsPaused || this.componentDestroyed) return
+      const epoch = this.readEpoch
       const previous = this.queuedPluginLoad
       this.queuedPluginLoad = {
         params: {
@@ -531,25 +622,24 @@ export default {
           const request = this.queuedPluginLoad
           this.queuedPluginLoad = null
           try {
-            const response = await this.getRequest(`${this.$root.prefix}/store/nonebot/plugins`, {
+            const response = await this.storeRead(`${this.$root.prefix}/store/nonebot/plugins`, {
               ...request.params,
               refresh: request.refresh,
             })
-            if (this.componentDestroyed) return
+            if (this.componentDestroyed || epoch !== this.readEpoch) return
             if (this.queuedPluginLoad) continue
             if (!response.suc) throw new Error(response.info || "NoneBot Registry 加载失败")
             this.plugins = response.data.items || []; this.total = Number(response.data.total || 0); this.registryMeta = response.data.registry || {}
             this.enabledAdapters = response.data.enabled_adapters || []
             this.consumeRouteAction()
           } catch (error) {
-            if (this.componentDestroyed) return
+            if (this.componentDestroyed || epoch !== this.readEpoch) return
             if (this.queuedPluginLoad) continue
             this.plugins = []; this.total = 0; this.error = error.response?.data?.detail || error.message || "NoneBot Registry 暂时不可用。"
           }
         }
       } finally {
-        this.pluginLoadInFlight = false
-        if (!this.componentDestroyed) this.loading = false
+        if (epoch === this.readEpoch) { this.pluginLoadInFlight = false; if (!this.componentDestroyed) this.loading = false }
       }
     },
     consumeRouteAction() {
@@ -565,36 +655,43 @@ export default {
       this.startAnalysis("uninstall", plugin)
     },
     async openDetail(plugin) {
+      if (this.readsPaused) return
+      const epoch = ++this.detailEpoch
       this.detail = null; this.detailVisible = true; this.detailLoading = true
       try {
-        const response = await this.getRequest(`${this.$root.prefix}/store/nonebot/plugins/${encodeURIComponent(plugin.project_link)}`)
+        const response = await this.storeRead(`${this.$root.prefix}/store/nonebot/plugins/${encodeURIComponent(plugin.project_link)}`)
+        if (epoch !== this.detailEpoch) return
         if (!response.suc) throw new Error(response.info || "详情加载失败")
         this.detail = response.data
-      } catch (error) { this.$message.error(error.message || "详情加载失败"); this.detailVisible = false }
-      finally { this.detailLoading = false }
+      } catch (error) { if (epoch === this.detailEpoch) { this.$message.error(this.diagnostic(error)); this.detailVisible = false } }
+      finally { if (epoch === this.detailEpoch) this.detailLoading = false }
     },
     openHomepage(url) { window.open(url, "_blank", "noopener,noreferrer") },
-    async startAnalysis(action, plugin) {
+    async startAnalysis(action, plugin, preferExisting = true) {
+      if (this.readsPaused || this.componentDestroyed) return
+      const epoch = ++this.analysisEpoch
       if (this.$store.state.pluginOperation.active) { this.$message.warning("已有插件操作正在进行，请等待完成。"); return }
       this.analysisPlugin = plugin; this.analysis = null; this.analysisLoading = true; this.analysisVisible = true
-      this.confirmCode = false; this.confirmChanges = false; this.confirmSource = false; this.confirmCompatibility = false; this.confirmMigration = false
       try {
-        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/analyze`, { project_link: plugin.project_link, action })
+        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/analyze`, { project_link: plugin.project_link, action, prefer_existing: preferExisting })
+        if (epoch !== this.analysisEpoch) return
         if (!response.suc) throw new Error(response.info || "依赖分析无法启动")
         this.analysis = response.data
         sessionStorage.setItem("zhenxun_nonebot_analysis", JSON.stringify({ analysisId: response.data.analysis_id, plugin, action }))
         this.pollAnalysis(response.data.analysis_id)
-      } catch (error) { this.analysisLoading = false; this.analysis = { status: "failed", blocked_reasons: [{ code: "analysis_failed", message: error.message }] } }
+      } catch (error) { if (epoch === this.analysisEpoch) { this.analysisLoading = false; this.analysis = { status: "failed", blocked_reasons: [{ code: "analysis_failed", message: error.message }] } } }
     },
     async pollAnalysis(id) {
       clearTimeout(this.analysisTimer)
+      if (this.readsPaused || this.componentDestroyed) return
+      const epoch = this.analysisEpoch
       try {
-        const response = await this.getRequest(`${this.$root.prefix}/store/nonebot/analyses/${id}`)
+        const response = await this.storeRead(`${this.$root.prefix}/store/nonebot/analyses/${id}`)
+        if (epoch !== this.analysisEpoch) return
         if (!response.suc) {
           if (response.info === "analysis_not_found") {
-            const saved = JSON.parse(sessionStorage.getItem("zhenxun_nonebot_analysis") || "null")
             sessionStorage.removeItem("zhenxun_nonebot_analysis")
-            if (saved?.plugin && saved?.action) return this.startAnalysis(saved.action, saved.plugin)
+            throw new Error('分析已过期，请重新点击分析；不会自动重新提交。')
           }
           throw new Error(response.info || "依赖分析失败")
         }
@@ -602,8 +699,16 @@ export default {
         if (response.data.environment) this.environment = response.data.environment
         if (["queued", "analyzing"].includes(response.data.status)) {
           this.analysisTimer = setTimeout(() => this.pollAnalysis(id), 700)
-        } else { this.analysisLoading = false }
-      } catch (error) { this.analysisLoading = false; this.analysis = { status: "failed", blocked_reasons: [{ code: "analysis_failed", message: error.message }] } }
+        } else {
+          this.analysisLoading = false
+          if (this.retrySummary) {
+            const unchanged = response.data.status === 'ready' && response.data.plan?.summary_revision === this.retrySummary
+            this.retrySummary = null
+            if (unchanged) { await this.applyAnalysis(); return }
+            this.retryingSummary = false; this.$message.info('环境已变化，摘要已更新；请核对差异后确认。')
+          }
+        }
+      } catch (error) { if (epoch === this.analysisEpoch) { this.analysisLoading = false; this.analysis = { status: "failed", blocked_reasons: [{ code: "analysis_failed", message: error.message }] } } }
     },
     restoreAnalysis() {
       try {
@@ -615,32 +720,42 @@ export default {
     },
     closeAnalysis(done) {
       if (this.applying) return
+      this.analysisEpoch++
       clearTimeout(this.analysisTimer); sessionStorage.removeItem("zhenxun_nonebot_analysis")
       if (typeof done === "function") done()
     },
     async repairEnvironment() {
       const environment = this.analysis?.environment || this.environment
-      if (!environment?.repairable || this.repairing) return
+      if (!environment?.repairable || this.repairing || this.readsPaused) return
+      const epoch = ++this.repairEpoch
+      const controller = new AbortController(); this.readControllers.add(controller)
       this.repairing = true; this.repairVisible = true; this.repairPreview = null; this.repairSelected = []; this.repairError = ""
       try {
-        const inspected = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair/preview`, {})
-        if (!inspected.suc) throw new Error(inspected.info || "修复预览失败")
+        const inspected = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair/preview`, {}, { signal: controller.signal, suppressErrorToast: true })
+        if (epoch !== this.repairEpoch) return
+        if (!inspected.suc) throw inspected
         this.repairPreview = inspected.data
         this.repairSelected = (inspected.data.groups || []).filter(group => group.status === "repairable").map(group => group.id)
-      } catch (error) { this.repairError = error.response?.data?.detail || error.message || "修复预览失败" }
-      finally { this.repairing = false }
+      } catch (error) { if (epoch === this.repairEpoch) this.repairError = this.diagnostic(error) }
+      finally { this.readControllers.delete(controller); if (epoch === this.repairEpoch) this.repairing = false }
     },
     async applyEnvironmentRepair() {
-      if (this.repairing || !this.repairPreview || !this.repairSelected.length) return
-      this.repairing = true; this.repairError = ""
+      if (this.readsPaused || this.repairing || !this.repairPreview || (!this.repairSelected.length && this.repairPreview.mode !== 'base')) return
+      this.repairing = true; this.repairSubmitting = true; this.repairError = ""
+      const operationId = this.newOperationId()
+      sessionStorage.setItem("zhenxun_plugin_operation", JSON.stringify({ operationId, action: "repair", pluginName: "依赖环境" }))
+      this.$store.commit("START_PLUGIN_OPERATION", { action: "repair", pluginName: "依赖环境", title: "正在准备依赖修复", message: "正在构建候选层，重启验证后生效。" })
       try {
         const preview = this.repairPreview
-        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair`, { expected_fingerprint: preview.fingerprint, preview_id: preview.preview_id, group_ids: this.repairSelected, confirmed: true })
-        if (!response.suc) throw new Error(response.info || "依赖修复请求失败")
+        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/environment/repair`, { operation_id: operationId, expected_fingerprint: preview.fingerprint, preview_id: preview.preview_id, group_ids: this.repairSelected, confirmed: true })
+        if (this.componentDestroyed || this.authExpired) return
+        if (!response.suc) throw response
         this.repairVisible = false
-        if (response.data.apply_mode === "restart_pending") {
+        if (response.data.apply_mode !== "restart_requested") {
+          this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({ result: response.data, status: response.data.status }, true))
           this.$message.success(response.info); notifyRestartStatusChanged(); return
         }
+        this.$store.commit("FINISH_PLUGIN_OPERATION", { status: "pending", title: "正在重启验证依赖", message: "请等待启动验证完成，页面将续查同一任务。", applyMode: "verifying" })
         startRestartRecovery({
           bootId: response.data.boot_id,
           launcherBootId: response.data.launcher_boot_id,
@@ -649,15 +764,23 @@ export default {
           accessTargets: response.data.target_access_targets ?? response.data.access_targets ?? [],
           preferredUrl: response.data.preferred_url,
           policy: "preserve",
-          returnRoute: this.$route.path,
+          returnRoute: this.$route.fullPath,
           message: "正在同步锁定依赖并启动新的真寻进程。",
         })
-      } catch (error) { this.repairError = error.response?.data?.detail || error.message || "依赖修复请求失败" }
-      finally { this.repairing = false }
+      } catch (error) {
+        if (!this.componentDestroyed && !this.authExpired) {
+          this.repairError = this.diagnostic(error)
+          this.$store.commit("FINISH_PLUGIN_OPERATION", { status: "error", title: "修复结果待查询", message: this.repairError, applyMode: "unknown" })
+        }
+      }
+      finally { this.repairing = false; this.repairSubmitting = false }
     },
     async cancelPending(plugin) {
+      const actionKey = plugin.store_key || plugin.id
+      if (this.transactionAction || this.applying || this.readsPaused || this.authExpired) return
+      this.transactionAction = actionKey
       const confirmed = await this.$cuteConfirm({ title: "取消待重启事务", message: `将撤销 ${plugin.name} 的待应用变更并恢复当前运行版本。`, confirmButtonText: "撤销事务", cancelButtonText: "保留", type: "warning" })
-      if (!confirmed) return
+      if (!confirmed) { this.transactionAction = ""; return }
       try {
         const endpoint = plugin.pending_operation_id
           ? `${this.$root.prefix}/store/nonebot/transactions/pending/${encodeURIComponent(plugin.pending_operation_id)}`
@@ -669,23 +792,24 @@ export default {
         this.$message.success("待重启插件事务已撤销")
         notifyRestartStatusChanged(); await this.loadPlugins(false)
       } catch (error) { this.$message.error(error.response?.data?.detail || error.message || "取消失败") }
+      finally { this.transactionAction = "" }
     },
     async clearFailed(plugin) {
-      const confirmed = await this.$cuteConfirm({ title: "清除失败记录", message: `${plugin.name} 已回滚到原运行版本。清除记录后可以重新分析或安装。`, confirmButtonText: "清除记录", cancelButtonText: "保留", type: "warning" })
-      if (!confirmed) return
+      const actionKey = plugin.store_key || plugin.id
+      if (this.transactionAction || this.applying || this.readsPaused || this.authExpired) return
+      this.transactionAction = actionKey
+      const confirmed = await this.$cuteConfirm({ title: "清除失败记录", message: `${plugin.name} ${plugin.rollback_confirmed ? '已回滚到原运行版本' : '本次操作未完成'}。清除记录后可以重新分析或安装。`, confirmButtonText: "清除记录", cancelButtonText: "保留", type: "warning" })
+      if (!confirmed) { this.transactionAction = ""; return }
       try {
         const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/transactions/cancel`, {})
         if (!response.suc) throw new Error(response.info || "清除失败")
         this.$message.success("插件失败记录已清除")
         notifyRestartStatusChanged(); await this.loadPlugins(false)
       } catch (error) { this.$message.error(error.response?.data?.detail || error.message || "清除失败") }
+      finally { this.transactionAction = "" }
     },
     async applyAnalysis() {
       if (!this.canApply) return
-      if (this.analysis.plan.source_build_required) {
-        const confirmed = await this.$cuteConfirm({ title: "确认源码构建", message: "此操作将在 worker 停止后调用本机编译工具。确认继续？", confirmButtonText: "确认构建", cancelButtonText: "取消", type: "warning" })
-        if (!confirmed) return
-      }
       this.applying = true
       const action = this.analysis.action
       const labels = { install: "安装", update: "更新", uninstall: "卸载" }
@@ -694,30 +818,24 @@ export default {
       this.$store.commit("START_PLUGIN_OPERATION", { action, pluginName: this.analysisPlugin.name, title: `正在${labels[action]} NoneBot 插件`, message: "正在构建隔离依赖层并验证运行时边界。" })
       try {
         const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/apply`, {
-          analysis_id: this.analysis.analysis_id, operation_id: operationId, confirm_third_party_code: this.confirmCode,
-          confirm_non_core_changes: this.confirmChanges, confirm_source_build: this.confirmSource,
-          confirm_compatibility_overrides: this.confirmCompatibility,
-          confirm_database_migration: this.confirmMigration,
+          analysis_id: this.analysis.analysis_id, operation_id: operationId,
+          confirmed: true, summary_revision: this.analysis.plan.summary_revision,
         })
+        if (this.componentDestroyed || this.authExpired) return
         if (!response.suc) {
+          if (['analysis_stale', 'analysis_not_found'].includes(response.info) && !this.retryingSummary) {
+            this.retrySummary = this.analysis.plan.summary_revision; this.retryingSummary = true; this.applying = false
+            this.$store.commit('CLEAR_PLUGIN_OPERATION'); sessionStorage.removeItem('zhenxun_plugin_operation')
+            await this.startAnalysis(action, this.analysisPlugin, this.analysis.prefer_existing !== false); return
+          }
           const reason = { code: response.info, details: response.details }
-          throw new Error([this.reasonLabel(reason), this.archiveConflictDetail(reason), response.details ? '请重新解析归档依赖，核对上述收据后重试。' : ''].filter(Boolean).join('\n'))
+          throw new Error([this.diagnostic(response), this.archiveConflictDetail(reason)].filter(Boolean).join('\n'))
         }
-        const mode = response.data.apply_mode
-        const pending = mode === "restart_pending"
-        const resultMessages = {
-          hot_reloaded: "插件运行时已更新，无需重启。",
-          rolled_back: "操作已撤销，当前运行版本保持不变。",
-          failed: "插件操作失败，已保留原运行版本。",
-        }
-        this.$store.commit("FINISH_PLUGIN_OPERATION", {
-          status: mode === "failed" ? "error" : pending ? "pending" : "success", title: pending ? "插件事务等待重启" : `插件${labels[action]}完成`,
-          message: pending ? "依赖层已准备完成，确认重启后切换并验证插件。" : (resultMessages[mode] || "插件操作已完成。"),
-          applyMode: mode, restartAvailable: response.data.restart_available,
-          accessUrls: response.data.access_urls || [], accessTargets: response.data.access_targets || [],
-        })
+        this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({ result: response.data, status: response.data.status }))
+        this.retryingSummary = false
         notifyRestartStatusChanged(); sessionStorage.removeItem("zhenxun_nonebot_analysis"); this.analysisVisible = false; await this.loadPlugins(false)
       } catch (error) {
+        if (this.componentDestroyed || this.authExpired) return
         this.$store.commit("FINISH_PLUGIN_OPERATION", { status: "error", title: `插件${labels[action]}失败`, message: this.operationError(error, "操作失败") })
       } finally { this.applying = false }
     },
@@ -726,6 +844,7 @@ export default {
 </script>
 
 <style scoped>
+.console-command { white-space: pre-wrap; overflow-wrap: anywhere; }
 .nonebot-store { min-height: 100%; padding: 22px; color: var(--text-color); background: var(--bg-color); }
 .store-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .store-header h1 { margin: 0; font-size: 24px; }.store-header p { margin: 5px 0 0; color: var(--text-color-secondary); }

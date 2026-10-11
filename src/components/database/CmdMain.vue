@@ -13,6 +13,8 @@
         :rounded="$isMobile() ? 'md' : 'lg'"
         :width="$isMobile() ? 80 : 100"
         :height="36"
+        :loading="execBusy"
+        :disabled="execBusy || historyLoading"
         glow
         @click="execSql"
       />
@@ -162,6 +164,7 @@
                 class="anime-pagination"
                 small
                 :pager-count="$isMobile() ? 3 : 5"
+                :disabled="historyLoading || execBusy"
               ></el-pagination>
             </div>
           </div>
@@ -260,6 +263,8 @@ export default {
       },
       windowWidth: window.innerWidth,
       maxResultHeight: 0,
+      execBusy: false,
+      historyLoading: false,
     }
   },
   mounted() {
@@ -336,7 +341,8 @@ export default {
     formatBoolean(row, i, cellValue) {
       return cellValue + ""
     },
-    execSql() {
+    async execSql() {
+      if (this.execBusy) return
       if (!this.sqlMessage || !this.sqlMessage.trim()) {
         this.$message.warning({
           message: "请输入SQL命令哦 (｡•́︿•̀｡)",
@@ -344,10 +350,12 @@ export default {
         })
         return
       }
+      this.execBusy = true
       const loading = this.getLoading(".result-box")
-      this.postRequest(`${this.$root.prefix}/database/exec_sql`, {
-        sql: this.sqlMessage,
-      }).then((resp) => {
+      try {
+        const resp = await this.postRequest(`${this.$root.prefix}/database/exec_sql`, {
+          sql: this.sqlMessage,
+        })
         if (resp.suc) {
           if (resp.warning) {
             this.$message.warning({
@@ -371,22 +379,32 @@ export default {
               this.info = "执行成功! ✧*。٩(ˊωˋ*)و✧*。"
             }
           }
-          this.getSqlLog()
+          await this.getSqlLog()
         } else {
           this.$message.error({
             message: resp.info,
             customClass: "anime-message",
           })
         }
+      } catch (error) {
+        this.$message.error({
+          message: error.response?.data?.detail || error.message || "SQL执行失败，请稍后重试。",
+          customClass: "anime-message",
+        })
+      } finally {
+        this.execBusy = false
         loading.close()
-      })
+      }
     },
-    getSqlLog() {
+    async getSqlLog() {
+      if (this.historyLoading) return
+      this.historyLoading = true
       const loading = this.getLoading(".history")
-      this.postRequest(`${this.$root.prefix}/database/get_sql_log`, {
-        index: this.historyIndex,
-        size: 7,
-      }).then((resp) => {
+      try {
+        const resp = await this.postRequest(`${this.$root.prefix}/database/get_sql_log`, {
+          index: this.historyIndex,
+          size: 7,
+        })
         if (resp.suc) {
           if (resp.warning) {
             this.$message.warning({
@@ -403,8 +421,15 @@ export default {
             customClass: "anime-message",
           })
         }
+      } catch (error) {
+        this.$message.error({
+          message: error.response?.data?.detail || error.message || "历史记录加载失败，请稍后重试。",
+          customClass: "anime-message",
+        })
+      } finally {
+        this.historyLoading = false
         loading.close()
-      })
+      }
     },
   },
   destroyed() {

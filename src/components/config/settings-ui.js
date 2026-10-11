@@ -5,7 +5,7 @@ export function environmentCategories(descriptors, matches, source, customCount)
     { key: 'access', title: '访问与 HTTPS', icon: 'el-icon-lock', description: '管理 WebUI 监听与安全访问入口。', keys: ['HOST', 'PORT', 'WEBUI_HTTPS_ENABLED', 'WEBUI_TLS_CERTFILE', 'WEBUI_TLS_KEYFILE', 'WEBUI_HTTP_MODE', 'WEBUI_HTTP_REDIRECT_PORT'] },
     { key: 'bot', title: '机器人与命令', icon: 'el-icon-chat-dot-round', description: '设置机器人称呼、消息与命令行为。', keys: ['NICKNAME', 'SELF_NICKNAME', 'COMMAND_START', 'COMMAND_SEP', 'ALCONNA_USE_COMMAND_START', 'IMAGE_TO_BYTES'] },
     { key: 'permissions', title: '权限与会话', icon: 'el-icon-user', description: '管理超级用户范围与交互会话。', keys: ['SUPERUSERS', 'PLATFORM_SUPERUSERS', 'SESSION_EXPIRE_TIMEOUT'] },
-    { key: 'runtime', title: '日志与扩展', icon: 'el-icon-document', description: '调整日志、扩展插件路径与代码自动更新策略。', keys: ['LOG_LEVEL', 'EXT_PATH', 'RUNTIME_WATCH_MODE'] },
+    { key: 'runtime', title: '日志与扩展', icon: 'el-icon-document', description: '调整日志级别与扩展插件路径。', keys: ['LOG_LEVEL', 'EXT_PATH'] },
     { key: 'storage', title: '数据库与缓存', icon: 'el-icon-coin', description: '数据库连接与本体缓存配置。', keys: ['DB_URL', 'CACHE_MODE', 'REDIS_EXPIRE', 'REDIS_HOST', 'REDIS_PASSWORD', 'REDIS_PORT'] },
     { key: 'adapters', title: '适配器配置', icon: 'el-icon-link', description: '按协议维护机器人连接配置。', keys: [] },
     { key: 'plugins', title: '插件环境项', icon: 'el-icon-connection', description: '由已注册配置模型声明，详细信息中可查看来源。', keys: [] },

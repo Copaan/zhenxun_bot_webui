@@ -9,7 +9,6 @@
     <p v-if="runtime.http_error_code">{{ runtime.http_error_code }} / {{ runtime.http_stage || '-' }} / errno {{ runtime.http_errno ?? '-' }}</p>
     <p v-if="runtime.http_retry_in_seconds">重试 {{ runtime.http_retry_count || 0 }} · 间隔 {{ runtime.http_retry_in_seconds }} s</p>
     <p v-if="runtime.http_total_retries">HTTP累计重试：{{ runtime.http_total_retries }}</p>
-    <p v-if="runtime.http_unverified_child_diagnostic">未验证的子进程诊断：{{ httpErrorLabel(runtime.http_unverified_child_diagnostic.error_code) }}</p>
     <p v-if="runtime.http_first_error">首次错误：{{ runtime.http_first_error }} · 最近错误：{{ runtime.http_latest_error || runtime.http_error }}</p>
     <ul v-if="status.access_urls && status.access_urls.length">
       <li v-for="url in status.access_urls" :key="url"><a :href="url" target="_blank" rel="noopener noreferrer">{{ url }}</a></li>

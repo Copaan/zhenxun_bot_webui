@@ -16,6 +16,9 @@
     </template>
     <p v-else class="task-muted">{{ phaseLabel }} · {{ job.stage === 'completed' ? '流程已完成' : '当前阶段未提供计数' }}</p>
     <p v-if="job.first_error" class="task-error">{{ failureSummary(job) }}</p>
+    <p v-if="job.export_file && job.export_file.state === 'available' && job.stage === 'completed'">已保存至项目根目录：<code>./{{ job.export_file.path }}</code></p>
+    <p v-if="job.export_file && job.export_file.state === 'removed'">导出文件已清理</p>
+    <p v-if="job.export_cleanup && job.export_cleanup.state === 'failed'" class="task-error">导出文件清理待重试：{{ job.export_cleanup.code }}；任务原始结果保持不变。</p>
     <MigrationDatabases :items="job.databases || []" :stage="job.stage" />
     <details v-if="job.first_error || diagnostic" class="task-detail" @toggle="detailsOpen = $event.target.open">
       <summary>任务错误与数据库工具详情</summary>
@@ -93,6 +96,7 @@ export default {
 .task-metrics { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px 12px; margin: 12px 0; }
 .task-metrics dt { color: #697786; }.task-metrics dd { margin: 0; overflow-wrap: anywhere; }
 .task-error { color: #a83838; overflow-wrap: anywhere; }.task-detail summary { cursor: pointer; padding: 8px 0; }
+.task-status code { overflow-wrap: anywhere; }
 .task-detail pre { background: #fff; border: 1px solid #dce2e8; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-height: 380px; overflow: auto; font-size: 12px; }
 .task-working { color: #466f8b; }.task-detail code { overflow-wrap: anywhere; }
 @media (max-width: 600px) { .task-status { padding: 12px; }.task-metrics { grid-template-columns: 84px minmax(0, 1fr); gap: 8px; } }

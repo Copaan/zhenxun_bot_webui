@@ -2,9 +2,10 @@ import axios from "axios"
 import { Message } from "element-ui"
 import {
   handleAuthenticationExpired,
+  isAuthenticationExpired,
   isLocalAuthRecoveryRequest,
 } from "./auth-session"
-import { clearAuthToken, getAuthToken, setAuthToken } from "./auth-token"
+import { clearAuthToken, getAuthToken, setAuthToken, hasValidAuthToken } from "./auth-token"
 import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "./restart-network"
 
 const businessRequests = new Set()
@@ -21,6 +22,8 @@ window.addEventListener("unhandledrejection", (event) => {
 onBusinessNetworkChange((frozen) => {
   if (frozen) for (const request of Array.from(businessRequests)) request.controller.abort()
 })
+
+window.addEventListener("zhenxun-auth-expired", () => { for (const request of Array.from(businessRequests)) request.controller.abort() })
 
 const releaseBusinessRequest = (config) => config?._restartNetwork?.release()
 
@@ -40,7 +43,13 @@ const showErrorOnce = (message) => {
 // 请求拦截器
 axios.interceptors.request.use(
   (config) => {
-    if (isBusinessNetworkFrozen()) throw recoveryCancellation()
+    const authenticationRequest = /\/(login|auth\/console-connect)$/.test(config.url || "")
+    if (isBusinessNetworkFrozen() || (isAuthenticationExpired() && !authenticationRequest)) throw recoveryCancellation()
+    const token = getAuthToken()
+    if (token && !hasValidAuthToken(token)) {
+      handleAuthenticationExpired(true)
+      if (!authenticationRequest) throw recoveryCancellation()
+    }
     const controller = new AbortController()
     const sourceSignal = config.signal
     const cancelToken = config.cancelToken
@@ -61,8 +70,7 @@ axios.interceptors.request.use(
     if (sourceSignal?.aborted) abort()
     config.signal = controller.signal
     config._restartNetwork = request
-    const token = getAuthToken()
-    if (token) {
+    if (token && hasValidAuthToken(token)) {
       //请求携带自定义token
       config.headers["Authorization"] = token
     }

@@ -15,6 +15,8 @@
         </h3>
         <div class="header-buttons">
           <cute-button
+            :loading="pendingAction === 'clear:FRIEND'"
+            :disabled="Boolean(pendingAction)"
             @click="clearRequest('FRIEND')"
             size="sm"
             icon="clear3"
@@ -24,6 +26,8 @@
             清空好友
           </cute-button>
           <cute-button
+            :loading="pendingAction === 'clear:GROUP'"
+            :disabled="Boolean(pendingAction)"
             @click="clearRequest('GROUP')"
             size="sm"
             icon="clear3"
@@ -81,6 +85,8 @@
             </div>
             <div class="action-buttons">
               <cute-button
+                :loading="pendingAction === actionKey('approve', data)"
+                :disabled="Boolean(pendingAction)"
                 @click="handleApprove(data)"
                 type="success"
                 icon="confirm"
@@ -90,6 +96,8 @@
                 同意
               </cute-button>
               <cute-button
+                :loading="pendingAction === actionKey('refuse', data)"
+                :disabled="Boolean(pendingAction)"
                 @click="handleRefuse(data)"
                 type="danger"
                 icon="false"
@@ -99,6 +107,8 @@
                 拒绝
               </cute-button>
               <cute-button
+                :loading="pendingAction === actionKey('ignore', data)"
+                :disabled="Boolean(pendingAction)"
                 @click="handleIgnore(data)"
                 type="normal"
                 icon="ignore"
@@ -140,6 +150,8 @@
             </div>
             <div class="action-buttons">
               <cute-button
+                :loading="pendingAction === actionKey('approve', data)"
+                :disabled="Boolean(pendingAction)"
                 @click="handleApprove(data)"
                 type="success"
                 icon="confirm"
@@ -149,6 +161,8 @@
                 同意
               </cute-button>
               <cute-button
+                :loading="pendingAction === actionKey('refuse', data)"
+                :disabled="Boolean(pendingAction)"
                 @click="handleRefuse(data)"
                 type="danger"
                 icon="false"
@@ -158,6 +172,8 @@
                 拒绝
               </cute-button>
               <cute-button
+                :loading="pendingAction === actionKey('ignore', data)"
+                :disabled="Boolean(pendingAction)"
                 @click="handleIgnore(data)"
                 type="normal"
                 icon="ignore"
@@ -195,10 +211,10 @@ export default {
         friend: [],
         group: [],
       },
-      loading: {
-        clearFriend: false,
-        clearGroup: false,
-      },
+      loading: { clearFriend: false, clearGroup: false },
+      pendingAction: "",
+      fetching: false,
+      destroyed: false,
     }
   },
   mounted() {
@@ -217,10 +233,15 @@ export default {
       }
     },
 
+    actionKey(action, data) {
+      return `${action}:${data.flag}`
+    },
     async fetchRequests() {
+      if (this.fetching) return
+      this.fetching = true
       const loading = this.getLoading(".el-dialog")
-      this.getRequest(`${this.$root.prefix}/manage/get_request_list`).then(
-        (resp) => {
+      try {
+        const resp = await this.getRequest(`${this.$root.prefix}/manage/get_request_list`)
           if (resp.suc) {
             if (resp.warning) {
               this.$message.warning(resp.warning)
@@ -231,12 +252,17 @@ export default {
           } else {
             this.$message.error(resp.info)
           }
-          loading.close()
-        }
-      )
+      } catch (error) {
+        this.$message.error(error.response?.data?.detail || error.message || "请求列表加载失败")
+      } finally {
+        this.fetching = false
+        loading.close()
+      }
     },
 
     async clearRequest(request_type) {
+      if (this.pendingAction) return
+      this.pendingAction = `confirm-clear:${request_type}`
       const result = await this.$cuteConfirm({
         title: "清空确认",
         message: `确定要清空当前全部请求吗?`,
@@ -244,11 +270,10 @@ export default {
         confirmButtonText: "全部清空",
       })
       if (result) {
+        this.pendingAction = `clear:${request_type}`
+        const loading = this.getLoading(".el-dialog")
         try {
-          const loading = this.getLoading(".el-dialog")
-          this.postRequest(`${this.$root.prefix}/manage/clear_request`, {
-            request_type,
-          }).then((resp) => {
+          const resp = await this.postRequest(`${this.$root.prefix}/manage/clear_request`, { request_type })
             if (resp.suc) {
               if (resp.warning) {
                 this.$message.warning(resp.warning)
@@ -258,22 +283,24 @@ export default {
             } else {
               this.$message.error(resp.info)
             }
-            loading.close()
-            this.fetchRequests()
-          })
         } catch (error) {
-          this.$message.error("卸载失败: " + error.message)
+          this.$message.error(error.response?.data?.detail || error.message || "清空请求失败")
+        } finally {
+          loading.close()
+          this.pendingAction = ""
+          if (!this.destroyed) await this.fetchRequests()
         }
       } else {
+        this.pendingAction = ""
         console.log("取消清空")
       }
     },
-    handleApprove(data) {
+    async handleRequestAction(action, data, endpoint, payload) {
+      if (this.pendingAction) return
+      this.pendingAction = this.actionKey(action, data)
       const loading = this.getLoading(".el-dialog")
-      this.postRequest(`${this.$root.prefix}/manage/approve_request`, {
-        bot_id: data.bot_id,
-        id: data.oid,
-      }).then((resp) => {
+      try {
+        const resp = await this.postRequest(`${this.$root.prefix}/manage/${endpoint}`, payload)
         if (resp.suc) {
           if (resp.warning) {
             this.$message.warning(resp.warning)
@@ -283,46 +310,22 @@ export default {
         } else {
           this.$message.error(resp.info)
         }
+      } catch (error) {
+        this.$message.error(error.response?.data?.detail || error.message || "请求处理失败")
+      } finally {
         loading.close()
-        this.fetchRequests()
-      })
+        this.pendingAction = ""
+        if (!this.destroyed) await this.fetchRequests()
+      }
+    },
+    handleApprove(data) {
+      return this.handleRequestAction("approve", data, "approve_request", { bot_id: data.bot_id, id: data.oid })
     },
     handleRefuse(data) {
-      const loading = this.getLoading(".el-dialog")
-      this.postRequest(`${this.$root.prefix}/manage/refuse_request`, {
-        bot_id: data.bot_id,
-        id: data.oid,
-      }).then((resp) => {
-        if (resp.suc) {
-          if (resp.warning) {
-            this.$message.warning(resp.warning)
-          } else {
-            this.$message.success(resp.info)
-          }
-        } else {
-          this.$message.error(resp.info)
-        }
-        loading.close()
-        this.fetchRequests()
-      })
+      return this.handleRequestAction("refuse", data, "refuse_request", { bot_id: data.bot_id, id: data.oid })
     },
     handleIgnore(data) {
-      const loading = this.getLoading(".el-dialog")
-      this.postRequest(`${this.$root.prefix}/manage/delete_request`, {
-        id: data.oid,
-      }).then((resp) => {
-        if (resp.suc) {
-          if (resp.warning) {
-            this.$message.warning(resp.warning)
-          } else {
-            this.$message.success(resp.info)
-          }
-        } else {
-          this.$message.error(resp.info)
-        }
-        loading.close()
-        this.fetchRequests()
-      })
+      return this.handleRequestAction("ignore", data, "delete_request", { id: data.oid })
     },
 
     close() {
@@ -331,6 +334,7 @@ export default {
   },
 
   beforeDestroy() {
+    this.destroyed = true
     window.removeEventListener("resize", this.handleResize)
   },
 }

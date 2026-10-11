@@ -1,9 +1,9 @@
 import {
   getBaseUrl,
-  getCookie,
   syncApiWithBrowserLocation,
 } from "@/utils/api"
 import { handleAuthenticationExpired } from "@/utils/auth-session"
+import { getAuthToken, hasValidAuthToken } from "@/utils/auth-token"
 import { businessNetworkEpoch, isBusinessNetworkFrozen } from "@/utils/restart-network"
 
 export const AUTH_EXPIRED_CLOSE_CODE = 4401
@@ -37,7 +37,7 @@ export const emitWebSocketState = (channel, status) => {
 }
 
 export const createAuthenticatedWebSocket = (path) => {
-  if (isBusinessNetworkFrozen()) return null
+  if (isBusinessNetworkFrozen() || !hasValidAuthToken()) return null
   const epoch = businessNetworkEpoch()
   let url = new URL(getBaseUrl())
   if (window.location.protocol === "https:" && url.protocol !== "https:") {
@@ -54,13 +54,13 @@ export const createAuthenticatedWebSocket = (path) => {
   websocket.addEventListener(
     "open",
     () => {
-      if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) {
+      if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch() || !hasValidAuthToken()) {
         websocket.close()
         return
       }
       safeWebSocketSend(
         websocket,
-        JSON.stringify({ type: "auth", token: getCookie("tokenStr") || "" })
+        JSON.stringify({ type: "auth", token: getAuthToken() || "" })
       )
     },
     { once: true }

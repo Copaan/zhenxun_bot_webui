@@ -1,16 +1,17 @@
 <template>
   <main class="maintenance-page">
-    <header><span>真寻 · 实例迁移</span><h1>维护与恢复</h1><p>业务入口保持关闭。请查看持久任务结果，按要求补充授权。</p></header>
+    <header><span>真寻 · 实例迁移</span><h1>维护与恢复</h1><p>迁移任务在后台执行，刷新页面不会重复提交。仅在任务提示时补充所需配置。</p></header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <el-alert v-if="connectionNotice" :title="connectionNotice" type="info" :closable="false" show-icon />
     <el-form v-if="!token" class="login-form" label-position="top" @submit.native.prevent="login">
-      <h2>使用目标实例原管理员登录</h2>
+      <h2>使用恢复时选定的管理员登录</h2><p>首次部署默认使用包内管理员，已有实例默认保留原管理员。</p>
       <el-form-item label="管理员账号"><el-input v-model="username" autocomplete="username" :disabled="busy" /></el-form-item>
       <el-form-item label="管理员密码"><el-input v-model="password" type="password" show-password autocomplete="current-password" :disabled="busy" /></el-form-item>
       <el-button native-type="submit" type="primary" :loading="busy">登录维护页面</el-button>
     </el-form>
     <section v-else>
       <div class="toolbar"><h2>迁移任务</h2><el-button size="small" :loading="loading" @click="refresh">刷新状态</el-button><el-button size="small" @click="logout">退出登录</el-button></div>
+      <MigrationCandidates :items="candidateResources" :disabled="busy" :request="candidateRequest" @refresh="refresh" />
       <p v-if="!jobs.length">暂无任务</p>
       <article v-for="job in jobs" :key="job.id">
         <div class="task-heading"><h3>{{ job.action === 'restore' ? '完整替换迁移' : '导出实例' }}</h3><el-tag>{{ stage(job.stage) }}</el-tag></div>
@@ -63,43 +64,59 @@
 </template>
 
 <script>
+import { setAuthToken, getAuthToken, hasValidAuthToken, currentAuthTask } from "@/utils/auth-token"
+import { startSessionActivity } from "@/utils/session-activity"
+import { handleAuthenticationExpired } from "@/utils/auth-session"
+import MigrationCandidates from "./MigrationCandidates.vue"
 import { getBaseUrl } from '@/utils/api'
 import MigrationTaskStatus from './MigrationTaskStatus.vue'
-import { migrationStages as stages, terminalMigrationStages as terminal, migrationPollDelay } from '@/utils/migration'
+import { migrationStages as stages, terminalMigrationStages as terminal, migrationPollDelay, getMigrationSession, clearMigrationSession, migrationErrorMessage } from '@/utils/migration'
 export default {
   name: "MigrationMaintenance",
-  components: { MigrationTaskStatus },
-  data: () => ({ username: "", password: "", token: "", busy: false, loading: false, error: "", connectionNotice: "", lastConnectedAt: 0, activeTaskId: "", jobs: [], total: 0, page: 1, recovery: null, databaseUser: "", databasePassword: "", confirmed: false, ready: false, terminal }),
-  created() { this.sequence = 0; this.sessionRevision = 0; this.activeTaskId = sessionStorage.getItem(`migration-export:${getBaseUrl()}`) || ''; this.onLeave = event => { if (this.databasePassword || this.confirmed) { event.preventDefault(); event.returnValue = "" } }; window.addEventListener("beforeunload", this.onLeave) },
-  beforeDestroy() { this.sequence += 1; clearTimeout(this.poll); window.removeEventListener("beforeunload", this.onLeave); this.token = "" },
+  components: { MigrationCandidates, MigrationTaskStatus },
+  data: () => ({ username: "", password: "", token: "", busy: false, loading: false, error: "", connectionNotice: "", lastConnectedAt: 0, activeTaskId: "", candidateResources: [], jobs: [], total: 0, page: 1, recovery: null, databaseUser: "", databasePassword: "", confirmed: false, ready: false, terminal }),
+  created() { this.requestControllers = new Set(); this.onExpired = () => { this.logout(false); this.error = "会话已过期，连接已断开；已提交任务仍在后台执行。" }; window.addEventListener("zhenxun-auth-expired", this.onExpired); this.sequence = 0; this.sessionRevision = 0; this.activeTaskId = currentAuthTask() || sessionStorage.getItem(`migration-restore:${getBaseUrl()}`) || sessionStorage.getItem(`migration-export:${getBaseUrl()}`) || ''; this.token = (getMigrationSession() || '').replace(/^Bearer\s+/i, ''); this.onLeave = event => { if (this.databasePassword || this.confirmed) { event.preventDefault(); event.returnValue = "" } }; window.addEventListener("beforeunload", this.onLeave); this.onVisibility = () => { if (document.hidden) { this.sequence += 1; clearTimeout(this.poll); this.loading = false; for (const controller of this.requestControllers) controller.abort() } else if (this.token) this.refresh() }; document.addEventListener("visibilitychange", this.onVisibility); startSessionActivity(); if (this.token) this.refresh() },
+  beforeDestroy() { for (const controller of this.requestControllers) controller.abort(); window.removeEventListener("zhenxun-auth-expired", this.onExpired); document.removeEventListener("visibilitychange", this.onVisibility); this.sequence += 1; this.sessionRevision += 1; clearTimeout(this.poll); window.removeEventListener("beforeunload", this.onLeave); this.token = "" },
   methods: {
+    candidateRequest(path, options) { return this.request(`migration${path}`, { ...options, method: options.method.toUpperCase() }) },
     stage(value) { return stages[value] || value },
-    async request(path, { method = "GET", data, form } = {}) {
-      const token = this.token
-      const headers = this.token ? { Authorization: `Bearer ${this.token}` } : {}
+    async request(path, { method = "GET", data, form, signal } = {}) {
+      const revision = this.sessionRevision
+      const token = getAuthToken()
+      if (path !== "login" && !hasValidAuthToken(token)) { handleAuthenticationExpired(true); throw new Error("会话已过期") }
+      const headers = token ? { Authorization: token } : {}
       if (data) headers["Content-Type"] = "application/json"
       const controller = new AbortController()
+      this.requestControllers.add(controller)
+      const cancel = () => controller.abort()
+      if (signal?.aborted) cancel()
+      else signal?.addEventListener('abort', cancel, { once: true })
       const timeout = setTimeout(() => controller.abort(), 10000)
       let response, value
       try {
         response = await fetch(`/zhenxun/api/${path}`, { method, headers, body: form || (data ? JSON.stringify(data) : undefined), credentials: "omit", redirect: "error", cache: "no-store", signal: controller.signal })
         value = await response.json()
+        if (revision !== this.sessionRevision) throw new DOMException("Session changed", "AbortError")
       } catch (error) { error.connectionUnavailable = true; throw error }
-      finally { clearTimeout(timeout) }
-      if (response.status === 401 && token === this.token) this.logout(false)
-      if (!response.ok || !value.suc) throw new Error(typeof value.detail === "string" ? value.detail : "维护请求失败，请重新连接后查看任务状态。")
+      finally { this.requestControllers.delete(controller); clearTimeout(timeout); signal?.removeEventListener('abort', cancel) }
+      if (response.status === 401 && token === getAuthToken()) handleAuthenticationExpired(true)
+      if (!response.ok || !value.suc) {
+        const error = new Error(migrationErrorMessage({ response: { status: response.status, data: value } }))
+        error.response = { status: response.status, data: value }; throw error
+      }
       return value.data
     },
     async login() {
       if (this.busy) return
+      const revision = this.sessionRevision
       this.busy = true; this.error = ""
-      try { const value = await this.request("login", { method: "POST", form: new URLSearchParams({ username: this.username, password: this.password }) }); this.token = value.access_token; this.password = ""; await this.refresh() }
-      catch (error) { this.error = error.message }
+      try { const value = await this.request("login", { method: "POST", form: new URLSearchParams({ username: this.username, password: this.password }) }); if (revision !== this.sessionRevision) return; setAuthToken(`Bearer ${value.access_token}`); this.token = value.access_token; this.password = ""; await this.refresh() }
+      catch (error) { if (revision === this.sessionRevision) this.error = error.message }
       finally { this.busy = false }
     },
-    logout(clear = true) { this.sequence += 1; this.sessionRevision += 1; clearTimeout(this.poll); this.token = ""; this.password = ""; this.loading = false; if (clear) this.clearRecovery() },
+    logout(clear = true) { for (const controller of this.requestControllers) controller.abort(); this.sequence += 1; this.sessionRevision += 1; clearTimeout(this.poll); this.token = ""; clearMigrationSession(); this.password = ""; this.loading = false; if (clear) this.clearRecovery() },
     async refresh() {
-      if (!this.token) return
+      if (!this.token || document.hidden) return
       const sequence = ++this.sequence; clearTimeout(this.poll); this.loading = true
       try {
         const [jobs, status, tracked] = await Promise.allSettled([
@@ -108,15 +125,15 @@ export default {
           this.activeTaskId ? this.request(`migration/tasks/${this.activeTaskId}`) : Promise.resolve(null),
         ])
         if (sequence !== this.sequence) return
-        if (jobs.status === 'fulfilled') { this.jobs = jobs.value.items; this.total = jobs.value.total }
+        if (jobs.status === 'fulfilled') { this.candidateResources = jobs.value.candidate_resources || []; this.jobs = jobs.value.items; this.total = jobs.value.total }
         if (tracked.status === 'fulfilled' && tracked.value) { this.jobs = [tracked.value, ...this.jobs.filter(job => job.id !== tracked.value.id)] }
-        if (status.status === 'fulfilled') this.ready = status.value.operating_mode === "normal" && ["warmup_ready", "degraded"].includes(status.value.state)
+        if (status.status === 'fulfilled') this.ready = status.value.operating_mode === "normal" && ["warmup_ready", "degraded"].includes(status.value.state) && Boolean(this.jobs.find(job => job.id === this.activeTaskId && terminal.has(job.stage)))
         if (jobs.status === 'rejected') throw jobs.reason
         if (tracked.status === 'rejected') throw tracked.reason
         if (!this.activeTaskId) this.activeTaskId = this.jobs.find(job => !terminal.has(job.stage))?.id || ''
         this.lastConnectedAt = Date.now(); this.connectionNotice = ''
       } catch (error) { if (sequence === this.sequence) { if (error.connectionUnavailable) this.connectionNotice = `管理连接暂时中断，正在查询原任务。${this.lastConnectedAt ? '上次连接：' + new Date(this.lastConnectedAt).toLocaleTimeString() : ''}`; else this.error = error.message } }
-      finally { if (sequence === this.sequence) { this.loading = false; if (!this.ready) this.poll = setTimeout(() => this.refresh(), migrationPollDelay(this.jobs, Boolean(this.connectionNotice))) } }
+      finally { if (sequence === this.sequence) { this.loading = false; if (!this.ready && !document.hidden) this.poll = setTimeout(() => this.refresh(), migrationPollDelay(this.jobs, Boolean(this.connectionNotice))) } }
     },
     changePage(value) { this.page = value; this.refresh() },
     clearRecovery() { this.recovery = null; this.databaseUser = ""; this.databasePassword = ""; this.confirmed = false },

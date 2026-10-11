@@ -115,43 +115,8 @@
           </div>
         </el-form>
 
-        <!-- 忘记密码 - 优化了交互体验 -->
-        <div
-          id="forgetPwd"
-          class="mt-6 text-center relative"
-          style="height: 40px"
-          @mouseenter="startButtonDance"
-        >
-          <el-button
-            type="text"
-            class="absolute transition-all duration-300 ease-out"
-            :class="{
-              'cursor-not-allowed': isButtonMoving,
-              'cursor-pointer': !isButtonMoving,
-            }"
-            :style="{
-              ...buttonPosition,
-              color: isButtonMoving
-                ? 'var(--danger-color)'
-                : 'var(--primary-color)',
-            }"
-            @click="handleForgetPassword"
-          >
-            忘记密码
-            <transition name="el-zoom-in-top">
-              <p
-                v-if="showTaunt"
-                class="ml-2 text-xs"
-                :style="{
-                  color: isButtonMoving
-                    ? 'var(--danger-color)'
-                    : 'var(--primary-color-light)',
-                }"
-              >
-                {{ currentTaunt }}
-              </p>
-            </transition>
-          </el-button>
+        <div class="mt-6 text-center">
+          <p class="text-xs text-secondary">忘记密码请联系管理员查看配置文件并重置。</p>
         </div>
       </div>
     </div>
@@ -237,29 +202,6 @@ export default {
         color: "",
       },
 
-      // 忘记密码按钮相关状态
-      isButtonMoving: false,
-      showTaunt: false,
-      currentTaunt: "",
-      buttonPosition: {
-        left: "50%",
-        top: "0",
-        transform: "translateX(-50%)",
-      },
-      taunts: [
-        "哈哈，抓不到我吧！",
-        "别试了，你点不到的~",
-        "这么容易忘记密码？",
-        "管理员联系方式？想得美！",
-        "再试一次？再试也点不到！",
-        "你的鼠标速度太慢啦！",
-        "这就是你忘记密码的惩罚！",
-        "点不到点不到~",
-        "密码都记不住，还想点我？",
-        "放弃吧，你抓不到我的！",
-      ],
-      danceInterval: null,
-
       // 櫻花
       sakuraPositions: Array(20)
         .fill()
@@ -290,7 +232,9 @@ export default {
     },
     async submitLogin() {
       try {
-        const valid = await this.$refs.loginForm.validate()
+        const valid = await new Promise((resolve) => {
+          this.$refs.loginForm.validate((isValid) => resolve(isValid))
+        })
         if (!valid) return
 
         this.loading = true
@@ -376,69 +320,6 @@ export default {
       return Math.min(strength, 100)
     },
 
-    // 忘记密码按钮相关方法
-    startButtonDance() {
-      if (this.isButtonMoving) return
-
-      this.isButtonMoving = true
-      this.showTaunt = true
-      this.currentTaunt =
-        this.taunts[Math.floor(Math.random() * this.taunts.length)]
-
-      // 清除之前的定时器
-      if (this.danceInterval) {
-        clearInterval(this.danceInterval)
-      }
-
-      // 随机移动按钮
-      this.danceInterval = setInterval(() => {
-        const container = document.querySelector("#forgetPwd")
-        if (!container) {
-          clearInterval(this.danceInterval)
-          return
-        }
-
-        const containerRect = container.getBoundingClientRect()
-        const maxLeft = containerRect.width - 100
-        const maxTop = containerRect.height - 40
-
-        const newLeft = Math.random() * maxLeft
-        const newTop = Math.random() * maxTop
-
-        this.buttonPosition = {
-          left: `${newLeft}px`,
-          top: `${newTop}px`,
-          transform: "none",
-        }
-      }, 800)
-
-      // 60秒后停止移动
-      setTimeout(() => {
-        clearInterval(this.danceInterval)
-        this.isButtonMoving = false
-        this.buttonPosition = {
-          left: "50%",
-          top: "0",
-          transform: "translateX(-50%)",
-        }
-
-        // 3秒后隐藏嘲讽文字
-        setTimeout(() => {
-          this.showTaunt = false
-        }, 3000)
-      }, 60000)
-    },
-
-    handleForgetPassword() {
-      if (!this.isButtonMoving) {
-        this.$message.warning({
-          message: "忘记密码请联系管理员查看配置文件！",
-          duration: 2000,
-        })
-      } else {
-        this.$message.error("抓不到我吧！")
-      }
-    },
   },
   mounted() {
     if (this.$route.query.reauth === "1") {
@@ -464,9 +345,6 @@ export default {
     // 组件销毁时移除事件监听
     this.$once("hook:beforeDestroy", () => {
       document.removeEventListener("keydown", handleKeyDown)
-      if (this.danceInterval) {
-        clearInterval(this.danceInterval)
-      }
     })
   },
 }

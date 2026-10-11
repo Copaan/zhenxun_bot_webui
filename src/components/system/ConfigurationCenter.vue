@@ -154,7 +154,6 @@ export default {
         { key: "WEBUI_HTTP_REDIRECT_PORT", label: "HTTP兼容端口", type: "number", dependsOn: "WEBUI_HTTPS_ENABLED", httpModeRequired: true, launcherOnly: true, placeholder: "80", help: "默认80；端口冲突时HTTPS继续运行，HTTP入口进入降级并自动重试。" },
         { key: "LOG_LEVEL", label: "日志等级", placeholder: "INFO", help: "常用值为 DEBUG、INFO、WARNING。" },
         { key: "API_TIMEOUT", label: "接口超时", unit: "秒", help: "适配器 API 调用的等待时间上限。" },
-        { key: "RUNTIME_WATCH_MODE", label: "代码自动更新", options: [{ value: "hot_only", label: "仅安全热重载（推荐）" }, { value: "disabled", label: "关闭文件监听" }, { value: "auto_restart", label: "热重载，必要时自动重启" }], help: "默认只重载可安全更新的插件；核心代码和依赖变更提示重启。自动重启模式需要 launcher，保存后应用。" },
         { key: "NICKNAME", label: "机器人昵称", placeholder: "[\"真寻\"]", help: "使用 dotenv 支持的列表格式。" },
         { key: "SELF_NICKNAME", label: "回复昵称", placeholder: "真寻", help: "回复消息中使用的自称。" },
         { key: "COMMAND_START", label: "命令前缀", placeholder: "[\"/\"]", help: "支持多个命令前缀。" },
@@ -269,7 +268,6 @@ export default {
       return {
         in_place: { label: "保存后自动应用", type: "success" },
         component_restart: { label: "保存后自动重建相关组件", type: "success" },
-        plugin_reactivate: { label: "保存后自动重载相关插件", type: "success" },
         worker_restart: { label: "保存后需重启 Bot", type: "warning" },
         hot_reload: { label: "保存后自动应用", type: "success" },
         plugin_reload: { label: "保存后自动重载相关插件", type: "success" },

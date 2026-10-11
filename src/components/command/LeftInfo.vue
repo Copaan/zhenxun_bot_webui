@@ -70,9 +70,13 @@
           </div>
 
           <!-- 开关 -->
-          <div
+          <button
+            type="button"
             class="switch-border text-center cursor-pointer"
+            :disabled="statusBusy"
+            :aria-label="botInfo.status ? '关闭 Bot 全局开关' : '开启 Bot 全局开关'"
             @click="handleBotStatus"
+            @keydown.enter.prevent="handleBotStatus"
           >
             <svg-icon
               icon-class="switch"
@@ -87,7 +91,7 @@
             >
               全局开关
             </p>
-          </div>
+          </button>
 
           <!-- 群组数量 -->
           <div class="text-center">
@@ -169,6 +173,7 @@ export default {
       },
       botInfo: {},
       pluginSectionHeight: 0,
+      statusBusy: false,
     }
   },
   created() {
@@ -197,9 +202,9 @@ export default {
       })
     },
     handleBotStatus() {
-      if (!this.botInfo.self_id) return
-      var loading = this.getLoading(".left-info-container")
-
+      if (!this.botInfo.self_id || this.statusBusy) return
+      this.statusBusy = true
+      const loading = this.getLoading(".left-info-container")
       this.postRequest(`${this.$root.prefix}/main/change_bot_status`, {
         bot_id: this.botInfo.storage_bot_id || this.botInfo.self_id,
         status: !this.botInfo.status,
@@ -214,6 +219,10 @@ export default {
         } else {
           this.$message.error(resp.info)
         }
+      }).catch((error) => {
+        this.$message.error(error.response?.data?.detail || error.message || "Bot 状态切换失败")
+      }).finally(() => {
+        this.statusBusy = false
         loading.close()
       })
     },
@@ -240,6 +249,9 @@ export default {
         } else {
           this.$message.error(resp.info)
         }
+      }).catch((error) => {
+        this.$message.error(error.response?.data?.detail || error.message || "插件策略状态加载失败")
+      }).finally(() => {
         loading.close()
       })
     },

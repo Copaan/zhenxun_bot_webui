@@ -198,6 +198,9 @@ export default {
       botInfo: {},
       requestCount: 0,
       detailId: null,
+      listLoading: false,
+      listSequence: 0,
+      deletingId: null,
     }
   },
   created() {
@@ -208,6 +211,7 @@ export default {
     window.sortFriendGroupList = this.sortFriendGroupList
   },
   beforeDestroy() {
+    this.listSequence += 1
     if (window.sortFriendGroupList === this.sortFriendGroupList) {
       delete window.sortFriendGroupList
     }
@@ -262,8 +266,12 @@ export default {
         this.deleteHandle(id)
       }
     },
-    deleteHandle(id) {
-      this.$confirm("确认删除/退出?", "提示", {
+    async deleteHandle(id) {
+      if (this.deletingId) return
+      this.deletingId = id
+      const listSequence = this.listSequence
+      try {
+        await this.$confirm("确认删除/退出?", "提示", {
         confirmButtonText: "确认",
         cancelButtonText: "取消",
         showClose: true,
@@ -271,7 +279,7 @@ export default {
         customClass: "confirm-box",
         confirmButtonClass: "el-button--danger",
         iconClass: "el-icon-warning text-red-500",
-      }).then(() => {
+        })
         let url = null
         let data = null
         if (this.activeBtn == "private") {
@@ -281,30 +289,34 @@ export default {
           url = "leave_group"
           data = { bot_id: this.botInfo.self_id, group_id: id }
         }
-        this.postRequest(`${this.$root.prefix}/manage/${url}`, data).then(
-          (resp) => {
-            if (resp.suc) {
-              if (resp.warning) {
-                this.$message.warning(resp.warning)
-              } else {
-                this.$message.success(resp.info)
-                setTimeout(() => {
-                  this.refresh()
-                }, 500)
-              }
-            } else {
-              this.$message.error(resp.info)
-            }
+        const resp = await this.postRequest(`${this.$root.prefix}/manage/${url}`, data)
+        if (resp.suc) {
+          if (resp.warning) {
+            this.$message.warning(resp.warning)
+          } else {
+            this.$message.success(resp.info)
+            setTimeout(() => {
+              if (listSequence === this.listSequence) this.refresh()
+            }, 500)
           }
-        )
-      })
+        } else {
+          this.$message.error(resp.info)
+        }
+      } catch (error) {
+        if (error !== "cancel") this.$message.error(error.response?.data?.detail || error.message || "删除或退出失败")
+      } finally {
+        this.deletingId = null
+      }
     },
     getGroupList() {
       if (!this.botInfo.self_id) return
+      const sequence = ++this.listSequence
+      this.listLoading = true
       const loading = this.getLoading(".data-list-container")
       this.getRequest(`${this.$root.prefix}/manage/get_group_list`, {
         bot_id: this.botInfo.self_id,
       }).then((resp) => {
+        if (sequence !== this.listSequence) return
         if (resp.suc) {
           if (resp.warning) {
             this.$message.warning(resp.warning)
@@ -317,15 +329,22 @@ export default {
         } else {
           this.$message.error(resp.info)
         }
+      }).catch((error) => {
+        if (sequence === this.listSequence) this.$message.error(error.response?.data?.detail || error.message || "群组列表加载失败")
+      }).finally(() => {
         loading.close()
+        if (sequence === this.listSequence) this.listLoading = false
       })
     },
     getFriendList() {
       if (!this.botInfo.self_id) return
+      const sequence = ++this.listSequence
+      this.listLoading = true
       const loading = this.getLoading(".data-list-container")
       this.getRequest(`${this.$root.prefix}/manage/get_friend_list`, {
         bot_id: this.botInfo.self_id,
       }).then((resp) => {
+        if (sequence !== this.listSequence) return
         if (resp.suc) {
           if (resp.warning) {
             this.$message.warning(resp.warning)
@@ -338,7 +357,11 @@ export default {
         } else {
           this.$message.error(resp.info)
         }
+      }).catch((error) => {
+        if (sequence === this.listSequence) this.$message.error(error.response?.data?.detail || error.message || "好友列表加载失败")
+      }).finally(() => {
         loading.close()
+        if (sequence === this.listSequence) this.listLoading = false
       })
     },
   },

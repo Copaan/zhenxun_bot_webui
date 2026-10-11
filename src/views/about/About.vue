@@ -30,6 +30,7 @@
       </div>
       <span>{{ restartStatus.launcher_managed ? "可在此统一重启应用" : "当前不是 launcher 托管模式，请手动重启" }}</span>
     </div>
+    <div v-if="statusStale" class="inline-alert warning">重启状态暂不可确认，页面保留上次已知状态；请恢复连接后重新检查。</div>
 
     <section class="update-section">
       <div class="section-heading">
@@ -89,7 +90,7 @@
           </div>
           <div class="version-actions">
             <span>{{ component.ref ? `来源 ${component.ref}` : "官方仓库" }}</span>
-            <el-button v-if="isPendingUpdate(component.key)" type="primary" size="small" icon="el-icon-refresh-right" @click="applyUpdate(jobFor(component.key))">
+            <el-button v-if="isPendingUpdate(component.key)" type="primary" size="small" icon="el-icon-refresh-right" :loading="applyingJobId === jobFor(component.key).job_id" :disabled="Boolean(applyingJobId && applyingJobId !== jobFor(component.key).job_id)" @click="applyUpdate(jobFor(component.key))">
               重启后应用
             </el-button>
             <el-button v-else type="primary" size="small" :loading="isUpdating(component.key)" :disabled="!canUpdate(component)" @click="startUpdate(component)">
@@ -130,6 +131,7 @@
 import logoUrl from "@/assets/image/logo.png"
 import { hasDirtyState } from "@/utils/dirty-state"
 import { requestRestartWithRecovery } from "@/utils/restart-flow"
+import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 import MigrationPanel from "./MigrationPanel.vue"
 
 const COMPONENT_META = {
@@ -145,7 +147,7 @@ export default {
     return {
       logoUrl, checking: false, updateInfo: null, updateError: "",
       options: { channel: "main", method: "git", source: "aliyun", force: false },
-      jobs: {}, pollTimer: null, restarting: false,
+      jobs: {}, pollTimer: null, pollSequence: 0, restarting: false, applyingJobId: "", destroyed: false, statusStale: false, unsubscribeNetwork: null,
       restartStatus: { launcher_managed: false, pending_restart: false, pending_count: 0, pending_reasons: [], pending_items: [] },
     }
   },
@@ -174,9 +176,42 @@ export default {
     if (activeJobId) this.pollJob(activeJobId, true)
     this.loadRestartStatus()
     window.addEventListener("zhenxun-restart-status-changed", this.loadRestartStatus)
+    this.onVisibility = () => {
+      if (document.hidden) {
+        this.pollSequence += 1
+        if (this.pollTimer) window.clearTimeout(this.pollTimer)
+        this.pollTimer = null
+      } else {
+        const activeJobId = sessionStorage.getItem("zhenxun_update_job_id")
+        if (activeJobId) this.pollJob(activeJobId, true)
+      }
+    }
+    this.onAuthExpired = () => {
+      this.pollSequence += 1
+      if (this.pollTimer) window.clearTimeout(this.pollTimer)
+      this.pollTimer = null
+    }
+    this.unsubscribeNetwork = onBusinessNetworkChange((frozen) => {
+      if (frozen) this.onAuthExpired()
+      else if (!document.hidden) {
+        const activeJobId = sessionStorage.getItem("zhenxun_update_job_id")
+        if (activeJobId) this.pollJob(activeJobId, true)
+      }
+    })
+    document.addEventListener("visibilitychange", this.onVisibility)
+    window.addEventListener("zhenxun-auth-expired", this.onAuthExpired)
     this.checkUpdates(false)
   },
-  beforeDestroy() { if (this.pollTimer) window.clearTimeout(this.pollTimer); window.removeEventListener("zhenxun-restart-status-changed", this.loadRestartStatus) },
+  beforeDestroy() {
+    this.destroyed = true
+    this.pollSequence += 1
+    if (this.pollTimer) window.clearTimeout(this.pollTimer)
+    this.pollTimer = null
+    this.unsubscribeNetwork?.()
+    document.removeEventListener("visibilitychange", this.onVisibility)
+    window.removeEventListener("zhenxun-auth-expired", this.onAuthExpired)
+    window.removeEventListener("zhenxun-restart-status-changed", this.loadRestartStatus)
+  },
   methods: {
     pendingItemLabel(item) {
       const actions = { install: "安装插件", update: "更新插件", uninstall: "卸载插件" }
@@ -190,6 +225,7 @@ export default {
           : await this.getRequest(`${this.$root.prefix}/system/update/status`, { channel: this.options.channel })
         if (!response || !response.suc) throw new Error(response && response.info)
         this.updateInfo = response.data
+        this.statusStale = false
         if (response.data.errors && response.data.errors.length) this.updateError = "官方版本服务暂时不可用，请稍后重试。"
         if (response.data.pending_job && response.data.pending_job.job_id) this.pollJob(response.data.pending_job.job_id)
       } catch (error) { this.updateError = error.response?.data?.detail || error.message || "版本信息获取失败。" }
@@ -226,8 +262,14 @@ export default {
       } catch (error) { this.$message.error(error.response?.data?.detail || error.message || "更新任务创建失败。") }
     },
     async loadRestartStatus() {
-      try { const response = await this.getRequest(`${this.$root.prefix}/system/restart/status`, {}, { suppressErrorToast: true }); if (response?.suc) this.restartStatus = response.data }
-      catch (error) { this.restartStatus = { launcher_managed: false, pending_restart: false, pending_count: 0, pending_reasons: [], pending_items: [] } }
+      try {
+        const response = await this.getRequest(`${this.$root.prefix}/system/restart/status`, {}, { suppressErrorToast: true })
+        if (!response?.suc) throw new Error(response?.info || "重启状态暂不可确认")
+        this.restartStatus = response.data
+        this.statusStale = false
+      } catch (error) {
+        this.statusStale = true
+      }
     },
     async restartWorker() {
       if (!this.restartStatus.launcher_managed || this.restarting) return
@@ -239,6 +281,8 @@ export default {
       finally { this.restarting = false }
     },
     async applyUpdate(job) {
+      if (!job?.job_id || this.applyingJobId) return
+      this.applyingJobId = job.job_id
       try {
         await requestRestartWithRecovery(this, {
           request: () => this.postRequest(`${this.$root.prefix}/system/update/jobs/${job.job_id}/apply`, {}),
@@ -246,19 +290,28 @@ export default {
         })
       } catch (error) {
         this.$message.error(error.response?.data?.detail || error.message || "更新应用请求失败。")
+      } finally {
+        if (this.applyingJobId === job.job_id) this.applyingJobId = ""
       }
     },
-    pollJob(jobId, immediate = false) {
+    pollJob(jobId, immediate = false, retryCount = 0) {
+      if (this.destroyed || document.hidden || isBusinessNetworkFrozen()) return
       if (this.pollTimer) window.clearTimeout(this.pollTimer)
+      const sequence = ++this.pollSequence
       this.pollTimer = window.setTimeout(async () => {
+        if (this.destroyed || sequence !== this.pollSequence || document.hidden || isBusinessNetworkFrozen()) return
         try {
           const response = await this.getRequest(`${this.$root.prefix}/system/update/jobs/${jobId}`, {}, { suppressErrorToast: true })
           if (!response || !response.suc) throw new Error(response && response.info)
           const job = response.data; this.$set(this.jobs, job.component, job)
-          if (!["completed", "failed", "pending_restart"].includes(job.state)) this.pollJob(jobId)
+          if (!["completed", "failed", "pending_restart"].includes(job.state)) this.pollJob(jobId, false, 0)
           else if (job.state === "completed") { sessionStorage.removeItem("zhenxun_update_job_id"); this.$message.success(job.apply_mode === "hot_reloaded" ? "资源已热更新，无需重启。" : `${COMPONENT_META[job.component].name}更新完成。`); await this.checkUpdates(true); await this.loadRestartStatus() }
           else if (job.state === "failed") { sessionStorage.removeItem("zhenxun_update_job_id"); this.$message.error(this.jobStateLabel(job)) }
-        } catch (error) { this.pollJob(jobId) }
+        } catch (error) {
+          if (this.destroyed || sequence !== this.pollSequence || document.hidden || isBusinessNetworkFrozen()) return
+          if (retryCount < 3) this.pollJob(jobId, false, retryCount + 1)
+          else this.updateError = "更新任务状态暂时无法读取，请稍后点击检查更新。"
+        }
       }, immediate ? 0 : 1500)
     },
   },
@@ -276,7 +329,7 @@ export default {
 .brand-block p:last-child, .section-heading p { margin: 7px 0 0; color: var(--text-color-secondary); }
 .update-section { padding: 26px 0 30px; border-bottom: 1px solid var(--border-color-light); }.section-heading h2, .about-content h2 { margin: 0; font-size: 20px; }
 .update-options { display: flex; gap: 8px; }.update-options .el-select { width: 150px; }.advanced-options { display: flex; flex-direction: column; gap: 10px; }.advanced-options label { color: var(--text-color-secondary); font-size: 12px; }.advanced-options p { margin: 0; color: var(--text-color-secondary); font-size: 12px; line-height: 1.5; }
-.inline-alert { margin-top: 14px; padding: 10px 12px; border-radius: 6px; font-size: 13px; }.inline-alert.error { color: var(--danger-color, #e05260); background: rgba(224, 82, 96, .09); }
+.inline-alert { margin-top: 14px; padding: 10px 12px; border-radius: 6px; font-size: 13px; }.inline-alert.error { color: var(--danger-color, #e05260); background: rgba(224, 82, 96, .09); }.inline-alert.warning { color: var(--warning-color, #a87316); background: rgba(197, 144, 39, .09); }
 .version-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; min-height: 190px; margin-top: 16px; }
 .version-card { display: flex; min-width: 0; flex-direction: column; padding: 18px; border: 1px solid var(--border-color-light); border-radius: 7px; background: var(--bg-color-secondary); }
 .version-card-title { display: flex; align-items: center; gap: 11px; min-width: 0; }.version-card-title > div { min-width: 0; flex: 1; }.version-card-title h3 { overflow: hidden; margin: 0 0 3px; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }.version-card-title span { color: var(--text-color-secondary); font-size: 12px; }

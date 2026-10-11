@@ -22,7 +22,13 @@
           boxShadow: isSelected(data.module) ? 'var(--primary-shadow)' : 'none',
           background: 'var(--bg-color-secondary)',
         }"
+        role="button"
+        tabindex="0"
+        :aria-pressed="isSelected(data.module)"
+        :aria-label="`${data.plugin_name}，${isSelected(data.module) ? '已选中' : '未选中'}`"
         @click="toggleSelection(data)"
+        @keydown.enter.prevent="toggleSelection(data)"
+        @keydown.space.prevent="toggleSelection(data)"
       >
         <!-- 选中标记 -->
         <div

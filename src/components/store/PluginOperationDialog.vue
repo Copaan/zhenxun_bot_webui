@@ -5,7 +5,7 @@
     :close-on-click-modal="false"
     :close-on-press-escape="!operation.active"
     :before-close="close"
-    width="420px"
+    width="min(420px, 94vw)"
     custom-class="plugin-operation-dialog"
   >
     <div class="operation-content" :class="`is-${operation.status}`">
@@ -17,9 +17,9 @@
       </div>
     </div>
     <span v-if="!operation.active" slot="footer">
-      <template v-if="operation.applyMode === 'restart_pending' && operation.restartAvailable">
+      <template v-if="operation.applyMode === 'restart_pending'">
         <el-button @click="close">稍后处理</el-button>
-        <el-button type="primary" :loading="restarting" @click="restart">立即重启</el-button>
+        <el-button v-if="operation.restartAvailable" type="primary" :loading="restarting" @click="restart">立即重启</el-button>
       </template>
       <el-button v-else type="primary" @click="close">完成</el-button>
     </span>
@@ -52,7 +52,7 @@ export default {
           request: () => this.postRequest(`${this.$root.prefix}/system/restart/apply-pending`, {}),
           recovery: {
             policy: "preserve",
-            returnRoute: this.$route.path,
+            returnRoute: this.$route.fullPath,
             message: "插件变更将在新进程中生效。",
             accessUrls: this.operation.accessUrls,
             accessTargets: this.operation.accessTargets,
@@ -67,7 +67,7 @@ export default {
     },
     close(done) {
       if (this.operation.active) return
-      sessionStorage.removeItem("zhenxun_plugin_operation")
+      if (!['restart_pending', 'restart_requested', 'preparing', 'verifying', 'unknown', 'recovery_required'].includes(this.operation.applyMode)) sessionStorage.removeItem("zhenxun_plugin_operation")
       this.$store.commit("CLEAR_PLUGIN_OPERATION")
       if (typeof done === "function") done()
     },
@@ -81,6 +81,6 @@ export default {
 .operation-content.is-success > i { color: var(--success-color); }
 .operation-content.is-error > i { color: var(--danger-color); }
 h3 { margin: 0 0 7px; font-size: 18px; }
-p { margin: 0 0 8px; color: var(--text-color-secondary); line-height: 1.6; }
+p { margin: 0 0 8px; color: var(--text-color-secondary); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 strong { overflow-wrap: anywhere; }
 </style>

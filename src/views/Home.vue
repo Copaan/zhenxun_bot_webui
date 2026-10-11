@@ -458,10 +458,6 @@
             <strong>{{ lifecycleReadyCount }} / {{ lifecycleStatus.component_count }}</strong>
           </div>
           <div class="startup-report-row">
-            <span>活动资源</span>
-            <strong>{{ lifecycleActiveResources }}</strong>
-          </div>
-          <div class="startup-report-row">
             <span>当前变更</span>
             <strong>{{ lifecycleStatus.current_mutation?.kind || "无" }}</strong>
           </div>
@@ -470,41 +466,23 @@
             <strong>{{ lifecycleStatus.current_mutation.phase }}</strong>
           </div>
           <div class="startup-report-row">
-            <span>活动作用域</span>
-            <strong>{{ lifecycleStatus.active_scope_count || 0 }}</strong>
-          </div>
-          <div class="startup-report-row">
             <span>后台操作</span>
             <strong>{{ lifecycleStatus.operation_registry?.active_count || 0 }}</strong>
           </div>
           <div class="startup-report-row">
-            <span>已观测资源归属率</span>
-            <strong>{{ lifecycleStatus.ownership?.coverage_percent == null ? "未知" : `${lifecycleStatus.ownership.coverage_percent}%` }}</strong>
-          </div>
-          <div class="startup-report-row">
-            <span>文件监听</span>
-            <strong>
-              {{ watchModeLabel(lifecycleStatus.plugin_runtime?.watcher?.mode) }} /
-              {{ watchStateLabel(lifecycleStatus.plugin_runtime?.watcher?.state) }}
-            </strong>
+            <span>插件代际</span>
+            <strong>{{ lifecycleStatus.plugin_runtime?.generation || 0 }}</strong>
           </div>
           <div v-if="lifecycleStatus.plugin_runtime?.last_operation" class="startup-report-row">
             <span>最近代码与配置更新</span>
             <strong>{{ runtimeApplyLabel(lifecycleStatus.plugin_runtime.last_operation.apply_mode) }}</strong>
           </div>
-          <details v-if="lifecycleStatus.plugin_runtime?.last_operation?.steps?.length" class="startup-diagnostic">
-            <summary>查看本批更新结果</summary>
-            <p v-for="(step, index) in lifecycleStatus.plugin_runtime.last_operation.steps" :key="index">
-              {{ runtimeApplyLabel(step.apply_mode) }} · {{ (step.changed || []).join('、') }}
-              <span v-if="step.reason_codes?.length || step.reason"> · {{ (step.reason_codes?.length ? step.reason_codes : [step.reason]).map(runtimeReasonLabel).join('；') }}</span>
-            </p>
-          </details>
+          <p v-if="lifecycleStatus.plugin_runtime?.last_operation?.changed?.length" class="startup-diagnostic">
+            {{ lifecycleStatus.plugin_runtime.last_operation.changed.join('、') }}
+            <span v-if="lifecycleStatus.plugin_runtime.last_operation.reason"> · {{ runtimeReasonLabel(lifecycleStatus.plugin_runtime.last_operation.reason) }}</span>
+          </p>
           <p v-for="reason in lifecycleStatus.plugin_runtime?.pending_restart_reasons || []" :key="reason" class="startup-failures">{{ runtimeReasonLabel(reason) }}</p>
           <NetworkStatus :status="lifecycleStatus.network || {}" />
-          <div class="startup-report-row">
-            <span>TLS关闭超时回收</span>
-            <strong>{{ lifecycleStatus.transport?.tls_drain_abort_count || 0 }}</strong>
-          </div>
           <template v-if="lifecycleStatus.http_sidecar?.mode">
             <div class="startup-report-row">
               <span>HTTP兼容入口</span>
@@ -547,43 +525,15 @@
               <span>HTTP累计重试</span>
               <strong>{{ lifecycleStatus.http_sidecar.total_retries }}</strong>
             </div>
-            <div v-if="lifecycleStatus.http_sidecar.unverified_child_diagnostic" class="startup-failures">
-              未验证的HTTP子进程诊断：{{ httpErrorLabel(lifecycleStatus.http_sidecar.unverified_child_diagnostic.error_code) }}
-            </div>
             <div v-if="lifecycleStatus.http_sidecar.mode === 'serve'" class="startup-failures">
               HTTP兼容入口使用明文传输，请优先通过HTTPS管理真寻。
             </div>
           </template>
-          <div
-            v-if="lifecycleStatus.ownership?.unowned_resource_count"
-            class="startup-failures"
-          >
-            {{ lifecycleStatus.ownership.unowned_resource_count }} 项长期资源尚未归属
-          </div>
           <div v-if="lifecycleStatus.recovery_required?.length" class="startup-failures">
             需要恢复：{{ lifecycleStatus.recovery_required.join("、") }}
           </div>
           <div v-if="lifecycleUnhealthyComponents.length" class="startup-failures">
             {{ lifecycleUnhealthyComponents.join("、") }}
-          </div>
-          <div v-if="lifecycleStatus.plugin_runtime?.integrity_recovery_required?.length" class="startup-failures">
-            插件入口已冻结：{{ lifecycleStatus.plugin_runtime.integrity_recovery_required.join("、") }}
-          </div>
-          <article v-for="(failure, index) in lifecycleStopFailures" :key="`stop-${index}`" class="startup-diagnostic">
-            <strong>{{ failure.owner }}</strong>
-            <p>关闭阶段：{{ failure.stage }}</p>
-            <code>{{ failure.error_code }}</code>
-          </article>
-          <article v-for="(resource, index) in lifecycleStatus.unresolved_resources || []" :key="`resource-${index}`" class="startup-diagnostic">
-            <strong>{{ resource.owner_id }}</strong>
-            <p>未确认释放：{{ resource.provider }} / {{ resource.resource_type }}</p>
-            <code>{{ resource.error_code || resource.state }}</code>
-          </article>
-          <div v-for="(task, index) in lifecycleStatus.cleanup_tasks || []" :key="`cleanup-${index}`" class="startup-failures">
-            清理任务：{{ task.owner }} / {{ task.stage }} / {{ task.state }}
-          </div>
-          <div v-if="sharedDependencyConflicts.length" class="startup-failures">
-            共享依赖冲突：{{ sharedDependencyConflicts.join("、") }}
           </div>
         </section>
         <section
@@ -632,62 +582,6 @@
             </div>
           </article>
         </section>
-        <section v-if="lifecycleStatus.process" class="startup-report-section">
-          <h3>运行健康</h3>
-          <div class="startup-report-row">
-            <span>异步任务</span>
-            <strong>{{ lifecycleStatus.process.asyncio_task_count || 0 }}</strong>
-          </div>
-          <div class="startup-report-row">
-            <span>线程</span>
-            <strong>{{ lifecycleStatus.process.thread_count || 0 }}</strong>
-          </div>
-          <div class="startup-report-row">
-            <span>子进程</span>
-            <strong>{{ lifecycleStatus.process.child_process_count || 0 }}</strong>
-          </div>
-          <div class="startup-report-row">
-            <span>事件循环延迟</span>
-            <strong>{{ formatDuration(lifecycleStatus.process.event_loop_lag_ms) }}</strong>
-          </div>
-          <template v-if="lifecycleStatus.transport">
-            <div class="startup-report-row">
-              <span>HTTP / WebSocket 重置</span>
-              <strong>
-                {{ lifecycleStatus.transport.http_reset_count || 0 }} /
-                {{ lifecycleStatus.transport.websocket_reset_count || 0 }}
-              </strong>
-            </div>
-            <div class="startup-report-row">
-              <span>Proactor 关闭重置</span>
-              <strong>{{ lifecycleStatus.transport.proactor_close_reset_count || 0 }}</strong>
-            </div>
-            <div class="startup-report-row">
-              <span>预排空连接</span>
-              <strong>{{ lifecycleStatus.transport.predrained_connection_count || 0 }}</strong>
-            </div>
-            <div
-              v-if="lifecycleStatus.transport.unclassified_windows_reset_count"
-              class="startup-failures"
-            >
-              未分类 Windows 重置：
-              {{ lifecycleStatus.transport.unclassified_windows_reset_count }}
-              <template v-if="lifecycleStatus.transport.last_unclassified_reset?.diagnostic_id">
-                · {{ lifecycleStatus.transport.last_unclassified_reset.diagnostic_id }}
-              </template>
-            </div>
-          </template>
-          <template v-if="launcherWorkerProcess">
-            <div class="startup-report-row">
-              <span>Worker spawn PID</span>
-              <strong>{{ launcherWorkerProcess.spawn_pid || "-" }}</strong>
-            </div>
-            <div class="startup-report-row">
-              <span>Worker runtime PID</span>
-              <strong>{{ launcherWorkerProcess.runtime_pid || "-" }}</strong>
-            </div>
-          </template>
-        </section>
         <section class="startup-report-section">
           <h3>慢事务</h3>
           <div v-if="!startupSlowOperations.length" class="startup-empty">暂无慢事务</div>
@@ -699,30 +593,6 @@
             <span>{{ operationLabel(operation) }}</span>
             <strong>{{ formatDuration(operation.duration_ms) }}</strong>
           </div>
-        </section>
-        <section v-if="lifecycleStatus.launcher?.process_history?.length" class="startup-report-section">
-          <h3>进程关闭记录</h3>
-          <article v-for="item in lifecycleStatus.launcher.process_history.slice(-6).reverse()" :key="item.startup_id" class="startup-diagnostic">
-            <strong>{{ item.role }}</strong>
-            <p>Spawn PID {{ item.spawn_pid || "-" }} / Runtime PID {{ item.runtime_pid || "-" }}</p>
-            <p>退出来源：{{ item.exit_reason || "未知" }}</p>
-            <p>Spawn 退出码：{{ item.spawn_return_code ?? item.return_code ?? "未退出" }} · Runtime 关闭：{{ item.runtime_shutdown?.result === "confirmed" ? "已核验" : "未确认" }}</p>
-            <code v-if="item.shutdown_id">{{ item.shutdown_id }}</code>
-            <p v-for="(stage, index) in item.stop_stages || []" :key="index">
-              {{ stage.stage }} · {{ formatDuration((stage.elapsed_seconds || 0) * 1000) }}
-              <span v-if="stage.timed_out"> · 预算耗尽</span>
-              <code v-if="stage.error_code">{{ stage.error_code }}</code>
-            </p>
-          </article>
-        </section>
-        <section class="startup-report-section">
-          <h3>诊断采集与关闭核验</h3>
-          <p>快照：{{ lifecycleStatus.snapshot_at || "未知" }} · {{ lifecycleStatus.snapshot_phase || "未知" }}</p>
-          <p>系统采样：{{ lifecycleStatus.process?.process_sample_state || "未知" }} · {{ lifecycleStatus.process?.process_sampled_at || "暂无有效采样" }}</p>
-          <p>Task、线程及子进程数量为最后采样值，不代表关闭后的存活数量。</p>
-          <p>launcher 终态：{{ lifecycleStatus.launcher?.terminal_shutdown?.result === "confirmed" ? "已核验关闭" : "尚无匹配终态收据" }}</p>
-          <p v-if="lifecycleStatus.launcher?.current_commit_session">当前事务：{{ lifecycleStatus.launcher.current_commit_session.phase }}</p>
-          <p v-if="lifecycleStatus.launcher?.historical_commit_session">历史已结束事务：{{ lifecycleStatus.launcher.historical_commit_session.phase }}</p>
         </section>
       </div>
     </el-drawer>
@@ -738,10 +608,12 @@ import PluginOperationDialog from "@/components/store/PluginOperationDialog"
 import logoUrl from "@/assets/image/logo.png"
 import EventBus from "@/utils/event-bus"
 import { clearCookie } from "@/utils/api"
+import { hasValidAuthToken } from "@/utils/auth-token"
 import { getHeaderHeight } from "@/utils/utils"
 import { hasDirtyState } from "@/utils/dirty-state"
 import { startRestartRecovery } from "@/utils/restart-recovery"
 import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
+import { pluginOperationResult } from "@/utils/plugin-operation"
 export default {
   name: "MainHome",
   components: { AccountSecurityDialog, BotRequiredState, PluginOperationDialog, NetworkStatus },
@@ -757,12 +629,12 @@ export default {
         component_count: 0,
         state_counts: {},
         components: [],
-        process: null,
         operation_registry: { operations: [], active_count: 0 },
       },
       startupDrawerVisible: false,
       startupReportLoading: false,
       startupPollTimer: null,
+      pluginOperationTimer: null, pluginOperationController: null, pluginReadSequence: 0,
       asideShow: false,
       isCollapsed: false,
       isMobile: false,
@@ -811,6 +683,11 @@ export default {
     }
   },
   watch: {
+    '$store.state.pluginOperation.active'(active) {
+      if (active) this.schedulePluginOperation()
+      else if (this.$store.state.pluginOperation.applyMode === 'unknown') this.schedulePluginOperation()
+      else this.pausePluginOperation()
+    },
     asideShow() {
       EventBus.$emit("sidebar-aside", {
         asideShow: this.asideShow,
@@ -906,40 +783,11 @@ export default {
       const states = this.lifecycleStatus.state_counts || {}
       return Number(states.ready || 0)
     },
-    lifecycleActiveResources() {
-      const resources = [
-        ...(this.lifecycleStatus.components || []),
-        ...(this.lifecycleStatus.dynamic_scopes || []),
-      ]
-      return resources.reduce((total, component) => {
-        const counts = component.resource_counts || {}
-        return total + Object.entries(counts).reduce(
-          (sum, [key, value]) => sum + (key.endsWith(":active") ? Number(value || 0) : 0),
-          0
-        )
-      }, 0)
-    },
     lifecycleUnhealthyComponents() {
       return (this.lifecycleStatus.components || [])
         .filter((component) => ["degraded", "failed"].includes(component.state))
         .slice(0, 8)
         .map((component) => component.component_id)
-    },
-    lifecycleStopFailures() {
-      return (this.lifecycleStatus.components || []).flatMap(component =>
-        (component.metadata?.stop_errors || []).map(failure => ({
-          owner: component.component_id,
-          ...failure,
-        }))
-      )
-    },
-    launcherWorkerProcess() {
-      return (this.lifecycleStatus.launcher?.process_graph || [])
-        .find((process) => process.role === "worker") || null
-    },
-    sharedDependencyConflicts() {
-      const evidence = this.lifecycleStatus.plugin_runtime?.shared_dependency_evidence || {}
-      return Object.keys(evidence).slice(0, 8)
     },
     restartTooltip() {
       if (this.restartStatusUnknown) return this.pendingRestartCount ? `有 ${this.pendingRestartCount} 项修改等待重启应用；当前状态暂不可确认` : "重启状态暂不可确认"
@@ -962,6 +810,7 @@ export default {
     window.addEventListener("resize", this.handleResize)
     window.addEventListener("zhenxun-websocket-state", this.handleSocketState)
     window.addEventListener("zhenxun-auth-expired", this.closeSockets)
+    document.addEventListener("visibilitychange", this.pluginOperationVisibility)
     window.addEventListener("zhenxun-restart-status-changed", this.loadRestartStatus)
     const savedCollapse = localStorage.getItem("menuCollapsed")
     this.collapsePreference =
@@ -969,6 +818,8 @@ export default {
     this.applyScreenState(true)
   },
   beforeDestroy() {
+    this.pausePluginOperation()
+    document.removeEventListener("visibilitychange", this.pluginOperationVisibility)
     this._stopNetworkWatch?.()
     window.removeEventListener("resize", this.handleResize)
     window.removeEventListener("zhenxun-websocket-state", this.handleSocketState)
@@ -979,27 +830,23 @@ export default {
   inject: ["setAppTheme"],
   methods: {
     httpModeLabel, httpStateLabel, httpErrorLabel,
-    watchModeLabel(mode) {
-      return { hot_only: "仅安全热重载", disabled: "不监听", auto_restart: "热重载及自动重启" }[mode] || "未知策略"
-    },
-    watchStateLabel(state) {
-      return { watching: "监听中", disabled: "已关闭", stopped: "已停止", idle: "等待监听目录", retrying: "正在恢复监听" }[state] || "尚未就绪"
-    },
     runtimeApplyLabel(mode) {
       return { hot_reloaded: "插件已热重载", config_reloaded: "配置已应用", component_restarted: "组件已重建", webui_refresh: "页面资源已更新", restart_pending: "等待重启", restart_requested: "已请求重启", failed: "更新失败", rolled_back: "更新已回滚" }[mode] || "状态未确认"
     },
     runtimeReasonLabel(reason) {
-      const labels = { core_source_changed: "核心代码变化，需要重启", dependencies_changed: "依赖声明变化，需要重启", plugin_dependencies_changed: "插件依赖变化，需要重启", orm_model_changed: "数据库模型变化，需要重启", plugin_not_hot_reloadable: "此插件不能安全热重载", configuration_batch_incomplete: "本批配置未完全应用，相关代码未继续热重载", import_time_config_consumer_requires_restart: "配置消费者需要重启", import_time_environment_consumer_requires_restart: "环境配置消费者需要重启", nonebot_compatibility: "当前框架不支持安全热重载" }
+      const labels = { dependencies_changed: "依赖声明变化，需要重启", plugin_dependencies_changed: "插件依赖变化，需要重启", builtin_plugin: "内置插件变化，需要重启", library_plugin: "库插件变化，需要重启", orm_model_changed: "数据库模型变化，需要重启", orm_model_new_plugin: "新插件包含数据库模型，需要重启", external_patch: "插件修改了外部模块，需要重启", plugin_not_hot_reloadable: "此插件不能安全热重载", import_time_config_consumer_requires_restart: "配置消费者需要重启", component_not_restartable: "相关组件需要重启", plugin_classification_miss: "插件需在启动早期加载，重启后生效" }
       if (String(reason).startsWith("environment:")) return `环境配置 ${reason.slice(12)} 需要重启`
       return labels[reason] || `更新原因：${reason}`
     },
     handleRecoveryNetwork(frozen) {
+      this.pausePluginOperation()
       if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
       this.startupPollTimer = null
       if (!frozen && !this._isDestroyed && !this._isBeingDestroyed) {
         this.loadStartupStatus()
         this.loadRestartStatus()
         this.$store.dispatch("initStatusSocket")
+        this.restorePluginOperation()
       }
     },
     startupStageLabel(stage) {
@@ -1043,20 +890,20 @@ export default {
     async loadStartupStatus() {
       if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
       this.startupPollTimer = null
-      if (isBusinessNetworkFrozen() || this._isDestroyed || this._isBeingDestroyed) return
+      if (isBusinessNetworkFrozen() || !hasValidAuthToken() || this._isDestroyed || this._isBeingDestroyed) return
       const epoch = businessNetworkEpoch()
       try {
         const response = await this.getRequest(`${this.$root.prefix}/system/startup/status`, {}, { suppressErrorToast: true })
-        if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
+        if (isBusinessNetworkFrozen() || !hasValidAuthToken() || epoch !== businessNetworkEpoch()) return
         if (response?.suc && response.data) this.startupStatus = response.data
         if (this.startupDrawerVisible && response?.suc && response.data) {
           this.startupReport = { ...this.startupReport, ...response.data }
         }
       } catch (error) {
-        if (isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
+        if (isBusinessNetworkFrozen() || !hasValidAuthToken() || epoch !== businessNetworkEpoch()) return
         this.startupStatus = { state: "failed", stages: {}, errors: [{ code: "status_unavailable" }] }
       }
-      if (isBusinessNetworkFrozen() || this._isDestroyed || this._isBeingDestroyed) return
+      if (isBusinessNetworkFrozen() || !hasValidAuthToken() || this._isDestroyed || this._isBeingDestroyed) return
       const settled = ["warmup_ready", "degraded", "failed"].includes(this.startupStatus.state)
       this.startupPollTimer = window.setTimeout(this.loadStartupStatus, settled ? 10000 : 1200)
     },
@@ -1107,47 +954,57 @@ export default {
         ? `${(duration / 1000).toFixed(2)} s`
         : `${Math.round(duration)} ms`
     },
+    pausePluginOperation() {
+      this.pluginReadSequence++; clearTimeout(this.pluginOperationTimer); this.pluginOperationTimer = null
+      this.pluginOperationController?.abort(); this.pluginOperationController = null
+    },
+    pluginOperationVisibility() { if (document.hidden) this.pausePluginOperation(); else this.restorePluginOperation() },
+    schedulePluginOperation() {
+      clearTimeout(this.pluginOperationTimer)
+      if (!this._isDestroyed && !this._isBeingDestroyed && !document.hidden && !isBusinessNetworkFrozen() && hasValidAuthToken()) this.pluginOperationTimer = setTimeout(() => this.restorePluginOperation(), 1500)
+    },
     async restorePluginOperation() {
+      this.pausePluginOperation()
+      if (this._isDestroyed || this._isBeingDestroyed || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       let saved
-      try { saved = JSON.parse(sessionStorage.getItem("zhenxun_plugin_operation") || "null") } catch (error) { saved = null }
+      const raw = sessionStorage.getItem("zhenxun_plugin_operation")
+      try { saved = JSON.parse(raw || "null") } catch (error) { saved = null }
       if (!saved?.operationId) return
+      const sequence = this.pluginReadSequence
+      const current = () => sequence === this.pluginReadSequence && raw === sessionStorage.getItem('zhenxun_plugin_operation') && !document.hidden && !isBusinessNetworkFrozen() && hasValidAuthToken()
+      const controller = new AbortController(); this.pluginOperationController = controller
+      const options = { signal: controller.signal, suppressErrorToast: true }
       const context = { action: saved.action || "install", pluginName: saved.pluginName || "插件" }
       try {
-        const response = await this.getRequest(`${this.$root.prefix}/store/operations/${saved.operationId}`, {}, { suppressErrorToast: true })
+        const response = await this.getRequest(`${this.$root.prefix}/store/operations/${saved.operationId}`, {}, options)
+        if (!current()) return
         if (response?.suc && response.data) {
           const entry = response.data
           if (entry.status === "running") {
             this.$store.commit("START_PLUGIN_OPERATION", { ...context, title: "插件操作仍在进行", message: "页面已恢复操作进度，请等待后端完成。" })
+            this.schedulePluginOperation()
             return
           }
-          const result = entry.result || {}
-          const pending = result.apply_mode === "restart_pending"
           this.$store.commit("START_PLUGIN_OPERATION", { ...context, title: "插件操作结果", message: "正在恢复上次操作结果。" })
-          this.$store.commit("FINISH_PLUGIN_OPERATION", {
-            status: result.apply_mode === "failed" ? "error" : pending ? "pending" : "success",
-            title: result.apply_mode === "failed" ? "插件操作失败" : pending ? "插件事务等待重启" : "插件操作完成",
-            message: pending ? "插件修改已暂存，明确重启后统一应用。" : result.apply_mode === "failed" ? "操作失败，运行版本已保留或回滚。" : "插件运行时变更已经生效。",
-            applyMode: result.apply_mode,
-            restartAvailable: result.restart_available,
-            accessUrls: result.access_urls || [],
-            accessTargets: result.access_targets || [],
-          })
+          this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult(entry, this.restartAvailable))
           return
         }
-        const pendingResponse = await this.getRequest(`${this.$root.prefix}/store/transactions/pending`, {}, { suppressErrorToast: true })
-        const operations = [
-          ...(pendingResponse?.data?.zhenxun?.operations || []),
-          ...(pendingResponse?.data?.nonebot?.operations || []),
-        ]
-        if (operations.some((item) => item.operation_id === saved.operationId)) {
+        const pendingResponse = await this.getRequest(`${this.$root.prefix}/store/transactions/pending`, {}, options)
+        if (!current()) return
+        const transaction = [pendingResponse?.data?.zhenxun, pendingResponse?.data?.nonebot].find(item => item?.operations?.some(operation => operation.operation_id === saved.operationId))
+        if (transaction) {
+          const mode = { pending_restart: 'restart_pending', migration_blocked: 'restart_pending', verification_pending: 'verifying', building: 'preparing', committed: 'applied', cleanup_pending: 'applied', recovery_required: 'recovery_required', failed: transaction.rollback_confirmed ? 'rolled_back' : 'failed' }[transaction.state]
           this.$store.commit("START_PLUGIN_OPERATION", { ...context, title: "插件事务等待重启", message: "插件修改已暂存，明确重启后统一应用。" })
-          this.$store.commit("FINISH_PLUGIN_OPERATION", { status: "pending", title: "插件事务等待重启", message: "插件修改已暂存，明确重启后统一应用。", applyMode: "restart_pending", restartAvailable: this.restartAvailable })
+          if (['verifying', 'preparing'].includes(mode)) this.schedulePluginOperation()
+          else this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({ status: transaction.state, result: { apply_mode: mode, transaction_state: transaction.state, cleanup_error: transaction.cleanup_error } }, this.restartAvailable))
           return
         }
       } catch (error) {
-        return
+        if (!current()) return
       }
-      sessionStorage.removeItem("zhenxun_plugin_operation")
+      this.$store.commit("START_PLUGIN_OPERATION", context)
+      this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({}, this.restartAvailable))
+      this.schedulePluginOperation()
     },
     handleSocketState(event) {
       const channel = event.detail?.channel
@@ -1192,7 +1049,7 @@ export default {
           accessUrls: response.data.target_access_urls ?? response.data.access_urls,
           accessTargets: response.data.target_access_targets ?? response.data.access_targets,
           preferredUrl: response.data.preferred_url,
-          returnRoute: this.$route.path,
+          returnRoute: this.$route.fullPath,
           message: "正在等待 launcher 启动新的真寻进程。",
         })
       } catch (error) {
@@ -1240,6 +1097,9 @@ export default {
       }
     },
     closeSockets() {
+      this.pausePluginOperation()
+      window.clearTimeout(this.startupPollTimer)
+      this.startupPollTimer = null
       this.$statusWebSocket.closeWebSocket()
       this.$logWebSocket.closeWebSocket()
       this.$chatWebSocket.closeWebSocket()

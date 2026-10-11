@@ -100,7 +100,7 @@
               <div class="model-list">
                 <div v-for="model in filteredModels" :key="model.model_name" class="model-row">
                   <div class="model-name"><strong>{{ model.model_name }}</strong><span><el-tag v-if="model.is_available" size="mini" type="success">启用</el-tag><el-tag v-else size="mini" type="info">停用</el-tag><el-tag v-for="tag in capabilityTags(model)" :key="tag" size="mini">{{ tag }}</el-tag></span></div>
-                  <div class="model-actions"><el-button type="text" icon="el-icon-connection" @click="testModel(model)">测试</el-button><el-button type="text" icon="el-icon-edit" @click="openModelEditor(model, modelIndex(model))">编辑</el-button><el-button type="text" icon="el-icon-delete" class="danger-text" @click="deleteModel(model)">删除</el-button></div>
+                  <div class="model-actions"><el-button type="text" icon="el-icon-connection" :loading="testingModelKey === modelTestKey(model)" :disabled="Boolean(testingModelKey)" @click="testModel(model)">测试</el-button><el-button type="text" icon="el-icon-edit" :disabled="Boolean(testingModelKey)" @click="openModelEditor(model, modelIndex(model))">编辑</el-button><el-button type="text" icon="el-icon-delete" class="danger-text" :disabled="Boolean(testingModelKey)" @click="deleteModel(model)">删除</el-button></div>
                 </div>
                 <div v-if="!filteredModels.length" class="empty-copy">没有匹配的模型</div>
               </div>
@@ -262,7 +262,7 @@ export default {
       advancedCategory: "client_settings", advancedSearch: "", advancedLocalIssues: [], repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
       loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, apiTypes: [], defaultApiBases: {}, discoveryApiTypes: [], effects: {}, runtime: {}, providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
       providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, sandbox: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
-      discovering: false, discoveryDialog: false, discoveredModels: [], selectedDiscovered: [], discoverySearch: "", providerProbeResults: {}, modelDialog: false, modelDraft: emptyModel(), modelEditIndex: null,
+      discovering: false, discoveryDialog: false, discoveredModels: [], selectedDiscovered: [], discoverySearch: "", providerProbeResults: {}, modelDialog: false, modelDraft: emptyModel(), modelEditIndex: null, testingModelKey: "",
       personaLoading: false, personaSaving: false, personaAvailable: null, personaRevision: "", personaDraft: { name: "", prompt: "", style: "", enabled: true }, personaOriginal: null, personaToneText: "", personaDialogueText: "", personaDirty: false,
       defaultTasks: [{ key: "chat", label: "对话" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
       schemaTabs: [
@@ -507,6 +507,7 @@ export default {
     openModelEditor(model = null, index = null) { this.modelDraft = model ? { ...clone(model), capabilities: undefined } : emptyModel(); this.modelEditIndex = index; this.modelDialog = true },
     confirmModel() { if (!this.modelDraft.model_name.trim()) return this.$message.warning("请填写模型名称。"); const value = { ...this.modelDraft, model_name: this.modelDraft.model_name.trim() }; delete value.capabilities; if (this.modelEditIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.modelEditIndex, 1, value); this.modelsDirty = true; this.invalidateProbeResults(); this.modelDialog = false; this.syncDirty() },
     modelIndex(model) { return this.providerDraft.models.findIndex((item) => item === model || item.model_name === model.model_name) },
+    modelTestKey(model) { return `${this.providerDraft?.name || this.selectedProviderName}/${model.model_name}` },
     deleteModel(model) { const actual = this.modelIndex(model); if (actual < 0) return; this.providerDraft.models.splice(actual, 1); this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty() },
     async saveModels() { if (this.saving) return; this.saving = "models"; try { const submitted = { models: JSON.stringify(this.providerDraft.models) }; const models = this.providerDraft.models.map(({ capabilities, ...model }) => model); const response = await this.aiPut(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}/models`, { expected_revision: this.revision, models }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "模型列表保存失败。") } finally { this.saving = "" } },
     capabilityTags(model) { const caps = model.capabilities || {}; const result = []; if (caps.is_embedding_model) result.push("Embedding"); if (caps.is_rerank_model) result.push("Rerank"); if ((caps.output_modalities || []).includes("image")) result.push("图像"); if ((caps.output_modalities || []).includes("audio")) result.push("语音"); if (caps.supports_tool_calling) result.push("工具"); return result.slice(0, 3) },
@@ -515,7 +516,10 @@ export default {
       const task = this.modelTask(model)
       const providerName = this.providerDraft.name.trim() || this.selectedProviderName
       if (!providerName) return this.$message.warning("请先填写服务商名称。")
-      try { await this.$confirm(`将对 ${providerName}/${model.model_name} 发起一次最小 ${task} 请求，可能产生费用。`, "确认模型测试", { type: "warning" }) } catch (_) { return }
+      const testKey = `${providerName}/${model.model_name}`
+      if (this.testingModelKey) return
+      this.testingModelKey = testKey
+      try { await this.$confirm(`将对 ${providerName}/${model.model_name} 发起一次最小 ${task} 请求，可能产生费用。`, "确认模型测试", { type: "warning" }) } catch (_) { this.testingModelKey = ""; return }
       try {
         const temporaryKey = this.providerDraft.api_key_slots.find((slot) => String(slot.value || "").trim())?.value || null
         const { capabilities, ...modelConfig } = model
@@ -534,6 +538,7 @@ export default {
         }, { suppressErrorToast: true })
         this.$message.success(`连接成功，延迟 ${response.data.latency_ms} ms`)
       } catch (error) { this.$message.error(apiErrorDetail(error, "模型测试失败。")) }
+      finally { if (this.testingModelKey === testKey) this.testingModelKey = "" }
     },
     async loadPersona() {
       this.personaLoading = true

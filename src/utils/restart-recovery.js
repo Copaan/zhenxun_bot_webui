@@ -47,6 +47,11 @@ const choosePreferredOrigin = ({ policy, preferredUrl, targets, currentOrigin })
   const eligibleExplicit = explicit && validOrigins.includes(explicit) ? explicit : null
   if (policy === "preserve" && current) {
     if (validOrigins.includes(current)) return current
+    const source = new URL(current)
+    if (targetKind(source) === 'local' && validOrigins.some(origin => {
+      const target = new URL(origin)
+      return targetKind(target) === 'local' && target.protocol === source.protocol && target.port === source.port
+    })) return current
     const currentHostname = new URL(current).hostname.toLowerCase()
     if (
       eligibleExplicit &&
@@ -106,7 +111,7 @@ export const restartRecoveryState = () => {
       sourceOrigin,
       preferredKind,
       preferredOrigin,
-      accessUrls: available,
+      accessUrls: uniqueTargets([preferredOrigin, ...available]),
       fallbackUrls: automatic.filter((url) => url !== preferredOrigin),
     }
   } catch (error) {
@@ -196,6 +201,7 @@ export const recoveryStatusMatches = (state, payload) => {
 export const recoveryProbeTargets = (state, sourceOrigin = window.location.origin) => {
   const candidates = uniqueTargets([state.preferredOrigin, ...(state.fallbackUrls || [])])
     .filter(url => state.accessUrls.includes(url))
+  if (state.policy === 'preserve' && state.preferredOrigin === sourceOrigin && candidates.includes(sourceOrigin)) return [sourceOrigin]
   if (new URL(sourceOrigin).protocol !== "https:") return candidates
   const httpListeners = new Set(state.accessUrls.filter(url => new URL(url).protocol === "http:")
     .map(url => {

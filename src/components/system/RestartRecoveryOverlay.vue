@@ -41,6 +41,7 @@ export default {
   },
   mounted() {
     window.addEventListener(RESTART_RECOVERY_EVENT, this.handleStart)
+    window.addEventListener("zhenxun-auth-expired", this.authenticationExpired)
     const saved = restartRecoveryState()
     if (saved) this.begin(saved)
   },
@@ -51,9 +52,11 @@ export default {
   },
   beforeDestroy() {
     window.removeEventListener(RESTART_RECOVERY_EVENT, this.handleStart)
+    window.removeEventListener("zhenxun-auth-expired", this.authenticationExpired)
     this.stopPolling()
   },
   methods: {
+    authenticationExpired() { this.stopPolling(); this.expired = true; this.timedOut = true },
     recoveryHref(baseUrl) {
       const returnRoute = this.state.returnRoute.startsWith("/") ? this.state.returnRoute : `/${this.state.returnRoute}`
       return `${baseUrl}/#/?reauth=1&redirect=${encodeURIComponent(returnRoute)}`

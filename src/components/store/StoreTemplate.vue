@@ -76,7 +76,7 @@
               <el-button type="text" @click="showDetails(plugin)">详情</el-button>
               <span class="action-spacer"></span>
               <el-button size="small" icon="el-icon-time" disabled>等待重启</el-button>
-              <el-button size="small" type="text" class="danger-text" @click="cancelPending(plugin)">撤销</el-button>
+              <el-button size="small" type="text" class="danger-text" :loading="pendingActionKey === (plugin.store_key || plugin.id)" :disabled="Boolean(pendingActionKey) || pluginOperation.active" @click="cancelPending(plugin)">撤销</el-button>
             </template>
             <template v-else>
               <el-button type="text" @click="showDetails(plugin)">详情</el-button>
@@ -87,12 +87,12 @@
             <span v-if="capability === 'ai_chat' && plugin.installed" class="chat-switch">当前启用 <el-switch :value="chatEnabled(plugin)" :disabled="switchSaving || switchLoading || !switchRevision" @change="setChatEnabled(plugin, $event)" /></span>
               <el-button v-if="capability === 'ai_chat' && plugin.installed" class="plugin-config-action" type="primary" plain size="small" icon="el-icon-setting" @click="openPluginConfiguration(plugin)">插件配置</el-button>
               <el-tooltip v-if="plugin.installed && plugin.reload_support === 'hot_reloadable'" content="热重载插件" placement="top">
-                <el-button class="icon-action" icon="el-icon-refresh" circle :loading="actionId === (plugin.store_key || plugin.id) && actionType === 'reload'" @click="runAction('reload', plugin)" />
+                <el-button class="icon-action" icon="el-icon-refresh" circle :loading="actionId === (plugin.store_key || plugin.id) && actionType === 'reload'" :disabled="Boolean(actionId) || pluginOperation.active" @click="runAction('reload', plugin)" />
               </el-tooltip>
               <el-tooltip v-if="!plugin.installed" :content="plugin.catalog_status === 'missing' ? '仓库中找不到目录声明的插件文件' : '安装插件'" placement="top">
-                <span><el-button type="primary" size="small" :disabled="plugin.catalog_status === 'missing'" :loading="actionId === (plugin.store_key || plugin.id)" @click="runAction('install', plugin)">安装</el-button></span>
+                <span><el-button type="primary" size="small" :disabled="plugin.catalog_status === 'missing' || Boolean(actionId) || pluginOperation.active" :loading="actionId === (plugin.store_key || plugin.id)" @click="runAction('install', plugin)">安装</el-button></span>
               </el-tooltip>
-              <el-button v-if="plugin.installed && plugin.update_available" type="warning" size="small" :loading="actionId === (plugin.store_key || plugin.id) && actionType === 'update'" @click="runAction('update', plugin)">更新插件</el-button>
+              <el-button v-if="plugin.installed && plugin.update_available" type="warning" size="small" :loading="actionId === (plugin.store_key || plugin.id) && actionType === 'update'" :disabled="Boolean(actionId) || pluginOperation.active" @click="runAction('update', plugin)">更新插件</el-button>
               <el-dropdown v-if="plugin.installed" trigger="click" @command="runAction($event, plugin)">
                 <el-button size="small">已安装<i class="el-icon-arrow-down el-icon--right" /></el-button>
                 <el-dropdown-menu slot="dropdown"><el-dropdown-item command="remove">卸载</el-dropdown-item></el-dropdown-menu>
@@ -136,7 +136,7 @@ export default {
   data() {
     let source = "auto"
     try { source = localStorage.getItem("zhenxun_plugin_download_source") || "auto" } catch (_) { /* Storage may be disabled. */ }
-    return { chatSwitches: {}, switchRevision: "", switchSaving: false, switchLoading: false, switchSequence: 0, downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", page: 1, pageSize: 18, actionId: null, actionType: "", drawerVisible: false, selectedPlugin: null, configModule: "" }
+    return { chatSwitches: {}, switchRevision: "", switchSaving: false, switchLoading: false, switchSequence: 0, downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", page: 1, pageSize: 18, actionId: null, actionType: "", pendingActionKey: "", drawerVisible: false, selectedPlugin: null, configModule: "" }
   },
   computed: {
     pluginOperation() { return this.$store.state.pluginOperation },
@@ -252,7 +252,8 @@ export default {
     },
     async runAction(action, plugin) {
       const labels = { install: "安装", update: "更新", remove: "卸载", reload: "热重载" }
-      if (this.pluginOperation.active) {
+      const actionKey = plugin.store_key || plugin.id
+      if (this.pluginOperation.active || this.actionId) {
         this.$message.warning("已有插件操作正在进行，请等待完成。")
         return
       }
@@ -260,12 +261,12 @@ export default {
         this.$message.error("目录中的插件路径已失效，请等待目录维护者修复。")
         return
       }
+      this.actionId = actionKey
+      this.actionType = action
       const requestedSource = this.downloadSource
       const sourceLabel = { auto: "自动（阿里优先，GitHub 后备）", ali: "仅阿里", git: "仅 GitHub" }[requestedSource]
       const confirmed = await this.$cuteConfirm({ title: `${labels[action]}插件`, message: `确认${labels[action]}“${plugin.name}”？${["install", "update"].includes(action) ? ` 下载源：${sourceLabel}` : ""}`, confirmButtonText: "确认", cancelButtonText: "取消", type: action === "remove" ? "warning" : "info" })
-      if (!confirmed) return
-      this.actionId = plugin.store_key || plugin.id
-      this.actionType = action
+      if (!confirmed) { this.actionId = null; this.actionType = ""; return }
       const operationId = this.newOperationId()
       sessionStorage.setItem("zhenxun_plugin_operation", JSON.stringify({ operationId, action, pluginName: plugin.name }))
       const runningTitles = {
@@ -335,8 +336,11 @@ export default {
     },
     async cancelPending(plugin) {
       if (!plugin.pending_operation_id) return
+      const actionKey = plugin.store_key || plugin.id
+      if (this.pendingActionKey || this.actionId || this.pluginOperation.active) return
+      this.pendingActionKey = actionKey
       const confirmed = await this.$cuteConfirm({ title: "撤销待重启操作", message: `撤销“${plugin.name}”的待应用修改？`, confirmButtonText: "撤销", cancelButtonText: "保留", type: "warning" })
-      if (!confirmed) return
+      if (!confirmed) { this.pendingActionKey = ""; return }
       try {
         const response = await this.deleteRequest(`${this.$root.prefix}/store/transactions/pending/${encodeURIComponent(plugin.pending_operation_id)}`, {}, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info || "撤销失败")
@@ -344,6 +348,8 @@ export default {
         await this.loadPlugins(false)
       } catch (error) {
         this.$message.error(error.response?.data?.detail || error.message || "撤销失败")
+      } finally {
+        this.pendingActionKey = ""
       }
     },
   },

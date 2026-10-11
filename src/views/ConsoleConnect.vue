@@ -23,7 +23,6 @@ import {
   syncApiWithBrowserLocation,
 } from "@/utils/api"
 
-const SETUP_TOKEN_KEY = "zhenxunSetupToken"
 const RESTART_RECEIPT_KEY = "zhenxunSetupRestartReceipt"
 
 export default {
@@ -51,7 +50,6 @@ export default {
   },
   methods: {
     clearSetupState() {
-      window.sessionStorage.removeItem(SETUP_TOKEN_KEY)
       window.sessionStorage.removeItem(RESTART_RECEIPT_KEY)
     },
     async connect() {
@@ -72,17 +70,13 @@ export default {
           return
         }
         if (payload.mode === "setup") {
-          if (!payload.setup_token) {
-            this.fail("服务器返回的首次配置凭据无效。")
+          if (!payload.access_token || !payload.token_type) {
+            this.fail("服务器认证接口版本不一致，请更新前后端。")
             return
           }
-          clearCookie("tokenStr")
-          window.sessionStorage.removeItem("isAuthenticated")
           this.clearSetupState()
-          window.sessionStorage.setItem(
-            SETUP_TOKEN_KEY,
-            payload.setup_token
-          )
+          setCookie("tokenStr", `${payload.token_type} ${payload.access_token}`)
+          window.sessionStorage.setItem("isAuthenticated", true)
           await this.$router.replace("/configure")
           return
         }

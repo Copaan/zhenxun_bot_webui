@@ -1,10 +1,10 @@
 import { Message } from "element-ui"
-import router from "@/router"
-import { clearAllDirtyStates } from "./dirty-state"
-import { clearAuthToken } from "./auth-token"
+import { clearAuthToken, hasValidAuthToken } from "./auth-token"
 
-let redirecting = false
 let lastNotificationAt = 0
+let authenticationExpired = false
+window.addEventListener("zhenxun-auth-token-changed", () => { if (hasValidAuthToken()) authenticationExpired = false })
+export const isAuthenticationExpired = () => authenticationExpired
 
 export const clearAuthenticationState = () => {
   clearAuthToken()
@@ -12,25 +12,15 @@ export const clearAuthenticationState = () => {
 }
 
 export const handleAuthenticationExpired = (showMessage = true) => {
+  authenticationExpired = true
   clearAuthenticationState()
-  clearAllDirtyStates()
   window.dispatchEvent(new CustomEvent("zhenxun-auth-expired"))
   const now = Date.now()
   if (showMessage && now - lastNotificationAt > 5000) {
     lastNotificationAt = now
-    Message.error({ message: "登录会话已失效，请重新登录。" })
+    Message.error({ message: "会话已过期，连接已断开。已提交的任务仍在后台执行。" })
   }
-  if (redirecting || router.currentRoute.path === "/") return
-  redirecting = true
-  router.replace(
-    "/",
-    () => {
-      redirecting = false
-    },
-    () => {
-      redirecting = false
-    }
-  )
+
 }
 
 export const isLocalAuthRecoveryRequest = (config = {}) => {

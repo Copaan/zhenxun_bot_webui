@@ -1,28 +1,31 @@
 import axios from "axios"
 import { sha256 } from "js-sha256"
 import { getBaseUrl } from "./api"
-import { getAuthToken, setAuthToken } from "./auth-token"
+import { handleAuthenticationExpired } from "./auth-session"
+import { getAuthToken, setAuthToken, clearAuthToken, hasValidAuthToken } from "./auth-token"
 
 export const CHUNK_SIZE = 8 * 1024 * 1024
 export const MAX_ARCHIVE_SIZE = 20 * 1024 * 1024 * 1024
-let bootstrapSession = null
-
-export function clearMigrationSession() { bootstrapSession = null }
-
-export async function authorizeMigration(code, { signal } = {}) {
-  const response = await migrationRequest("/bootstrap/session", { method: "post", data: { code }, signal })
-  if (signal?.aborted) return
-  bootstrapSession = `${response.token_type} ${response.access_token}`
-}
+export function getMigrationSession() { return getAuthToken() }
+export function clearMigrationSession() { clearAuthToken() }
 
 const migrationErrors = {
+  migration_export_expired: "导出文件已清理或已被带走，请重新导出",
+  migration_download_busy: "上一份导出包正在下载或读取，请结束后重新导出；尚未停止 Bot",
+  migration_export_directory_unwritable: "项目根目录不可写，请检查目录权限；尚未停止 Bot",
+  migration_export_cleanup_failed: "旧导出文件清理失败，请检查文件占用和权限；尚未停止 Bot",
+  migration_export_cleanup_record_failed: "导出文件清理结果未能保存，请检查任务目录权限",
+  migration_session_protocol_obsolete: "认证接口版本不一致，请更新前后端后重新打开控制台连接链接",
   startup_in_progress: "当前启动状态不允许此操作，请刷新状态；首次配置恢复持续出现此错误时，请核对后端版本",
   migration_management_not_ready: "管理面尚未就绪，请稍后刷新状态",
   migration_first_deployment_unavailable: "首次部署迁移入口已关闭，请在正常管理页面登录后操作",
   migration_bootstrap_status_unconfirmed: "后端尚未提供迁移就绪状态，请核对前后端版本后刷新",
-  migration_console_authorization_invalid: "授权码无效、已过期、已使用或所属实例已重启，请在目标实例重新运行 uv run zx migration authorize",
-  migration_console_authorization_required: "此操作需要目标实例的控制台迁移授权",
-  migration_login_required: "迁移会话已失效，请重新授权或登录",
+  migration_console_authorization_invalid: "这是旧迁移授权接口，请核对前后端版本后重新打开网页连接链接",
+  migration_console_authorization_required: "后端仍在使用旧迁移授权流程，请核对前后端版本",
+  migration_setup_authorization_required: "请使用启动控制台提供的网页连接链接进入本实例；无需另行生成迁移码",
+  migration_restore_preview_changed: "配置或迁移包已变化，请刷新摘要后重新确认",
+  migration_restore_fields_required: "请补充摘要中标出的配置项；未停止 Bot",
+  migration_login_required: "会话已过期，连接已断开；已提交任务仍在后台执行",
   migration_origin_forbidden: "请求来源与目标实例不一致，请从实例自己的管理入口操作",
   migration_private_access_required: "此迁移入口仅允许本机或内网访问",
   migration_worker_not_ready: "当前实例状态不满足恢复条件，请刷新实例状态",
@@ -40,27 +43,55 @@ export function migrationErrorMessage(error, fallback = "迁移请求失败") {
     const started = task.started_at || task.created_at
     return `已有迁移检查正在进行：${task.phase || "处理中"}，任务 ${task.id}，已耗时 ${task.elapsed_seconds || 0}s，剩余约 ${task.remaining_seconds == null ? "未知" : task.remaining_seconds + "s"}${started ? "，开始于 " + new Date(started * 1000).toLocaleString() : ""}。请稍后刷新。（${code}）`
   }
+  if (code === "migration_conflicts_unresolved") return `预检发现 ${detail.conflict_total || "若干"} 项文件冲突，未停止 Bot；请查看具体路径和处理建议（${code}）`
+  if (code === "migration_candidate_creation_unconfirmed") return "临时候选库的创建结果尚未确认，请查看任务资源状态；不会自动接管同名数据库"
+  if (detail?.phase === "candidate_create") return `自动创建候选库失败，可改为手动指定空候选库；未停止 Bot（${code || "状态未确认"}）`
   const issues = Array.isArray(detail) ? detail : detail?.issues
   const issueText = Array.isArray(issues) ? issues.map(item => item.message || item.msg).filter(value => typeof value === "string").join("；") : ""
   const text = [issueText, detail?.message, detail, body?.message, body?.info].find(value => typeof value === "string" && value && !codePattern.test(value))
-  const statusText = { 401: "迁移会话已失效，请重新授权或登录", 403: "当前请求未获得迁移授权", 404: "迁移接口不存在，请核对前后端版本", 409: "迁移操作与当前实例状态冲突，请刷新状态后重试" }[status]
+  const statusText = { 401: "会话已过期，连接已断开；已提交任务仍在后台执行", 403: "当前请求未获得迁移授权", 404: "迁移接口不存在，请核对前后端版本", 409: "迁移操作与当前实例状态冲突，请刷新状态后重试" }[status]
   const message = migrationErrors[code] || text || statusText || (status ? fallback : error?.message) || fallback
   return [message, code && !message.includes(code) ? `错误码：${code}` : "", status ? `HTTP ${status}` : ""].filter(Boolean).join("；")
 }
 
-export async function downloadMigration(identity) {
+export async function downloadMigration(identity, { signal, filename } = {}) {
   if (!/^[a-f0-9]{32}$/.test(identity)) throw new Error("migration_task_invalid")
+  const token = getAuthToken()
+  if (!hasValidAuthToken(token)) { handleAuthenticationExpired(true); throw new Error("migration_login_required") }
   const target = new URL(`${getBaseUrl()}/zhenxun/api/migration/tasks/${identity}/download`, window.location.href)
   if (target.origin !== window.location.origin) throw new Error("请在实例自己的管理入口登录后下载迁移包")
-  const name = `instance-${identity}.zx`
-  const file = window.showSaveFilePicker ? await window.showSaveFilePicker({ suggestedName: name }) : null
-  const response = await fetch(target, { headers: { Authorization: getAuthToken() }, redirect: "error", credentials: "same-origin", cache: "no-store" })
-  if (!response.ok) throw new Error((await response.json()).detail || "migration_download_failed")
-  if (file) { await response.body.pipeTo(await file.createWritable()); return }
-  const length = Number(response.headers.get("Content-Length"))
-  if (!length || length > 256 * 1024 * 1024) { await response.body.cancel(); throw new Error("大文件下载需要支持流式保存的浏览器，请使用 Edge 或 Chrome") }
-  const url = URL.createObjectURL(await response.blob()); const link = document.createElement("a")
-  link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 30000)
+  const name = typeof filename === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*\.zx$/.test(filename) ? filename : `instance-${identity}.zx`
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  const changed = () => { if (token !== getAuthToken()) abort() }
+  const current = () => { if (controller.signal.aborted || token !== getAuthToken() || !hasValidAuthToken(token)) throw new DOMException("Session changed", "AbortError") }
+  signal?.addEventListener("abort", abort, { once: true })
+  window.addEventListener("zhenxun-auth-expired", abort)
+  window.addEventListener("zhenxun-auth-token-changed", changed)
+  if (signal?.aborted) abort()
+  try {
+    current()
+    const file = window.showSaveFilePicker ? await window.showSaveFilePicker({ suggestedName: name }) : null
+    current()
+    const response = await fetch(target, { headers: { Authorization: token }, redirect: "error", credentials: "same-origin", cache: "no-store", signal: controller.signal })
+    if (response.status === 401 && token === getAuthToken()) handleAuthenticationExpired(true)
+    current()
+    if (!response.ok) throw new Error((await response.json()).detail || "migration_download_failed")
+    if (file) { await response.body.pipeTo(await file.createWritable(), { signal: controller.signal }); return }
+    const length = Number(response.headers.get("Content-Length"))
+    if (!length || length > 256 * 1024 * 1024) { await response.body.cancel(); throw new Error("大文件下载需要支持流式保存的浏览器，请使用 Edge 或 Chrome") }
+    const blob = await response.blob()
+    current()
+    const url = URL.createObjectURL(blob); const link = document.createElement("a")
+    link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 30000)
+  } catch (error) {
+    if (controller.signal.aborted) throw new DOMException("Download cancelled", "AbortError")
+    throw error
+  } finally {
+    signal?.removeEventListener("abort", abort)
+    window.removeEventListener("zhenxun-auth-expired", abort)
+    window.removeEventListener("zhenxun-auth-token-changed", changed)
+  }
 }
 
 export function recoveryDatabase(requirements, username, password) {
@@ -72,13 +103,19 @@ export function recoveryDatabase(requirements, username, password) {
   return { target_url: `${engine}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${target.port}/${encodeURIComponent(target.database)}` }
 }
 
-export async function migrationRequest(path, { method = "get", data, signal, params, timeout } = {}) {
+export async function migrationRequest(path, { method = "get", data, signal, params, timeout, headers = {} } = {}) {
+  if (path !== "/bootstrap/status" && !hasValidAuthToken()) {
+    if (getAuthToken()) handleAuthenticationExpired(true)
+    const error = new Error("migration_login_required")
+    error.response = { status: 401, data: { detail: "migration_login_required" } }
+    throw error
+  }
   const url = `${getBaseUrl()}/zhenxun/api/migration${path}`
-  if (bootstrapSession && new URL(url, window.location.href).origin !== window.location.origin) throw new Error("迁移临时会话仅限当前实例入口")
+  if (getAuthToken() && new URL(url, window.location.href).origin !== window.location.origin) throw new Error("登录会话仅限当前实例入口")
   const response = await axios({
     url,
     method, data, signal, params, ...(timeout === undefined ? {} : { timeout }), suppressErrorToast: true, authFailureMode: "local",
-    headers: { ...(data instanceof ArrayBuffer ? { "Content-Type": "application/octet-stream" } : {}), ...(bootstrapSession ? { "X-Migration-Session": bootstrapSession } : {}) },
+    headers: { ...headers, ...(data instanceof ArrayBuffer ? { "Content-Type": "application/octet-stream" } : {}), ...(getAuthToken() ? { Authorization: getAuthToken() } : {}) },
   })
   if (!response?.suc) {
     const error = new Error(response?.info || response?.message || "migration_request_failed")
@@ -94,7 +131,6 @@ export async function migrationLogin(username, password) {
   const response = await axios({ url: url.href, method: "post", data: new URLSearchParams({ username, password }), authFailureMode: "local", suppressErrorToast: true })
   if (!response?.suc || !response.data?.access_token) throw new Error(response?.info || "migration_login_failed")
   setAuthToken(`${response.data.token_type} ${response.data.access_token}`)
-  clearMigrationSession()
 }
 
 export async function uploadMigration(file, { uploadId, signal, onCreated, onProgress, request = migrationRequest } = {}) {
@@ -233,6 +269,7 @@ export function migrationFailureSummary(job) {
     ? `数据库迁移失败${database.tool ? `（${database.tool}）` : ''}，请查看工具详情`
     : code === 'migration_shutdown_unconfirmed' ? `关闭未通过核验${components ? `：${components}` : ''}`
       : code.startsWith('migration_dependency_') || code === 'migration_dependencies_incomplete' ? '依赖恢复失败，请查看依赖结果' : '迁移执行失败，请查看任务首因'
+  if (job.action === 'restore' && job.progress?.not_stopped) return `预检失败，未停止 Bot。${reason}。`
   if (code && code === database.error_code && ['restore_preflight', 'export_preflight'].includes(database.phase)) {
     return `${migrationDatabasePhases[database.phase]}失败，未停止 Bot。${reason}。`
   }

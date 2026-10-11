@@ -181,7 +181,7 @@
           <div>
             <el-button size="mini" icon="el-icon-link" @click="openBindDialog(policy)">分配</el-button>
             <el-button size="mini" icon="el-icon-edit" @click="editPolicy(policy)">编辑</el-button>
-            <el-button size="mini" type="danger" icon="el-icon-delete" :disabled="policy.bound_bot_ids.length > 0" @click="deletePolicy(policy)">删除</el-button>
+            <el-button size="mini" type="danger" icon="el-icon-delete" :loading="deletingPolicyId === policy.id" :disabled="policy.bound_bot_ids.length > 0 || Boolean(deletingPolicyId) || deleteConfirming || saving || dialogSaving" @click="deletePolicy(policy)">删除</el-button>
           </div>
         </div>
         <div v-if="!policies.length" class="empty-state">尚未创建共享策略</div>
@@ -245,7 +245,7 @@ export default {
   name: "PluginPolicy",
   data() {
     return {
-      loading: false, saving: false, dialogSaving: false, loadError: "",
+      loading: false, saving: false, dialogSaving: false, deleteConfirming: false, deletingPolicyId: null, loadError: "",
       transferVisible: false, transferBusy: false, transferText: "", migrationPreview: [],
       accounts: [], policies: [], catalog: { plugins: [], tasks: [] },
       selectedBotId: "", account: null, editingPolicy: null,
@@ -439,7 +439,28 @@ export default {
     async openCopyDialog() { if (this.saving || this.policyScope !== "account" || !await this.confirmDiscard()) return; this.copyTargets = []; this.copyImpacts = []; this.copyDialogVisible = true },
     loadCopyImpacts() { if (this.account) this.loadImpacts(this.copyTargets, this.account, "copyImpacts") },
     async copyAccount() { this.dialogSaving = true; try { const revisions = Object.fromEntries(this.copyTargets.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])); const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/copy`, { source_bot_id: this.account.bot_id, source_revision: this.account.revision, target_bot_ids: this.copyTargets, expected_revisions: revisions }); if (resp.suc) { this.$message.success(resp.info); this.copyDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
-    async deletePolicy(policy) { try { await this.$confirm(`确定删除策略“${policy.name}”？`, "删除策略", { type: "warning" }); const resp = await this.deleteRequest(`${this.$root.prefix}/plugin-policy/policies/${policy.id}?expected_revision=${policy.revision}`); if (resp.suc) { this.$message.success(resp.info); await this.loadAll() } } catch (error) { if (error !== "cancel") this.$message.error("删除策略失败") } },
+    async deletePolicy(policy) {
+      if (this.deletingPolicyId || this.deleteConfirming || this.saving || this.dialogSaving || policy.bound_bot_ids.length > 0) return
+      this.deleteConfirming = true
+      try {
+        await this.$confirm(`确定删除策略“${policy.name}”？`, "删除策略", { type: "warning" })
+      } catch (error) {
+        if (error !== "cancel") this.$message.error("删除策略失败")
+        return
+      } finally {
+        this.deleteConfirming = false
+      }
+      if (this.destroyed) return
+      this.deletingPolicyId = policy.id
+      try {
+        const resp = await this.deleteRequest(`${this.$root.prefix}/plugin-policy/policies/${policy.id}?expected_revision=${policy.revision}`)
+        if (resp.suc) { this.$message.success(resp.info); if (!this.destroyed) await this.loadAll() }
+      } catch (error) {
+        if (error !== "cancel") this.$message.error(error?.response?.status === 409 ? "策略已变化，请重新加载后再试" : "删除策略失败")
+      } finally {
+        this.deletingPolicyId = null
+      }
+    },
   },
 }
 </script>

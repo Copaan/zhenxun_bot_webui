@@ -18,10 +18,11 @@
     <el-alert v-if="capability && !capability.restore" :title="`当前运行条件暂不支持恢复：${(capability.restore_blockers || []).join('、')}。可先核验迁移包。`" type="warning" :closable="false" show-icon />
     <div class="migration-actions">
       <el-button v-if="!firstDeployment" icon="el-icon-download" :disabled="!capability || !capability.online_export || busy || exportTracking" :loading="exportBusy" @click="exportInstance">导出实例</el-button>
-      <el-button icon="el-icon-upload2" :disabled="!capability || capability.upload === false || busy" @click="$refs.file.click()">选择迁移包</el-button>
+      <el-button icon="el-icon-upload2" :disabled="!capability || capability.upload === false || busy || Boolean(pendingRestoreId)" @click="$refs.file.click()">选择迁移包</el-button>
       <input ref="file" class="migration-file-input" type="file" accept=".zx" @change="selectFile" />
     </div>
     <el-dialog title="确认导出实例" :visible.sync="exportDialog" custom-class="migration-export-dialog" top="5vh" width="min(560px, 94vw)" :close-on-click-modal="false">
+      <p>迁移包保存到项目根目录，与 uv.lock 同级。开始新导出会删除上一份导出包；本次失败或取消后不保留包。</p>
       <DatabaseConnectionStatus :result="exportConnection" :checking="connectionChecking" migration />
       <p v-if="capability?.database_policy_version">后端能力检查策略：v{{ capability.database_policy_version }}</p>
       <p>按当前连接的数据库类型导出；已转换为 PostgreSQL 的数据库按 PostgreSQL 检查。迁移包不支持跨数据库引擎直接恢复。</p>
@@ -38,50 +39,25 @@
       </details>
       <p v-if="error" class="migration-error-code" role="alert">{{ error }}</p>
       <p>先停止业务、建立快照，再恢复原实例并打包。</p>
-      <el-checkbox v-model="allowForcedShutdown">关闭超时后允许强制停止 Bot</el-checkbox>
+      <details><summary>高级选项</summary><el-checkbox v-model="allowForcedShutdown">关闭超时后允许强制停止 Bot</el-checkbox></details>
       <p v-if="allowForcedShutdown" class="migration-error-code">将终止整个业务进程树，可能丢失尚未落盘数据。进程退出与数据库核验通过后才继续导出；迁移包会标记强制停止来源。</p>
       <span slot="footer"><el-button @click="exportDialog = false">取消</el-button><el-button type="primary" :loading="exportBusy" :disabled="connectionChecking || !exportConnectionReady || !exportPreview" @click="confirmExport">确认导出明文包</el-button></span>
     </el-dialog>
     <div class="migration-source">
-      <el-select v-model="discoveredPath" :disabled="busy || !capability || capability.discovery === false" placeholder="选择本机已发现的迁移包" clearable @change="selectDiscovered">
+      <el-select v-model="discoveredPath" :disabled="busy || Boolean(pendingRestoreId) || !capability || capability.discovery === false" placeholder="选择本机已发现的迁移包" clearable @change="selectDiscovered">
         <el-option v-for="item in packages" :key="item.path" :label="`${item.path} (${size(item.size)})`" :value="item.path" />
       </el-select>
       <span v-if="file" class="migration-filename">{{ file.name }} · {{ size(file.size) }}</span>
     </div>
-    <el-form v-if="file || discoveredPath" label-position="top" class="migration-form" @submit.native.prevent>
-      <el-form-item label="迁移包密码（仅加密包需要）">
-        <el-input v-model="password" type="password" show-password autocomplete="new-password" :disabled="busy" maxlength="1024" />
-      </el-form-item>
-      <el-checkbox v-if="file" v-model="sensitiveConfirmed" :disabled="busy">确认将可能包含凭据和数据库的文件上传至当前实例</el-checkbox>
-      <div class="migration-actions">
-        <el-button type="primary" icon="el-icon-document-checked" :loading="busy" :disabled="!capability || capability.maintenance || Boolean(file && !sensitiveConfirmed)" @click="inspect(1)">{{ file && !sealed ? '上传并核验' : '核验迁移包' }}</el-button>
-        <el-button v-if="busy" icon="el-icon-video-pause" @click="pause">停止本次请求</el-button>
-        <el-button v-else icon="el-icon-close" @click="clearSelection">清除选择</el-button>
-      </div>
+    <div v-if="file || discoveredPath" class="migration-form">
+      <p v-if="busy" role="status">{{ sealed ? "正在读取迁移包摘要，请稍候。" : "正在上传迁移包，请稍候。" }}</p>
       <el-progress v-if="file && busy && !sealed" :percentage="progress" />
-      <el-alert v-if="inspectionTask && ['queued', 'running'].includes(inspectionTask.status)" :title="`迁移包检查${inspectionTask.phase === 'queued' ? '排队中' : '进行中'}：已耗时 ${inspectionTask.elapsed_seconds || 0}s`" type="info" :closable="false" show-icon />
-    </el-form>
-    <div v-if="inspection" class="migration-inspection">
-      <h3>迁移包核验结果</h3><el-alert v-if="inspection.source.snapshot_mode === 'forced_stop'" title="此包在强制停止 Bot 后生成，可能不包含尚未落盘的内容。" type="warning" :closable="false" />
-      <el-alert title="文件完整性已核验；来源可信性未验证。恢复尚未执行。" type="info" :closable="false" />
-      <MigrationDatabases :items="inspection.databases || []" />
-      <dl>
-        <dt>包 ID</dt><dd>{{ inspection.package_id }}</dd>
-        <dt>SHA-256</dt><dd class="migration-hash">{{ inspection.sha256 }}</dd>
-        <dt>源环境</dt><dd>{{ [inspection.source.core_version, inspection.source.python, inspection.source.system, inspection.source.architecture].filter(Boolean).join(' · ') || '未记录' }}</dd>
-        <dt>文件数量</dt><dd>{{ inspection.total }}</dd>
-      </dl>
-      <p v-for="reason in inspection.replacement_blockers" :key="reason" class="migration-error-code">{{ reason }}</p>
-      <div class="migration-table">
-        <el-table :data="inspection.items" size="small">
-          <el-table-column prop="path" label="逻辑路径" min-width="210" />
-          <el-table-column prop="category" label="类别" width="90" />
-          <el-table-column label="大小" width="100"><template slot-scope="scope">{{ size(scope.row.size) }}</template></el-table-column>
-        </el-table>
-      </div>
-      <el-pagination small layout="prev, pager, next" :pager-count="5" :page-size="50" :current-page="page" :total="inspection.total" :disabled="busy" @current-change="inspect" />
-      <el-button type="primary" :disabled="busy || Boolean(inspection.replacement_blockers.length)" @click="restoreVisible = true">打开完整替换向导</el-button>
+      <el-button v-if="busy" size="small" @click="pause">{{ sealed ? "停止核验" : "暂停上传" }}</el-button>
+      <el-button v-if="!busy && !restoreVisible" size="small" @click="prepareRestore">继续读取摘要</el-button>
+      <el-button v-if="!busy" size="small" :disabled="Boolean(pendingRestoreId)" @click="clearSelection">清除选择</el-button>
     </div>
+    <migration-restore-wizard v-if="inspection" :visible="running && restoreVisible" :inspection="inspection" :upload-id="uploadId" :discovered-path="discoveredPath" :archive-password="password" :capability="capability" :source-busy="busy || Boolean(pendingRestoreId && pendingRestoreId !== resumeId)" :first-deployment="firstDeployment" :resume-id="resumeId" @operation-state="wizardOperation = $event" @submit-start="trackRestore" @submit-rejected="trackRestore('')" @submit-uncertain="restoreUnconfirmed" @authorization-expired="message({ response: { status: 401 } })" @close="closeRestore" @submitted="restoreSubmitted" />
+    <MigrationCandidates :items="candidateResources" :disabled="busy || Boolean(pendingRestoreId)" @refresh="refresh" @operation-state="wizardOperation = $event" />
     <div class="migration-history">
       <h3>迁移任务</h3>
       <p v-if="!jobs.length">暂无迁移任务</p>
@@ -89,6 +65,7 @@
         <div><strong>{{ job.action === 'export' ? '导出实例' : '完整替换迁移' }}</strong><span>{{ stage(job.stage) }}</span></div>
         <code>{{ job.id }}</code>
         <migration-task-status :job="job" />
+        <p v-if="['completed', 'partial'].includes(job.stage) && candidateResources.some(item => item.job_id === job.id && item.state !== 'cleaned')">迁移完成，临时库待清理；清理状态不会改变已完成的迁移结果。</p>
         <p v-if="job.progress && job.progress.snapshot_mode === 'forced_stop'">强制停止后导出 · 仅核验已持久化数据</p>
         <p v-if="job.progress && job.progress.original_worker_resumed">原实例已恢复并就绪</p>
         <details v-if="job.shutdown_diagnostic && job.shutdown_diagnostic.result !== 'confirmed'">
@@ -115,8 +92,9 @@
           <p v-if="(job.progress.dependencies.failed_plugins || []).length">初始化失败并隔离的插件：{{ job.progress.dependencies.failed_plugins.join('、') }}</p>
         </div>
         <el-button v-if="['awaiting_credentials', 'recovery_required'].includes(job.stage)" size="small" :disabled="Boolean(recoveryBusy)" @click="openRecovery(job)">查看恢复要求 / 重新授权</el-button>
+        <el-button v-if="job.restore_flow && job.progress && job.progress.not_stopped && ['failed', 'cancelled'].includes(job.stage)" size="small" :disabled="busy" @click="retryRestore(job)">调整配置后重试</el-button>
         <el-button v-if="canCancel(job)" size="small" icon="el-icon-close" :loading="cancelling === job.id" @click="cancelJob(job)">请求取消</el-button>
-        <el-button v-if="job.action === 'export' && job.stage === 'completed'" size="small" :loading="downloading === job.id" @click="downloadJob(job)">下载迁移包</el-button>
+        <el-button v-if="job.action === 'export' && job.stage === 'completed' && (!job.export_file || job.export_file.downloadable)" size="small" :loading="downloading === job.id" @click="downloadJob(job)">下载迁移包</el-button>
       </article>
       <el-pagination v-if="jobTotal > 20" small layout="prev, pager, next" :pager-count="5" :page-size="20" :current-page="jobPage" :total="jobTotal" @current-change="changeJobPage" />
     </div>
@@ -138,45 +116,49 @@
       </template>
       <span slot="footer"><el-button :disabled="Boolean(recoveryBusy)" @click="closeRecovery()">关闭</el-button><el-button type="primary" :loading="Boolean(recoveryBusy)" :disabled="!recoveryRequirements || !recoveryConfirmed" @click="reauthorize">提交授权</el-button></span>
     </el-dialog>
-    <migration-restore-wizard v-if="restoreVisible && inspection" :visible="active && restoreVisible" :inspection="inspection" :upload-id="uploadId" :discovered-path="discoveredPath" :archive-password="password" :capability="capability" :source-busy="busy || Boolean(pendingRestoreId)" :first-deployment="firstDeployment" @operation-state="wizardOperation = $event" @submit-start="pendingRestoreId = $event" @submit-rejected="pendingRestoreId = ''" @submit-uncertain="restoreUnconfirmed" @reauthenticated="restoreReauthenticated" @close="restoreVisible = false" @submitted="restoreSubmitted" />
+
   </section>
 </template>
 
 <script>
+import MigrationCandidates from "./MigrationCandidates.vue"
 import DatabaseConnectionStatus from "@/components/system/DatabaseConnectionStatus.vue"
 import { getBaseUrl } from "@/utils/api"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 import { migrationLogin, migrationErrorMessage, downloadMigration, migrationRequest, migrationStages, migrationPollDelay, recoveryDatabase, terminalMigrationStages, uploadMigration, migrationConnectionMatches } from "@/utils/migration"
 import MigrationTaskStatus from "./MigrationTaskStatus.vue"
 import MigrationRestoreWizard from "./MigrationRestoreWizard.vue"
-import MigrationDatabases from "./MigrationDatabases.vue"
+import { rememberAuthTask } from "@/utils/auth-token"
+import { handleAuthenticationExpired } from "@/utils/auth-session"
 import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 
 export default {
   name: "MigrationPanel",
-  components: { MigrationRestoreWizard, MigrationTaskStatus, DatabaseConnectionStatus, MigrationDatabases },
+  components: { MigrationCandidates, MigrationRestoreWizard, MigrationTaskStatus, DatabaseConnectionStatus },
   props: { firstDeployment: Boolean, active: { type: Boolean, default: true } },
   computed: {
     exportConnectionReady() { return this.exportConnection?.ready === true && migrationConnectionMatches(this.exportConnection, this.capability) },
-    running() { return this.active && !this.networkFrozen },
+    running() { return this.active && !this.networkFrozen && !this.authRequired },
     switchBlockedReason() {
       if (this.pendingRestoreId) return "恢复已提交，正在核对任务结果，请勿重复配置"
       if (this.wizardOperation) return this.wizardOperation
       if (this.busy) return this.file && !this.sealed ? "正在上传迁移包，请等待完成" : "正在核验迁移包，请等待完成"
       if (this.loginBusy || this.recoveryBusy || this.cancelling) return "正在处理迁移请求，请等待完成"
-      if (this.restoreVisible || this.recoveryVisible) return "请先完成或关闭当前恢复对话框"
+      if (this.recoveryVisible) return "请先完成或关闭当前恢复对话框"
       if (this.jobs.some(job => !terminalMigrationStages.has(job.stage)) || this.capability?.maintenance) return "迁移尚未结束，请先处理当前任务"
       return ""
     },
   },
-  data: () => ({ networkFrozen: isBusinessNetworkFrozen(), wizardOperation: "", pendingRestoreId: "", exportConnection: null, connectionChecking: false, connectionSequence: 0, connectionInspectionTask: null, exportDialog: false, exportPreview: null, previewTask: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, inspectionTask: null, page: 1, jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
+  data: () => ({ networkFrozen: isBusinessNetworkFrozen(), wizardOperation: "", pendingRestoreId: "", resumeId: "", exportConnection: null, connectionChecking: false, connectionSequence: 0, connectionInspectionTask: null, exportDialog: false, exportPreview: null, previewTask: null, allowForcedShutdown: false, activeExportId: "", connectionNotice: "", lastConnectedAt: 0, exportSubmittedAt: 0, authRequired: false, loginUsername: "", loginPassword: "", loginBusy: false, nextOrigin: "", capability: null, loading: false, busy: false, error: "", packages: [], discoveredPath: "", file: null, uploadId: null, sealed: false, password: "", sensitiveConfirmed: false, progress: 0, inspection: null, inspectionTask: null, page: 1, candidateResources: [], jobs: [], jobTotal: 0, jobPage: 1, cancelling: null, recoveryVisible: false, recoveryRequirements: null, recoveryUsername: "", recoveryPassword: "", recoveryConfirmed: false, recoveryError: "", recoveryBusy: false, restoreVisible: false, exportBusy: false, exportTracking: false, downloading: null }),
   created() {
+    this.pendingRestoreId = sessionStorage.getItem(`migration-restore:${getBaseUrl()}`) || ""
+    this.onExpired = () => { this.authRequired = true; this.stopActivity(); this.error = "会话已过期，连接已断开；已提交任务仍在后台执行。" }; window.addEventListener("zhenxun-auth-expired", this.onExpired)
     this.sequence = 0; this.readSequence = 0; this.requests = new Set(); this.waiters = new Set()
     this.activeExportId = this.firstDeployment ? "" : sessionStorage.getItem(this.exportStorageKey()) || ""; this.exportTracking = Boolean(this.activeExportId)
     this.unsubscribeNetwork = onBusinessNetworkChange(value => { this.networkFrozen = value })
     if (this.running) this.refresh()
   },
-  beforeDestroy() { this.stopActivity(); this.unsubscribeNetwork?.(); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
+  beforeDestroy() { window.removeEventListener("zhenxun-auth-expired", this.onExpired); this.stopActivity(); this.unsubscribeNetwork?.(); clearDirtyState("migration"); clearDirtyState("migration-recovery") },
   watch: {
     running(value) { if (value) this.refresh(); else this.stopActivity() },
     switchBlockedReason: { immediate: true, handler(value) { this.$emit("switch-state", value) } },
@@ -220,7 +202,7 @@ export default {
     restoreUnconfirmed() { this.connectionNotice = "恢复提交结果尚未确认，正在查询原任务；不会自动重复提交。"; this.refresh() },
     databaseFileLabel(kind) { return ({ sqlite: "SQLite 数据库", sqlite_empty: "尚未初始化的主库", empty_placeholder: "空占位文件，原样保留", ordinary_file: "普通文件，原样保留", invalid_primary: "主库格式异常" })[kind] || "状态未确认" },
     exportStorageKey() { return `migration-export:${getBaseUrl()}` },
-    trackExport(id) { this.activeExportId = id; this.exportTracking = Boolean(id); if (id) sessionStorage.setItem(this.exportStorageKey(), id); else sessionStorage.removeItem(this.exportStorageKey()) },
+    trackExport(id) { rememberAuthTask(id); this.activeExportId = id; this.exportTracking = Boolean(id); if (id) sessionStorage.setItem(this.exportStorageKey(), id); else sessionStorage.removeItem(this.exportStorageKey()) },
     async checkExportConnection() {
       if (!this.running || this.connectionChecking) return
       const sequence = ++this.connectionSequence
@@ -283,20 +265,24 @@ export default {
     },
     async downloadJob(job) {
       if (this.downloading) return
+      const controller = new AbortController()
+      this.requests.add(controller)
       this.downloading = job.id
-      try { await downloadMigration(job.id) } catch (error) { if (error.name !== "AbortError") this.error = this.message(error) }
-      finally { this.downloading = null }
+      try { await downloadMigration(job.id, { signal: controller.signal, filename: job.export_file?.name }) } catch (error) { if (error.name !== "AbortError") this.error = this.message(error) }
+      finally { this.requests.delete(controller); this.downloading = null }
     },
     async restoreReauthenticated() { this.uploadId = null; this.sealed = false; await this.inspect(1) },
+    trackRestore(id) { rememberAuthTask(id); this.pendingRestoreId = id; if (id) sessionStorage.setItem(`migration-restore:${getBaseUrl()}`, id); else sessionStorage.removeItem(`migration-restore:${getBaseUrl()}`) },
     restoreSubmitted(task, entry) {
-      this.pendingRestoreId = task.id
+      this.trackRestore(task.id)
       this.jobs = [task, ...this.jobs.filter(job => job.id !== task.id)]
       if (entry) {
         const host = ["0.0.0.0", "::", "127.0.0.1", "localhost"].includes(entry.host) ? window.location.hostname : entry.host
         try { const url = new URL(`${entry.https ? "https" : "http"}://${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${entry.port}`); if (!url.username && !url.password && url.pathname === "/") this.nextOrigin = url.origin } catch (_) { /* A failed URL never triggers navigation. */ }
       }
-      this.restoreVisible = false; this.wizardOperation = ""; this.clearSelection(); this.refresh()
+      this.restoreVisible = false; this.wizardOperation = ""; this.refresh()
     },
+    closeRestore() { this.restoreVisible = false; this.inspection = null; this.wizardOperation = ""; this.resumeId = "" },
     async login() {
       if (this.loginBusy || !this.loginUsername || !this.loginPassword) return
       this.loginBusy = true
@@ -313,6 +299,7 @@ export default {
       try {
         const requirements = await this.request(`/tasks/${job.id}/recovery`)
         if (sequence !== this.recoverySequence) return
+        if (requirements.preparation_only) { this.recoveryVisible = false; this.inspection = {}; this.uploadId = requirements.upload_id; this.sealed = true; this.resumeId = job.id; this.restoreVisible = true; return }
         this.recoveryRequirements = requirements
       } catch (error) { if (sequence === this.recoverySequence) this.recoveryError = this.message(error) }
       finally { if (sequence === this.recoverySequence) this.recoveryBusy = false }
@@ -338,6 +325,7 @@ export default {
       } catch (error) { if (sequence === this.recoverySequence) this.recoveryError = this.message(error) }
       finally { if (sequence === this.recoverySequence) this.recoveryBusy = false }
     },
+    retryRestore(job) { this.uploadId = job.restore_flow.upload_id; this.sealed = true; this.inspection = {}; this.resumeId = ''; this.restoreVisible = true; this.trackRestore('') },
     stage(value) { return migrationStages[value] || value },
     size(value) { return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MiB` : `${(value / 1024).toFixed(1)} KiB` },
     async waitInspection(initial, sequence, target = 'inspection') {
@@ -360,6 +348,7 @@ export default {
     },
     message(error) {
       if (error.response?.status === 401) {
+        handleAuthenticationExpired(true)
         this.authRequired = true
         if (this.firstDeployment && !this.pendingRestoreId && !this.jobs.some(job => !terminalMigrationStages.has(job.stage))) this.$emit("authorization-expired")
       }
@@ -389,6 +378,7 @@ export default {
         ])
         if (sequence !== this.readSequence) return
         if (cap.status === 'fulfilled') {
+          if (cap.value.session_auth_version !== 2) throw new Error('migration_session_protocol_obsolete')
           const changed = this.capability && (this.capability.worker_generation !== cap.value.worker_generation || this.capability.database_policy_version !== cap.value.database_policy_version)
           this.capability = cap.value
           if (changed && (this.exportConnection || this.connectionChecking)) {
@@ -396,12 +386,12 @@ export default {
             this.exportConnection = { ready: false, code: 'migration_database_preflight_stale' }
           }
         }
-        if (listing.status === 'fulfilled') { this.jobs = listing.value.items; this.jobTotal = listing.value.total }
+        if (listing.status === 'fulfilled') { this.candidateResources = listing.value.candidate_resources || []; this.jobs = listing.value.items; this.jobTotal = listing.value.total }
         if (tracked.status === 'fulfilled' && tracked.value) {
           if (!this.jobs.some(job => job.id === tracked.value.id)) this.jobs.unshift(tracked.value)
           else this.jobs = this.jobs.map(job => job.id === tracked.value.id ? tracked.value : job)
           if (terminalMigrationStages.has(tracked.value.stage)) {
-            if (tracked.value.id === this.pendingRestoreId) this.pendingRestoreId = ""
+            if (tracked.value.id === this.pendingRestoreId) { this.trackRestore(""); if (['completed', 'partial', 'rolled_back'].includes(tracked.value.stage)) this.clearSelection() }
             else this.trackExport('')
           }
         }
@@ -411,6 +401,7 @@ export default {
         if (listing.status === 'rejected') throw listing.reason
         if (this.activeExportId && tracked.status === 'rejected') throw tracked.reason
         if (this.pendingRestoreId && tracked.status === 'rejected') throw tracked.reason
+        if (!this.pendingRestoreId) { const active = this.jobs.find(job => job.action === "restore" && !terminalMigrationStages.has(job.stage)); if (active) this.trackRestore(active.id) }
         if (!this.firstDeployment && !this.activeExportId) { const active = this.jobs.find(job => job.action === 'export' && !terminalMigrationStages.has(job.stage)); if (active) this.trackExport(active.id) }
         this.lastConnectedAt = Date.now(); this.connectionNotice = ''
       } catch (error) {
@@ -426,13 +417,29 @@ export default {
       const file = event.target.files[0]
       event.target.value = ""
       if (!file) return
-      this.clearSelection(); this.file = file; setDirtyState("migration", true)
+      this.clearSelection(); this.file = file; setDirtyState("migration", true); await this.prepareRestore()
     },
-    selectDiscovered(path) { this.clearSelection(); this.discoveredPath = path; setDirtyState("migration", Boolean(path)) },
+    selectDiscovered(path) { this.clearSelection(); this.discoveredPath = path; setDirtyState("migration", Boolean(path)); if (path) this.prepareRestore() },
     clearSelection() {
-      this.sequence += 1; this.file = null; this.discoveredPath = ""; this.uploadId = null; this.sealed = false
+      this.sequence += 1; this.restoreVisible = false; this.resumeId = ""; this.file = null; this.discoveredPath = ""; this.uploadId = null; this.sealed = false
       this.password = ""; this.sensitiveConfirmed = false; this.inspection = null; this.inspectionTask = null; this.error = ""; this.progress = 0
       clearDirtyState("migration")
+    },
+    async prepareRestore() {
+      if (!this.running || this.busy || this.pendingRestoreId || !this.capability) return
+      if (this.capability.restore_flow_version !== 1) { this.error = '前后端迁移流程版本不匹配，请核对后端版本后刷新'; return }
+      const sequence = ++this.sequence; const controller = this.controller = new AbortController()
+      this.busy = true; this.error = ''
+      try {
+        if (this.file && !this.sealed) {
+          await uploadMigration(this.file, { uploadId: this.uploadId, signal: controller.signal, request: this.request, onCreated: id => { if (sequence === this.sequence) this.uploadId = id }, onProgress: value => { if (sequence === this.sequence) this.progress = value } })
+          if (sequence !== this.sequence) return
+          this.sealed = true
+        }
+        if (controller.signal.aborted) return
+        this.inspection = {}; this.restoreVisible = true
+      } catch (error) { if (sequence === this.sequence) this.error = controller.signal.aborted ? '上传已暂停，可继续；尚未停止 Bot。' : this.message(error) }
+      finally { if (sequence === this.sequence) { this.busy = false; this.controller = null } }
     },
     pause() { this.controller?.abort() },
     async inspect(page) {
