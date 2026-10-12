@@ -79,7 +79,6 @@
       <el-table :data="runtimeCacheRows" size="small" class="runtime-table">
         <el-table-column prop="name" label="缓存" min-width="120" />
         <el-table-column prop="entry_count" label="条目" width="90" />
-        <el-table-column prop="negative_count" label="负缓存" width="90" />
         <el-table-column label="状态" width="100"><template slot-scope="scope"><el-tag size="mini" :type="scope.row.has_error ? 'danger' : scope.row.loaded ? 'success' : 'info'">{{ scope.row.has_error ? "异常" : scope.row.loaded ? "已加载" : "未加载" }}</el-tag></template></el-table-column>
       </el-table>
       <div class="cache-actions">

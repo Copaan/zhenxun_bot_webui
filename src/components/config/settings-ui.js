@@ -6,7 +6,7 @@ export function environmentCategories(descriptors, matches, source, customCount)
     { key: 'bot', title: '机器人与命令', icon: 'el-icon-chat-dot-round', description: '设置机器人称呼、消息与命令行为。', keys: ['NICKNAME', 'SELF_NICKNAME', 'COMMAND_START', 'COMMAND_SEP', 'ALCONNA_USE_COMMAND_START', 'IMAGE_TO_BYTES'] },
     { key: 'permissions', title: '权限与会话', icon: 'el-icon-user', description: '管理超级用户范围与交互会话。', keys: ['SUPERUSERS', 'PLATFORM_SUPERUSERS', 'SESSION_EXPIRE_TIMEOUT'] },
     { key: 'runtime', title: '日志与扩展', icon: 'el-icon-document', description: '调整日志级别与扩展插件路径。', keys: ['LOG_LEVEL', 'EXT_PATH'] },
-    { key: 'storage', title: '数据库与缓存', icon: 'el-icon-coin', description: '数据库连接与本体缓存配置。', keys: ['DB_URL', 'CACHE_MODE', 'REDIS_EXPIRE', 'REDIS_HOST', 'REDIS_PASSWORD', 'REDIS_PORT'] },
+    { key: 'storage', title: '数据库与缓存', icon: 'el-icon-coin', description: '数据库连接与本体缓存配置。', keys: ['DB_URL', 'CACHE_MODE', 'REDIS_HOST', 'REDIS_PASSWORD', 'REDIS_PORT'] },
     { key: 'adapters', title: '适配器配置', icon: 'el-icon-link', description: '按协议维护机器人连接配置。', keys: [] },
     { key: 'plugins', title: '插件环境项', icon: 'el-icon-connection', description: '由已注册配置模型声明，详细信息中可查看来源。', keys: [] },
   ]

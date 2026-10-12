@@ -834,7 +834,7 @@ export default {
       return { hot_reloaded: "插件已热重载", config_reloaded: "配置已应用", component_restarted: "组件已重建", webui_refresh: "页面资源已更新", restart_pending: "等待重启", restart_requested: "已请求重启", failed: "更新失败", rolled_back: "更新已回滚" }[mode] || "状态未确认"
     },
     runtimeReasonLabel(reason) {
-      const labels = { dependencies_changed: "依赖声明变化，需要重启", plugin_dependencies_changed: "插件依赖变化，需要重启", builtin_plugin: "内置插件变化，需要重启", library_plugin: "库插件变化，需要重启", orm_model_changed: "数据库模型变化，需要重启", orm_model_new_plugin: "新插件包含数据库模型，需要重启", external_patch: "插件修改了外部模块，需要重启", plugin_not_hot_reloadable: "此插件不能安全热重载", import_time_config_consumer_requires_restart: "配置消费者需要重启", component_not_restartable: "相关组件需要重启", plugin_classification_miss: "插件需在启动早期加载，重启后生效" }
+      const labels = { dependencies_changed: "依赖声明变化，需要重启", plugin_dependencies_changed: "插件依赖变化，需要重启", builtin_plugin: "内置插件变化，需要重启", library_plugin: "库插件变化，需要重启", orm_model_changed: "数据库模型变化，需要重启", orm_model_new_plugin: "新插件包含数据库模型，需要重启", external_patch: "插件修改了外部模块，需要重启", thread_or_process: "插件使用了线程或进程，需要重启", dependency_missing: "缺少第三方依赖，需要安装后重启", plugin_not_hot_reloadable: "此插件不能安全热重载", import_time_config_consumer_requires_restart: "配置消费者需要重启", component_not_restartable: "相关组件需要重启", plugin_classification_miss: "插件需在启动早期加载，重启后生效" }
       if (String(reason).startsWith("environment:")) return `环境配置 ${reason.slice(12)} 需要重启`
       return labels[reason] || `更新原因：${reason}`
     },

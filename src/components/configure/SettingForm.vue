@@ -6,13 +6,12 @@
           <img :src="logoUrl" alt="真寻" class="brand-logo" />
           <div>
             <p class="brand-kicker">ZHENXUN BOT</p>
-            <h1 ref="heading" tabindex="-1">首次配置</h1>
+            <h1>首次配置</h1>
             <p>完成本体运行所需的基础设置</p>
           </div>
         </div>
         <div class="setup-header-actions">
           <span class="state-badge">{{ stateLabel }}</span>
-          <slot name="header-actions" :blocked-reason="switchBlockedReason" />
         </div>
       </header>
 
@@ -323,7 +322,6 @@ const ProbeResult = {
 export default {
   name: "SettingForm",
   components: { ProbeResult },
-  props: { active: { type: Boolean, default: true } },
   data() {
     return {
       logoUrl,
@@ -367,13 +365,6 @@ export default {
     }
   },
   computed: {
-    switchBlockedReason() {
-      if (this.applying) return "正在保存配置或确认重启，请等待完成"
-      if (this.serverState === "restart_pending") return "配置已保存，请完成当前重启流程"
-      if (Object.values(this.probing).some(Boolean)) return "正在检测连接，请等待完成"
-      if (this.initializing) return "正在核对配置状态"
-      return ""
-    },
     setupToken() {
       return getAuthToken() || ""
     },
@@ -418,29 +409,23 @@ export default {
     },
   },
   watch: {
-    active(value) {
-      if (value) this.loadStatus(false)
-      else this.cancelReads()
-    },
     database: { deep: true, handler() { this.results.database = null } },
     cache: { deep: true, handler() { this.results.cache = null } },
     network: { deep: true, handler() { this.results.network = null } },
   },
   created() { this.readSequence = 0; this.requestControllers = new Set(); this.onExpired = () => { this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.claimed = false; this.accessError = "会话已过期，连接已断开。" }; window.addEventListener("zhenxun-auth-expired", this.onExpired) },
-  mounted() { if (this.active) this.loadStatus() },
+  mounted() { this.loadStatus() },
   beforeDestroy() { window.removeEventListener("zhenxun-auth-expired", this.onExpired); this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.requestControllers.clear() },
   methods: {
-    focusHeading() { this.$refs.heading?.focus() },
     cancelReads() { this.readSequence++; this.statusController?.abort(); this.initializing = false },
     async loadStatus(loadDraft = true) {
-      if (!this.active) return
       const sequence = ++this.readSequence
       this.statusController?.abort()
       const controller = this.statusController = new AbortController()
       this.initializing = true
       try {
         const response = await this.getRequest(`${this.$root.prefix}/configure/status`, null, { signal: controller.signal })
-        if (sequence !== this.readSequence || !this.active) return
+        if (sequence !== this.readSequence) return
         this.serverState = response.data.state
         if (this.serverState === "configured") {
           this.clearSetupState()
@@ -477,7 +462,7 @@ export default {
           null,
           { ...this.setupHeaders, signal, suppressErrorToast: true }
         )
-        if (sequence !== this.readSequence || !this.active) return
+        if (sequence !== this.readSequence) return
         const draft = response.data
         this.account.username = draft.username || "admin"
         Object.assign(this.database, draft.database || {})
@@ -515,7 +500,7 @@ export default {
       if (mode === "postgres") this.database.port = 5432
     },
     async runProbe(key, path, payload) {
-      if (!this.active || this.probing[key]) return false
+      if (this.probing[key]) return false
       const controller = new AbortController(); this.requestControllers.add(controller)
       this.probing[key] = true
       try {
@@ -552,7 +537,7 @@ export default {
       return { ok: "正常", warning: "警告", error: "未通过" }[status]
     },
     async saveAndRestart() {
-      if (!this.active || this.applying || !this.canApply) return
+      if (this.applying || !this.canApply) return
       if (this.serverState === "restart_pending") {
         const receipt = window.sessionStorage.getItem(RESTART_RECEIPT_KEY)
         if (receipt) await this.restartSavedConfiguration(receipt, false)

@@ -1,6 +1,6 @@
 import Vue from "vue"
 import VueRouter from "vue-router"
-import { clearAuthToken, hasValidAuthToken, currentAuthTask } from "@/utils/auth-token"
+import { clearAuthToken, hasValidAuthToken } from "@/utils/auth-token"
 import { MessageBox } from "element-ui"
 import Login from "@/views/Login"
 import Home from "@/views/Home"
@@ -143,11 +143,6 @@ router.onError((error) => {
 router.beforeEach(async (to, from, next) => {
   const isAuthenticated = window.sessionStorage.getItem("isAuthenticated")
   const hasToken = hasValidAuthToken()
-  if (!from.matched.length && !["/", "/connect", "/myapi"].includes(to.path) && currentAuthTask()) {
-    next(false)
-    window.location.replace(new URL("/maintenance.html", window.location.href).href)
-    return
-  }
 
 
   if (to.path !== from.path && hasDirtyState(from.path)) {

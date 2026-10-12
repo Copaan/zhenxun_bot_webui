@@ -143,7 +143,6 @@ export default {
         { key: 'REDIS_HOST', label: 'Redis 地址', help: 'Redis 服务的主机名或 IP 地址。' },
         { key: 'REDIS_PORT', label: 'Redis 端口', help: 'Redis 服务监听的端口。' },
         { key: 'REDIS_PASSWORD', label: 'Redis 密码', help: '用于连接 Redis，敏感值不回传。' },
-        { key: 'REDIS_EXPIRE', label: '缓存有效期', unit: '秒', help: 'Redis 普通缓存的默认有效期。' },
         { key: 'DB_URL', label: '数据库连接', help: '数据库连接地址可能包含密码，请在配置原文中修改。' },
         { key: "HOST", label: "监听地址", placeholder: "0.0.0.0", help: "0.0.0.0 允许局域网访问，127.0.0.1 仅本机访问。" },
         { key: "PORT", label: "监听端口", type: "number", placeholder: "8080", help: "WebUI 与适配器共享的本地服务端口；启用 HTTPS 后该端口提供 HTTPS。" },

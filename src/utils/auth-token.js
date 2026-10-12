@@ -1,5 +1,4 @@
 const TOKEN_KEY = "zhenxunAuthToken"
-for (const key of ["zhenxunSetupToken", "zhenxunMigrationSession"]) window.sessionStorage.removeItem(key)
 const tokenChanged = () => window.dispatchEvent(new Event("zhenxun-auth-token-changed"))
 const LEGACY_MIGRATION_KEY = "zhenxunLegacyTokenMigrated"
 
@@ -16,7 +15,6 @@ const clearLegacyCookie = () => {
 
 export const setAuthToken = (token) => {
   const value = String(token || "").trim()
-  if (value !== window.sessionStorage.getItem(TOKEN_KEY)) window.sessionStorage.removeItem("zhenxunAuthTask")
   if (value) window.sessionStorage.setItem(TOKEN_KEY, value)
   else window.sessionStorage.removeItem(TOKEN_KEY)
   window.sessionStorage.setItem(LEGACY_MIGRATION_KEY, "1")
@@ -67,17 +65,3 @@ export const hasValidAuthToken = (token = getAuthToken(), now = Date.now()) => {
   )
 }
 
-
-
-export const rememberAuthTask = (taskId) => {
-  const sid = decodeJwtPayload(getAuthToken())?.sid
-  if (taskId && sid) window.sessionStorage.setItem("zhenxunAuthTask", JSON.stringify({ sid, taskId }))
-  else window.sessionStorage.removeItem("zhenxunAuthTask")
-}
-
-export const currentAuthTask = () => {
-  try {
-    const task = JSON.parse(window.sessionStorage.getItem("zhenxunAuthTask") || "null")
-    return hasValidAuthToken() && task?.sid === decodeJwtPayload(getAuthToken())?.sid && /^[a-f0-9]{32}$/.test(task.taskId) ? task.taskId : ""
-  } catch (_) { return "" }
-}

@@ -3,7 +3,7 @@
     <header class="store-header">
       <div>
         <h1>NoneBot 官方插件</h1>
-        <p>优先复用现有依赖，确认摘要后准备，手动重启验证生效</p>
+        <p>优先复用现有依赖，确认摘要后应用；可热加载时直接生效，否则重启验证</p>
       </div>
       <el-button icon="el-icon-refresh" :loading="loading" @click="loadPlugins(true)">检查更新</el-button>
     </header>
@@ -263,9 +263,13 @@
                   <div><code>{{ item.name }}</code><div class="dependency-note">{{ dependencySource(item.name) }}</div></div>
                   <span v-if="item.kind === 'added'">新增 {{ item.version }}</span>
                   <span v-else-if="item.kind === 'changed'">{{ item.from }} → {{ item.to }}</span>
-                  <span v-else>移除插件包 {{ item.version }}</span>
+                  <span v-else>{{ item.reason === 'released' ? '释放依赖' : '移除插件包' }} {{ item.version }}</span>
                 </div>
-                <p v-if="analysis.action === 'uninstall'" class="dependency-note">卸载仅移除插件分发包，已新增依赖会保留。</p>
+                <div v-for="item in importedRetained" :key="`imported-${item.name}`" class="dependency-change">
+                  <div><code>{{ item.name }}</code><div class="dependency-note">{{ item.files.join('、') }}</div></div>
+                  <span>保留 {{ item.version }}：{{ item.owners.join('、') }}</span>
+                </div>
+                <p v-if="analysis.action === 'uninstall'" class="dependency-note">卸载会移除插件分发包，并释放不再被其他插件、手动依赖或核心依赖需要的依赖；仍被源码插件导入的依赖会保留。</p>
               </section>
 
               <section v-if="sharedChanges.length" class="analysis-section shared-changes">
@@ -294,8 +298,15 @@
                 <p v-else>launcher 将在停止 worker 后备份 SQLite、非交互执行迁移，并在迁移或启动失败时恢复数据库。</p>
               </el-alert>
 
+              <el-alert v-if="analysis.plan.hot_apply_expected" title="预计可热加载" type="success" :closable="false" show-icon>
+                <p>插件与依赖均为纯 Python 且不改动已加载的包，将直接在运行中生效；加载失败会回滚依赖层并恢复原插件。若构建后发现原生扩展或不可热加载的代码，则改为等待重启。</p>
+              </el-alert>
+              <el-alert v-else title="需要重启生效" type="info" :closable="false" show-icon>
+                <p>依赖层将先准备好，由你点击重启并通过启动验证后生效。</p>
+              </el-alert>
+
               <div class="confirmations">
-                <p>点击下方按钮即确认以上插件代码、依赖和构建范围。准备完成后，由你点击重启进行实际加载验证。</p>
+                <p>点击下方按钮即确认以上插件代码、依赖和构建范围。</p>
                 <p>ORM 和数据库驱动版本保持不变；需要调整时请在控制台处理。</p>
               </div>
             </template>
@@ -437,6 +448,9 @@ export default {
         ...(changes.changed || []).map((item) => ({ ...item, kind: "changed" })),
         ...(changes.removed || []).map((item) => ({ ...item, kind: "removed" })),
       ].filter((item) => !shared.has(item.name))
+    },
+    importedRetained() {
+      return (this.analysis?.plan?.retained || []).filter((item) => Array.isArray(item.imported_modules))
     },
     canApply() {
       return this.analysis?.status === 'ready' && !this.applying && !this.readsPaused && !this.authExpired

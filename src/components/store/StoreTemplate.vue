@@ -62,7 +62,7 @@
           <div v-if="plugin.installed" class="reload-diagnostic">
             <el-tag
               size="mini"
-              :type="plugin.reload_support === 'hot_reloadable' ? 'success' : 'info'"
+              :type="plugin.stopped ? 'warning' : plugin.reload_support === 'hot_reloadable' ? 'success' : 'info'"
               effect="plain"
             >
               {{ reloadLabel(plugin) }}
@@ -198,6 +198,10 @@ export default {
     openRepository(plugin) { window.open(this.repositoryUrl(plugin), "_blank", "noopener,noreferrer") },
     showDetails(plugin) { this.selectedPlugin = plugin; this.drawerVisible = true },
     reloadLabel(plugin) {
+      if (plugin.stopped) {
+        if ((plugin.reload_reasons || []).includes("dependency_missing")) return "缺少依赖已停用，安装依赖后重启"
+        return "加载失败已停用，修复后可热重载"
+      }
       if (plugin.reload_support === "hot_reloadable") return "支持热加载"
       if ((plugin.reload_reasons || []).includes("not_loaded")) return "尚未加载"
       return "变更后需要重启"

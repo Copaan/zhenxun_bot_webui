@@ -101,7 +101,8 @@
       </div>
     </section>
 
-    <MigrationPanel />
+    <BackupPanel />
+
 
     <section class="about-content">
       <article>
@@ -132,7 +133,7 @@ import logoUrl from "@/assets/image/logo.png"
 import { hasDirtyState } from "@/utils/dirty-state"
 import { requestRestartWithRecovery } from "@/utils/restart-flow"
 import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
-import MigrationPanel from "./MigrationPanel.vue"
+import BackupPanel from "./BackupPanel.vue"
 
 const COMPONENT_META = {
   bot: { name: "真寻本体", icon: "el-icon-cpu" },
@@ -142,7 +143,7 @@ const COMPONENT_META = {
 
 export default {
   name: "AboutPage",
-  components: { MigrationPanel },
+  components: { BackupPanel },
   data() {
     return {
       logoUrl, checking: false, updateInfo: null, updateError: "",
