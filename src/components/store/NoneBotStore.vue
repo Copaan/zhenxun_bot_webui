@@ -122,12 +122,12 @@
           <div v-if="plugin.blocked_reasons.length" class="blocked-reason">
             {{ reasonLabel(plugin.blocked_reasons[0]) }}
           </div>
-          <p v-for="warning in plugin.warnings || []" :key="warning.code">{{ reasonLabel(warning) }}<template v-if="plugin.install_state !== 'blocked'">；安装时将实际验证。</template></p>
+          <p v-for="warning in plugin.warnings || []" :key="warning.code">{{ reasonLabel(warning) }}<template v-if="plugin.install_state !== 'blocked'">仍可尝试安装，安装时会检查依赖并实际加载验证。</template></p>
           <p v-if="plugin.catalog_source === 'local'">远端目录无此条目，按本地托管记录管理。</p>
           <div v-if="plugin.failure_reasons && plugin.failure_reasons.length" class="blocked-reason">
             {{ reasonLabel(plugin.failure_reasons[0]) }}
             <span v-if="plugin.failure_reasons[0].paths && plugin.failure_reasons[0].paths.length">
-              （{{ plugin.failure_reasons[0].paths.join("、") }}）
+              （配置项：{{ plugin.failure_reasons[0].paths.join("、") }}）
             </span>
           </div>
           <div v-if="plugin.pending_reasons && plugin.pending_reasons.length" class="blocked-reason">

@@ -74,24 +74,17 @@
               <i class="el-icon-back"></i>
             </button>
             <h2>{{ editorTitle }}</h2>
-            <p v-if="editingPolicy">同步影响 {{ editingPolicy.bound_bot_ids.length }} 个绑定账号</p>
+            <p v-if="editingPolicy">修改立即生效，同步影响 {{ editingPolicy.bound_bot_ids.length }} 个绑定账号</p>
             <p v-else>{{ account.platform }} · {{ account.connected ? "在线" : "离线" }}</p>
           </div>
           <div class="editor-status">
             <el-tag v-if="editingPolicy" size="small">共享策略</el-tag>
             <el-tag v-else-if="policyScope === 'group'" size="small" type="info">Bot 独立群设置</el-tag>
-            <el-tag v-else-if="account.mode === 'linked' && !detachPending" size="small" type="warning">{{ account.policy.name }}</el-tag>
+            <el-tag v-else-if="account.mode === 'linked'" size="small" type="warning">{{ account.policy.name }}</el-tag>
             <el-tag v-else size="small" type="info">独立设置</el-tag>
           </div>
         </div>
 
-        <el-alert
-          v-if="detachPending"
-          title="保存后，此账号将解除共享策略并转为独立设置"
-          type="warning"
-          show-icon
-          :closable="false"
-        />
 
         <el-form
           v-if="editingPolicy"
@@ -99,13 +92,15 @@
           label-position="top"
         >
           <el-form-item label="策略名称">
-            <el-input v-model="editingPolicy.name" maxlength="80" />
+            <el-input v-model="editingPolicy.name" maxlength="80" :disabled="saving" @change="savePolicyMeta" />
           </el-form-item>
           <el-form-item label="说明">
             <el-input
               v-model="editingPolicy.description"
               maxlength="255"
               placeholder="可选"
+              :disabled="saving"
+              @change="savePolicyMeta"
             />
           </el-form-item>
         </el-form>
@@ -128,13 +123,13 @@
         <div class="batch-toolbar">
           <el-checkbox :value="allFilteredSelected" :indeterminate="someFilteredSelected" @change="toggleFilteredSelection">选择筛选结果</el-checkbox>
           <span>{{ selectedModules.length }} 项已选择</span>
-          <el-button size="mini" icon="el-icon-check" :disabled="!selectedModules.length" @click="setSelectedEnabled(true)">启用所选</el-button>
-          <el-button size="mini" icon="el-icon-close" :disabled="!selectedModules.length" @click="setSelectedEnabled(false)">禁用所选</el-button>
+          <el-button size="mini" icon="el-icon-check" :disabled="!selectedModules.length || saving" @click="setSelectedEnabled(true)">启用所选</el-button>
+          <el-button size="mini" icon="el-icon-close" :disabled="!selectedModules.length || saving" @click="setSelectedEnabled(false)">禁用所选</el-button>
         </div>
 
         <div class="feature-table">
           <div class="feature-row feature-head">
-            <span></span><span>功能</span><span>类型</span><span>{{ dirty ? '保存后状态预览' : '最终状态' }}</span><span>{{ editingPolicy ? '共享策略设置' : policyScope === 'group' ? '本群设置' : '账号设置' }}</span>
+            <span></span><span>功能</span><span>类型</span><span>最终状态</span><span>{{ editingPolicy ? '共享策略设置' : policyScope === 'group' ? '本群设置' : '账号设置' }}</span>
           </div>
           <div v-for="item in filteredFeatures" :key="item.module" class="feature-row">
             <el-checkbox v-model="selectedModules" :label="item.module"><span></span></el-checkbox>
@@ -151,11 +146,6 @@
           <div v-if="!filteredFeatures.length" class="empty-state">没有符合条件的功能</div>
         </div>
 
-        <footer class="save-bar">
-          <span>{{ dirty ? "有尚未保存的修改" : "配置已同步" }}</span>
-          <el-button :disabled="!dirty || saving" @click="discardChanges">放弃修改</el-button>
-          <el-button type="primary" icon="el-icon-check" :loading="saving" :disabled="!dirty || (policyScope === 'group' && !groupAccount)" @click="saveEditor">保存并生效</el-button>
-        </footer>
         </template>
       </section>
       <section v-else class="empty-editor">暂无机器人账号</section>
@@ -238,9 +228,7 @@
 
 <script>
 import { apiErrorDetail } from "@/utils/api-error"
-import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 
-const SOURCE = "plugin-policy"
 const sorted = (values) => [...new Set(values || [])].sort()
 
 export default {
@@ -252,15 +240,14 @@ export default {
       accounts: [], policies: [], catalog: { plugins: [], tasks: [] },
       selectedBotId: "", account: null, editingPolicy: null,
       policyScope: "account", groups: [], groupAccount: null, selectedGroupKey: "", privateAccount: null, selectionRequest: 0, listRequest: 0, destroyed: false,
-      draft: { plugins: [], tasks: [] }, baseline: { plugins: [], tasks: [] },
-      detachPending: false, activeKind: "plugins", accountSearch: "", featureSearch: "", statusFilter: "all", selectedModules: [],
+      draft: { plugins: [], tasks: [] },
+      activeKind: "plugins", accountSearch: "", featureSearch: "", statusFilter: "all", selectedModules: [],
       createDialogVisible: false, policyDialogVisible: false, bindDialogVisible: false, copyDialogVisible: false,
       createForm: { name: "", description: "", bindCurrent: true },
         bindingPolicy: null, bindTargets: [], copyTargets: [], bindImpacts: [], copyImpacts: [], impactRequest: 0,
     }
   },
   computed: {
-    dirty() { return Boolean(JSON.stringify(this.draft) !== JSON.stringify(this.baseline) || (this.editingPolicy && (this.editingPolicy.name !== this.editingPolicy.originalName || this.editingPolicy.description !== this.editingPolicy.originalDescription))) },
     editorTitle() { return this.editingPolicy ? this.editingPolicy.name : this.policyScope === "private" ? "所有私聊" : (this.groupAccount?.group_name || this.account?.nickname || this.account?.runtime_bot_id || "账号设置") },
     filteredAccounts() { const q = this.accountSearch.trim().toLowerCase(); return q ? this.accounts.filter((x) => `${x.nickname} ${x.bot_id} ${x.runtime_bot_id}`.toLowerCase().includes(q)) : this.accounts },
     currentFeatures() { const known = this.catalog[this.activeKind] || []; const target = this.groupAccount || this.privateAccount || this.account; const missing = target && !this.editingPolicy ? (this.activeKind === "plugins" ? target.missing_plugins : target.missing_tasks) || [] : []; return [...known, ...missing.filter((module) => !known.some((x) => x.module === module)).map((module) => ({ module, name: "已缺失模块", feature_type: "MISSING", load_status: false, global_status: false, missing: true }))] },
@@ -271,11 +258,10 @@ export default {
     bindCandidates() { return this.accounts.filter((x) => !this.bindingPolicy?.bound_bot_ids.includes(x.bot_id)) },
   },
   watch: {
-    dirty(value) { setDirtyState(SOURCE, Boolean(value)) },
     activeKind() { this.selectedModules = [] },
   },
   async mounted() { await this.loadAll() },
-  beforeDestroy() { this.destroyed = true; this.selectionRequest++; this.listRequest++; this.impactRequest++; clearDirtyState(SOURCE) },
+  beforeDestroy() { this.destroyed = true; this.selectionRequest++; this.listRequest++; this.impactRequest++ },
   methods: {
     scopeName(scope) {
       const names = { qq_client: "QQ 个人号", qq_api: "QQ 官方", telegram: "Telegram", private: "私聊" }
@@ -285,7 +271,6 @@ export default {
       return { migrated: "已迁移", pending: "待迁移", needs_review: "需人工核验" }[status] || status
     },
     async openTransfer() {
-      if (this.dirty) return this.$message.warning("请先保存或放弃当前策略草稿。")
       this.transferVisible = true
       await this.loadTransfer()
     },
@@ -333,11 +318,10 @@ export default {
     },
     groupKey(group) { return JSON.stringify([group.platform_scope, group.group_id, group.channel_id || ""]) },
     groupUrl(group) { return `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/groups/${encodeURIComponent(group.group_id)}?platform_scope=${encodeURIComponent(group.platform_scope)}&channel_id=${encodeURIComponent(group.channel_id || "")}` },
-    setDraft(record) { this.draft = { plugins: sorted(record.block_plugins), tasks: sorted(record.block_tasks) }; this.baseline = JSON.parse(JSON.stringify(this.draft)); this.selectedModules = []; this.detachPending = false; clearDirtyState(SOURCE) },
-    async confirmDiscard(title = "切换设置") { if (!this.dirty) return true; try { await this.$confirm("当前修改尚未保存，是否放弃？", title, { type: "warning" }); return true } catch (_) { return false } },
+    setDraft(record) { this.draft = { plugins: sorted(record.block_plugins), tasks: sorted(record.block_tasks) }; this.selectedModules = [] },
     targetRevisions(botIds) { return Object.fromEntries(botIds.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])) },
     async selectScope(scope) {
-      if (this.saving || scope === this.policyScope || !await this.confirmDiscard()) return
+      if (this.saving || scope === this.policyScope) return
       this.selectionRequest++; this.policyScope = scope; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""; this.setDraft(this.account)
       if (scope === "account") return
       if (scope === "private") { this.loadPrivatePolicy(); return }
@@ -365,7 +349,7 @@ export default {
       finally { if (request === this.selectionRequest) this.loading = false }
     },
     async selectGroup(key) {
-      if (this.saving || key === this.selectedGroupKey || !await this.confirmDiscard()) return
+      if (this.saving || key === this.selectedGroupKey) return
       const group = this.groups.find((item) => this.groupKey(item) === key)
       if (!group) return
       const request = ++this.selectionRequest
@@ -401,22 +385,34 @@ export default {
       const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(botId)}`)
       if (request !== this.selectionRequest || this.destroyed) return
       if (!resp.suc) throw new Error(resp.info)
-      this.selectedBotId = botId; this.account = resp.data; this.editingPolicy = null; this.detachPending = false
+      this.selectedBotId = botId; this.account = resp.data; this.editingPolicy = null
       this.policyScope = "account"; this.groups = []; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""
       this.setDraft(resp.data)
       if (this.$route.query.bot_id !== botId) this.navigate({ bot_id: botId })
     },
     async selectAccount(botId) {
       if (this.saving || !botId || botId === this.account?.bot_id && !this.editingPolicy) return
-      if (!await this.confirmDiscard("切换账号")) return
       this.loading = true; try { await this.loadAccount(botId) } finally { this.loading = false }
     },
     accountLabel(item) { return `${item.nickname || item.runtime_bot_id} (${item.bot_id})` },
     boundAccountNames(policy) { return policy.bound_bot_ids.map((id) => this.accounts.find((item) => item.bot_id === id)?.nickname || id).join("、") },
     isEnabled(module) { return !this.draft[this.activeKind].includes(module) },
-    setFeatureEnabled(module, enabled) { if (this.saving) return; const values = new Set(this.draft[this.activeKind]); enabled ? values.delete(module) : values.add(module); this.draft = { ...this.draft, [this.activeKind]: sorted(values) }; if (this.policyScope === "account" && this.account?.mode === "linked" && !this.editingPolicy) this.detachPending = true },
+    setFeatureEnabled(module, enabled) { this.applyModules([module], enabled) },
+    setSelectedEnabled(enabled) { const modules = this.selectedModules; this.selectedModules = []; this.applyModules(modules, enabled) },
+    async applyModules(modules, enabled) {
+      if (this.saving || !modules.length) return
+      const values = new Set(this.draft[this.activeKind])
+      modules.forEach((module) => enabled ? values.delete(module) : values.add(module))
+      const next = { ...this.draft, [this.activeKind]: sorted(values) }
+      if (JSON.stringify(next) === JSON.stringify(this.draft)) return
+      if (!this.editingPolicy && this.policyScope === "account" && this.account?.mode === "linked") {
+        try { await this.$confirm(`此账号正在使用共享策略「${this.account.policy.name}」，修改后将解除共享并转为独立设置。`, "解除共享策略", { type: "warning" }) } catch (_) { return }
+      }
+      const previous = this.draft
+      this.draft = next
+      if (!await (this.editingPolicy ? this.savePolicy() : this.saveTarget())) this.draft = previous
+    },
     toggleFilteredSelection(value) { const values = new Set(this.selectedModules); this.filteredFeatures.forEach((x) => value ? values.add(x.module) : values.delete(x.module)); this.selectedModules = [...values] },
-    setSelectedEnabled(enabled) { this.selectedModules.forEach((module) => this.setFeatureEnabled(module, enabled)); this.selectedModules = [] },
     typeLabel(item) { const map = { NORMAL: "普通", DEPENDANT: "依赖", ADMIN: "管理员", SUPERUSER: "超级用户", ADMIN_SUPER: "管理/超管", TASK: "被动", MISSING: "缺失" }; return map[item.feature_type] || item.feature_type },
     effectiveLabel(item) {
       if (!item.load_status) return item.missing ? "模块缺失" : "未加载"
@@ -426,26 +422,94 @@ export default {
       const labels = { not_loaded: "未加载", global_disabled: "全局关闭", global_group_disabled: "全局群聊关闭", global_private_disabled: "全局私聊关闭", account_disabled: scoped ? "账号禁用（本层开启不能解除）" : "账号禁用", administrator_disabled: "管理员禁用（本层开启不能解除）", group_disabled: "本群禁用", private_disabled: "全部私聊禁用" }
       const decision = target?.effective?.[this.activeKind]?.find(row => row.module === item.module)
       if (decision) {
-        const localReasons = scoped ? ["group_disabled", "private_disabled"] : ["account_disabled"]
-        const reasons = (decision.blocked_by || []).filter(reason => !this.dirty || !localReasons.includes(reason))
+        const reasons = decision.blocked_by || []
         if (reasons.length) return reasons.map(reason => labels[reason] || reason).join("；")
       } else if (!item.global_status && !["GROUP", "PRIVATE"].includes(item.block_type)) return "全局关闭"
       return this.isEnabled(item.module) ? "当前启用" : (this.editingPolicy ? "策略禁用" : scoped ? "本层禁用" : "账号禁用")
     },
     effectiveType(item) { if (!item.load_status || !item.global_status) return "info"; return ["可用", "当前启用"].includes(this.effectiveLabel(item)) ? "success" : "danger" },
-    discardChanges() { if (this.saving) return; if (this.editingPolicy) { this.editingPolicy.name = this.editingPolicy.originalName; this.editingPolicy.description = this.editingPolicy.originalDescription } this.draft = JSON.parse(JSON.stringify(this.baseline)); this.detachPending = false },
-    async saveEditor() { if (this.saving || (this.policyScope === "group" && !this.groupAccount) || (this.policyScope === "private" && !this.privateAccount)) return; if (this.editingPolicy) return this.savePolicy(); this.saving = true; try { const target = this.groupAccount || this.privateAccount || this.account; const url = this.groupAccount ? this.groupUrl(target) : this.privateAccount ? `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/private` : `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`; const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true }); if (this.destroyed) return; if (resp.suc) { this.$message.success(resp.info); if (this.groupAccount) { this.groupAccount = resp.data; this.setDraft(resp.data) } else if (this.privateAccount) { this.privateAccount = resp.data; this.setDraft(resp.data) } else await this.loadAll() } } catch (error) { if (error?.response?.status === 409) this.$message.warning("配置已变化，草稿已保留，请重新加载后比较"); else this.$message.error(apiErrorDetail(error, "保存失败，草稿已保留")) } finally { this.saving = false } },
-    async openCreatePolicy() { if (!this.account || this.saving || !await this.confirmDiscard()) return; this.createForm = { name: "", description: "", bindCurrent: true }; this.createDialogVisible = true },
+    async saveTarget() {
+      const target = this.groupAccount || this.privateAccount || (this.policyScope === "account" ? this.account : null)
+      if (!target) return false
+      const base = `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`
+      const url = this.groupAccount ? this.groupUrl(target) : this.privateAccount ? `${base}/private` : base
+      this.saving = true
+      try {
+        const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true })
+        if (this.destroyed || !resp.suc) return false
+        this.$message.success(resp.info)
+        if (this.groupAccount) this.groupAccount = resp.data
+        else if (this.privateAccount) this.privateAccount = resp.data
+        else {
+          const detached = this.account.mode === "linked"
+          this.account = resp.data
+          if (detached) this.refreshLists()
+          else this.accounts = this.accounts.map((item) => item.bot_id === resp.data.bot_id ? { ...item, revision: resp.data.revision } : item)
+        }
+        this.setDraft(resp.data)
+        return true
+      } catch (error) {
+        if (error?.response?.status === 409) { this.$message.warning("设置已被其他操作修改，已重新读取最新设置"); this.reloadTarget() } else this.$message.error(apiErrorDetail(error, "保存失败"))
+        return false
+      } finally { this.saving = false }
+    },
+    async savePolicy() {
+      const policy = this.editingPolicy
+      if (!policy.name.trim()) { this.$message.warning("策略名称不能为空"); policy.name = policy.originalName; return false }
+      this.saving = true
+      try {
+        const resp = await this.putRequest(`${this.$root.prefix}/plugin-policy/policies/${policy.id}`, { expected_revision: policy.revision, name: policy.name, description: policy.description, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true })
+        if (this.destroyed || !resp.suc) return false
+        this.$message.success(resp.info)
+        this.editingPolicy = { ...resp.data, originalName: resp.data.name, originalDescription: resp.data.description }
+        this.policies = this.policies.map((item) => item.id === resp.data.id ? resp.data : item)
+        this.setDraft(resp.data)
+        this.refreshLists()
+        return true
+      } catch (error) {
+        if (error?.response?.status === 409) { this.$message.warning("共享策略已被其他操作修改，已重新读取"); this.reloadTarget() } else this.$message.error(apiErrorDetail(error, "保存失败"))
+        return false
+      } finally { this.saving = false }
+    },
+    async savePolicyMeta() {
+      const policy = this.editingPolicy
+      if (!policy || this.saving || (policy.name === policy.originalName && policy.description === policy.originalDescription)) return
+      if (!await this.savePolicy()) { policy.name = policy.originalName; policy.description = policy.originalDescription }
+    },
+    async refreshLists() {
+      const [accounts, policies] = await Promise.all([
+        this.getRequest(`${this.$root.prefix}/plugin-policy/accounts`),
+        this.getRequest(`${this.$root.prefix}/plugin-policy/policies`),
+      ])
+      if (this.destroyed) return
+      if (accounts.suc) this.accounts = accounts.data
+      if (policies.suc) this.policies = policies.data
+    },
+    async reloadTarget() {
+      if (this.editingPolicy) {
+        await this.refreshLists()
+        const policy = this.policies.find((item) => item.id === this.editingPolicy?.id)
+        if (policy) { this.editingPolicy = { ...policy, originalName: policy.name, originalDescription: policy.description }; this.setDraft(policy) }
+        return
+      }
+      if (this.groupAccount) {
+        const resp = await this.getRequest(this.groupUrl(this.groupAccount))
+        if (resp.suc && !this.destroyed) { this.groupAccount = resp.data; this.setDraft(resp.data) }
+        return
+      }
+      if (this.privateAccount) return this.loadPrivatePolicy()
+      if (this.selectedBotId) await this.loadAccount(this.selectedBotId)
+    },
+    async openCreatePolicy() { if (!this.account || this.saving) return; this.createForm = { name: "", description: "", bindCurrent: true }; this.createDialogVisible = true },
     async createPolicy() { if (!this.createForm.name.trim()) return this.$message.warning("请输入策略名称"); this.dialogSaving = true; try { const bind = this.createForm.bindCurrent ? [this.account.bot_id] : []; const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/policies`, { name: this.createForm.name, description: this.createForm.description, source_bot_id: this.account.bot_id, source_revision: this.account.revision, bind_bot_ids: bind, expected_revisions: bind.length ? { [this.account.bot_id]: this.account.revision } : {} }); if (resp.suc) { this.$message.success(resp.info); this.createDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
-    async editPolicy(policy) { if (this.saving || !await this.confirmDiscard()) return; this.policyDialogVisible = false; this.editingPolicy = { ...policy, originalName: policy.name, originalDescription: policy.description }; this.setDraft(policy) },
-    async savePolicy() { this.saving = true; try { await this.$confirm(`此修改会同步影响 ${this.editingPolicy.bound_bot_ids.length} 个账号。`, "保存共享策略", { type: "warning" }); const resp = await this.putRequest(`${this.$root.prefix}/plugin-policy/policies/${this.editingPolicy.id}`, { expected_revision: this.editingPolicy.revision, name: this.editingPolicy.name, description: this.editingPolicy.description, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }); if (resp.suc) { this.$message.success(resp.info); await this.loadAll() } } catch (error) { if (error !== "cancel" && error?.response?.status === 409) this.$message.warning("共享策略已变化，草稿已保留") } finally { this.saving = false } },
-    async leavePolicyEditor() { if (await this.confirmDiscard("返回账号设置") && this.selectedBotId) await this.loadAccount(this.selectedBotId) },
+    async editPolicy(policy) { if (this.saving) return; this.policyDialogVisible = false; this.editingPolicy = { ...policy, originalName: policy.name, originalDescription: policy.description }; this.setDraft(policy) },
+    async leavePolicyEditor() { if (this.selectedBotId) await this.loadAccount(this.selectedBotId) },
     openBindDialog(policy) { this.bindingPolicy = policy; this.bindTargets = []; this.bindImpacts = []; this.policyDialogVisible = false; this.bindDialogVisible = true },
     async bindPolicy() { this.dialogSaving = true; try { const resp = await this.putRequest(`${this.$root.prefix}/plugin-policy/bindings`, { policy_id: this.bindingPolicy.id, bot_ids: this.bindTargets, expected_revisions: this.targetRevisions(this.bindTargets) }); if (resp.suc) { this.$message.success(resp.info); this.bindDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
     impactFor(target, source) { const plugins = new Set(target.block_plugins); const sourcePlugins = new Set(source.block_plugins); const tasks = new Set(target.block_tasks); const sourceTasks = new Set(source.block_tasks); return { bot_id: target.bot_id, name: target.nickname || target.runtime_bot_id || target.bot_id, pluginsDisabled: [...sourcePlugins].filter((x) => !plugins.has(x)).length, pluginsEnabled: [...plugins].filter((x) => !sourcePlugins.has(x)).length, tasksDisabled: [...sourceTasks].filter((x) => !tasks.has(x)).length, tasksEnabled: [...tasks].filter((x) => !sourceTasks.has(x)).length } },
     async loadImpacts(targets, source, field) { const request = ++this.impactRequest; try { const details = await Promise.all(targets.map(async (botId) => { const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(botId)}`); return resp.suc ? this.impactFor(resp.data, source) : null })); if (!this.destroyed && request === this.impactRequest) this[field] = details.filter(Boolean) } catch (_) { if (!this.destroyed && request === this.impactRequest) { this[field] = []; this.$message.error("覆盖差异读取失败，请重新选择目标账号。") } } },
     loadBindImpacts() { if (this.bindingPolicy) this.loadImpacts(this.bindTargets, this.bindingPolicy, "bindImpacts") },
-    async openCopyDialog() { if (this.saving || this.policyScope !== "account" || !await this.confirmDiscard()) return; this.copyTargets = []; this.copyImpacts = []; this.copyDialogVisible = true },
+    async openCopyDialog() { if (this.saving || this.policyScope !== "account") return; this.copyTargets = []; this.copyImpacts = []; this.copyDialogVisible = true },
     loadCopyImpacts() { if (this.account) this.loadImpacts(this.copyTargets, this.account, "copyImpacts") },
     async copyAccount() { this.dialogSaving = true; try { const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/copy`, { source_bot_id: this.account.bot_id, source_revision: this.account.revision, target_bot_ids: this.copyTargets, expected_revisions: this.targetRevisions(this.copyTargets) }); if (resp.suc) { this.$message.success(resp.info); this.copyDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
     async deletePolicy(policy) {
@@ -479,9 +543,8 @@ export default {
 .scope-toolbar .el-select { flex: 1; min-width: 180px; max-width: 100%; }
 .editor-heading > div:first-child { flex-wrap: wrap; }
 .editor-heading h2 { width: 100%; overflow-wrap: anywhere; }
-.policy-page .save-bar { position: static; margin: 18px 0 0; padding: 12px 0; }
 .policy-page { min-height: 100%; padding: 20px 22px 32px; overflow: auto; color: var(--text-color); background: var(--bg-color); }
-.page-header, .header-actions, .editor-heading, .editor-heading > div, .feature-toolbar, .batch-toolbar, .save-bar, .policy-list-row, .policy-list-row > div { display: flex; align-items: center; }
+.page-header, .header-actions, .editor-heading, .editor-heading > div, .feature-toolbar, .batch-toolbar, .policy-list-row, .policy-list-row > div { display: flex; align-items: center; }
 .page-header { justify-content: space-between; gap: 18px; margin-bottom: 14px; }
 .page-header h1, .editor-heading h2 { margin: 0; letter-spacing: 0; }
 .page-header h1 { font-size: 24px; }.page-header p, .editor-heading p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 13px; }
@@ -489,13 +552,12 @@ export default {
 .policy-workbench { display: grid; min-height: 680px; grid-template-columns: 280px minmax(0, 1fr); border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
 .account-pane { min-width: 0; padding: 16px; border-right: 1px solid var(--border-color); }.pane-heading { display: flex; justify-content: space-between; margin-bottom: 12px; }.pane-heading span { color: var(--text-color-secondary); }
 .account-list { display: flex; max-height: 610px; flex-direction: column; gap: 4px; margin-top: 10px; overflow-y: auto; }.account-list button { display: grid; width: 100%; min-height: 66px; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.account-list button:hover { background: var(--bg-color-hover); }.account-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.account-list span, .policy-list-row > span { display: flex; min-width: 0; flex-direction: column; gap: 4px; }.account-list strong, .account-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.account-list small, .account-list em, .policy-list-row small { color: var(--text-color-secondary); font-size: 11px; font-style: normal; }.connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-color-disabled); }.connection-dot.online { background: var(--success-color); }
-.editor-pane { min-width: 0; padding: 20px 22px 76px; }.editor-heading { min-height: 46px; justify-content: space-between; gap: 12px; }.editor-heading > div:first-child { min-width: 0; }.back-button { width: 34px; height: 34px; margin-right: 10px; border: 0; border-radius: 4px; color: var(--text-color); background: var(--bg-color-hover); cursor: pointer; }.editor-status { flex: none; }
+.editor-pane { min-width: 0; padding: 20px 22px 24px; }.editor-heading { min-height: 46px; justify-content: space-between; gap: 12px; }.editor-heading > div:first-child { min-width: 0; }.back-button { width: 34px; height: 34px; margin-right: 10px; border: 0; border-radius: 4px; color: var(--text-color); background: var(--bg-color-hover); cursor: pointer; }.editor-status { flex: none; }
 .policy-meta-form { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr); gap: 12px; margin-top: 16px; }.policy-meta-form .el-form-item { margin-bottom: 0; }
 .feature-toolbar { gap: 10px; margin-top: 18px; }.feature-toolbar .el-input { max-width: 330px; margin-left: auto; }.feature-toolbar .el-select { width: 150px; }.batch-toolbar { min-height: 48px; gap: 10px; margin-top: 12px; border-top: 1px solid var(--border-color-light); border-bottom: 1px solid var(--border-color-light); }.batch-toolbar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
 .feature-table { min-width: 680px; }.feature-row { display: grid; min-height: 64px; grid-template-columns: 34px minmax(210px, 1fr) 110px 110px 90px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-color-light); }.feature-head { min-height: 42px; color: var(--text-color-secondary); font-size: 12px; }.feature-name { display: flex; min-width: 0; flex-direction: column; gap: 5px; }.feature-name strong, .feature-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.feature-name small { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 11px; }.empty-state, .empty-editor { display: grid; min-height: 140px; place-items: center; color: var(--text-color-secondary); }
-.save-bar { position: sticky; bottom: 0; z-index: 3; justify-content: flex-end; gap: 10px; margin: 18px -22px -76px; padding: 12px 22px; border-top: 1px solid var(--border-color); background: var(--bg-color-secondary); }.save-bar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
 .policy-list { border-top: 1px solid var(--border-color-light); }.policy-list-row { min-height: 70px; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-color-light); }.policy-list-row > div { gap: 6px; flex: none; }.dialog-copy, .impact-line { color: var(--text-color-secondary); font-size: 13px; }.impact-line { margin-top: 14px; padding: 10px 12px; border-left: 3px solid var(--warning-color); background: var(--bg-color-hover); }.full-control { width: 100%; }.mobile-account-select { display: none; margin-bottom: 10px; }.mobile-account-select .el-select { width: 100%; }
 .impact-list { max-height: 190px; margin-top: 10px; overflow-y: auto; border-top: 1px solid var(--border-color-light); }.impact-list > div { display: flex; flex-direction: column; gap: 3px; padding: 8px 2px; border-bottom: 1px solid var(--border-color-light); font-size: 12px; }.impact-list span { color: var(--text-color-secondary); }
-@media (max-width: 820px) { .policy-page { padding: 12px; }.page-header { align-items: flex-start; flex-direction: column; }.header-actions { width: 100%; justify-content: flex-start; }.mobile-account-select { display: block; }.policy-workbench { min-height: 560px; grid-template-columns: 1fr; }.account-pane { display: none; }.editor-pane { padding: 16px 14px 74px; overflow-x: hidden; }.policy-meta-form { grid-template-columns: 1fr; }.feature-toolbar { align-items: stretch; flex-direction: column; }.feature-toolbar .el-input, .feature-toolbar .el-select { width: 100%; max-width: none; margin-left: 0; }.batch-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 8px 0; }.batch-toolbar span { width: calc(100% - 130px); }.feature-table { min-width: 0; }.feature-head { display: none; }.feature-row:not(.feature-head) { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px; padding: 10px 0; }.feature-row:not(.feature-head) > .el-checkbox { grid-row: 1 / 3; }.feature-row:not(.feature-head) > span:nth-child(3) { grid-column: 2; }.feature-row:not(.feature-head) > span:nth-child(4) { grid-column: 3; grid-row: 2; }.feature-row:not(.feature-head) > span:nth-child(5) { grid-column: 3; grid-row: 1; }.save-bar { margin-right: -14px; margin-left: -14px; padding-right: 14px; padding-left: 14px; }.save-bar span { display: none; }.policy-list-row { align-items: flex-start; flex-direction: column; padding: 12px 0; }.policy-list-row > div { flex-wrap: wrap; } }
+@media (max-width: 820px) { .policy-page { padding: 12px; }.page-header { align-items: flex-start; flex-direction: column; }.header-actions { width: 100%; justify-content: flex-start; }.mobile-account-select { display: block; }.policy-workbench { min-height: 560px; grid-template-columns: 1fr; }.account-pane { display: none; }.editor-pane { padding: 16px 14px 20px; overflow-x: hidden; }.policy-meta-form { grid-template-columns: 1fr; }.feature-toolbar { align-items: stretch; flex-direction: column; }.feature-toolbar .el-input, .feature-toolbar .el-select { width: 100%; max-width: none; margin-left: 0; }.batch-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 8px 0; }.batch-toolbar span { width: calc(100% - 130px); }.feature-table { min-width: 0; }.feature-head { display: none; }.feature-row:not(.feature-head) { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px; padding: 10px 0; }.feature-row:not(.feature-head) > .el-checkbox { grid-row: 1 / 3; }.feature-row:not(.feature-head) > span:nth-child(3) { grid-column: 2; }.feature-row:not(.feature-head) > span:nth-child(4) { grid-column: 3; grid-row: 2; }.feature-row:not(.feature-head) > span:nth-child(5) { grid-column: 3; grid-row: 1; }.policy-list-row { align-items: flex-start; flex-direction: column; padding: 12px 0; }.policy-list-row > div { flex-wrap: wrap; } }
 .dialog-note { margin: 0; color: var(--text-color-secondary); font-size: 12px; }
 </style>
