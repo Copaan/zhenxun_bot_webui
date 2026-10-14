@@ -248,10 +248,10 @@ export const getRequest = (url, params, config = {}) => {
       if (params[e] != null) {
         if (Array.isArray(params[e])) {
           params[e].forEach((x) => {
-            url += e + "=" + x + "&"
+            url += e + "=" + encodeURIComponent(x) + "&"
           })
         } else {
-          url += e + "=" + params[e] + "&"
+          url += e + "=" + encodeURIComponent(params[e]) + "&"
         }
       }
     })

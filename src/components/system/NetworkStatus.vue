@@ -5,11 +5,9 @@
     <el-alert v-if="configured.pending_restart" title="网络配置已保存，等待重启生效" type="warning" :closable="false" show-icon />
     <p v-if="configured.pending_restart">目标：{{ configured.scheme.toUpperCase() }} :{{ configured.port }} · HTTP {{ httpModeLabel(configured.http_mode) }}</p>
     <el-alert v-if="runtime.http_mode === 'serve'" title="HTTP入口明文传输登录凭据和管理数据，请优先使用HTTPS。" type="warning" :closable="false" show-icon />
-    <el-alert v-if="runtime.http_state === 'degraded'" :title="`HTTP入口降级：${httpErrorLabel(runtime.http_error_code || runtime.http_error)}`" type="error" :closable="false" show-icon />
-    <p v-if="runtime.http_error_code">{{ runtime.http_error_code }} / {{ runtime.http_stage || '-' }} / errno {{ runtime.http_errno ?? '-' }}</p>
+    <el-alert v-if="runtime.http_state === 'degraded'" :title="`HTTP入口降级：${httpErrorLabel(runtime.http_error_code)}`" type="error" :closable="false" show-icon />
+    <p v-if="runtime.http_error_code">{{ runtime.http_error_code }} / errno {{ runtime.http_errno ?? '-' }}</p>
     <p v-if="runtime.http_retry_in_seconds">重试 {{ runtime.http_retry_count || 0 }} · 间隔 {{ runtime.http_retry_in_seconds }} s</p>
-    <p v-if="runtime.http_total_retries">HTTP累计重试：{{ runtime.http_total_retries }}</p>
-    <p v-if="runtime.http_first_error">首次错误：{{ runtime.http_first_error }} · 最近错误：{{ runtime.http_latest_error || runtime.http_error }}</p>
     <ul v-if="status.access_urls && status.access_urls.length">
       <li v-for="url in status.access_urls" :key="url"><a :href="url" target="_blank" rel="noopener noreferrer">{{ url }}</a></li>
     </ul>

@@ -45,19 +45,9 @@
       </div>
 
       <div class="plugin-action-pair">
-        <CuteButton @click="showArchiveDialog = true" type="primary" icon="download" :iconColor="'var(--button-icon-color-info)'" class="plugin-action" size="sm">外部安装插件</CuteButton>
         <CuteButton @click="showInstallDependencyDialog = true" type="primary" icon="download" :iconColor="'var(--button-icon-color-info)'" class="plugin-action" size="sm">依赖管理</CuteButton>
       </div>
     </div>
-
-    <PluginArchiveDialog
-      v-if="showArchiveDialog"
-      :visible="showArchiveDialog"
-      :initial-store-key="$route.query.archive_store_key || ''"
-      :initial-action="$route.query.archive_action || ''"
-      @close="showArchiveDialog = false"
-      @changed="archiveChanged"
-    />
 
     <!-- 过滤标签区域 -->
     <div
@@ -225,7 +215,7 @@
             :style="{ color: 'var(--text-color-secondary)' }"
           >
             <i class="fas fa-inbox text-3xl mb-2"></i>
-            <p>暂无自定义菜单类型</p>
+            <p>暂无菜单类型</p>
           </div>
 
           <div
@@ -294,7 +284,6 @@
 
 <script>
 import PluginListTemplate from "@/components/plugin/PluginListTemplate.vue"
-import PluginArchiveDialog from "@/components/plugin/PluginArchiveDialog.vue"
 import ManualDependencyDialog from "@/components/plugin/ManualDependencyDialog.vue"
 import CuteButton from "@/components/ui/CuteButton.vue"
 import NeonDialog from "@/components/ui/NeonDialog.vue"
@@ -304,7 +293,6 @@ export default {
   name: "PluginList",
   components: {
     PluginListTemplate,
-    PluginArchiveDialog,
     ManualDependencyDialog,
     NeonDialog,
     NeonInput,
@@ -333,7 +321,6 @@ export default {
       renameMenuTypeName: "",
       oldRenameMenuTypeName: "",
       showInstallDependencyDialog: false,
-      showArchiveDialog: false,
     }
   },
   computed: {
@@ -342,7 +329,6 @@ export default {
     },
   },
   mounted() {
-    this.showArchiveDialog = this.$route.query.archives === "1"
     window.addEventListener("resize", this.handleResize)
     this.getPluginCount()
     this.getPluginMenuType()
@@ -352,10 +338,6 @@ export default {
     window.removeEventListener("resize", this.handleResize)
   },
   methods: {
-    archiveChanged() {
-      this.pltKey++
-      this.getPluginCount()
-    },
     handleResize() {
       if (this.$isMobile()) {
         this.pluginListHeight =
@@ -365,18 +347,6 @@ export default {
           160
       } else {
         this.pluginListHeight = this.$refs.pluginManager.offsetHeight - 235
-      }
-    },
-    getTopItemClass(pluginType) {
-      return {
-        "top-select-btn-item": true,
-        "top-btn-item-select": this.activeBtn == pluginType,
-      }
-    },
-    getTagClass(tag) {
-      return {
-        "filter-tag-item": true,
-        "active-tag": this.searchMenuType === tag,
       }
     },
     clickPluginType(pluginType) {
@@ -446,123 +416,52 @@ export default {
       this.$refs.pluginListRef?.clearSelection()
     },
 
-    bulkToggleSwitch(enable) {
-      if (this.selectedPluginModules.length === 0) return
-      const actionText = enable ? "启用" : "禁用"
+    async bulkUpdate(fields, actionText) {
+      if (this.selectedPluginModules.length === 0) return false
       const loading = this.getLoading(".bulk-actions")
-
-      const updates = this.selectedPluginModules.map((module) => ({
-        module: module,
-        block_type: enable ? null : "ALL",
-      }))
-
-      this.putRequest(`${this.$root.prefix}/plugin/plugins/batch_update`, {
-        updates: updates,
-      })
-        .then((resp) => {
-          loading.close()
-          if (!resp) {
-            this.$message.error(`批量${actionText}失败：无效的响应`)
-            return
-          }
-          if (resp.suc) {
-            if (resp.warning) {
-              this.$message.warning(resp.warning)
-            } else {
-              const result = resp.data
-              if (result.success) {
-                this.$message.success(
-                  `成功${actionText} ${result.updated_count} 个插件！`
-                )
-                if (result.errors && result.errors.length > 0) {
-                  result.errors.forEach((err) =>
-                    this.$message.warning(`插件 ${err.module}: ${err.error}`)
-                  )
-                }
-                this.cancelSelection()
-                this.pltKey++
-              } else {
-                let errorMsg = `批量${actionText}失败`
-                if (result.errors && result.errors.length > 0) {
-                  errorMsg +=
-                    ": " +
-                    result.errors
-                      .map((e) => `${e.module}(${e.error})`)
-                      .join(", ")
-                }
-                this.$message.error(errorMsg)
-              }
-            }
-          } else {
-            this.$message.error(resp.info || `批量${actionText}失败`)
-          }
+      try {
+        const resp = await this.putRequest(`${this.$root.prefix}/plugin/plugins/batch_update`, {
+          updates: this.selectedPluginModules.map((module) => ({ module, ...fields })),
         })
-        .catch((error) => {
-          loading.close()
-          this.$message.error(`请求失败: ${error}`)
-        })
+        if (!resp.suc) {
+          this.$message.error(resp.info || `${actionText}失败`)
+          return false
+        }
+        if (resp.warning) {
+          this.$message.warning(resp.warning)
+          return false
+        }
+        const result = resp.data
+        const errors = result.errors || []
+        if (!result.success) {
+          this.$message.error(`${actionText}失败` + (errors.length ? `: ${errors.map((e) => `${e.module}(${e.error})`).join(", ")}` : ""))
+          return false
+        }
+        this.$message.success(`${actionText}成功，共 ${result.updated_count} 个插件`)
+        errors.forEach((err) => this.$message.warning(`插件 ${err.module}: ${err.error}`))
+        this.cancelSelection()
+        this.pltKey++
+        return true
+      } catch (error) {
+        this.$message.error(`${actionText}失败: ${error.message || error}`)
+        return false
+      } finally {
+        loading.close()
+      }
     },
 
-    bulkUpdateMenuType() {
+    bulkToggleSwitch(enable) {
+      this.bulkUpdate({ block_type: enable ? null : "ALL" }, enable ? "批量启用" : "批量禁用")
+    },
+
+    async bulkUpdateMenuType() {
       if (!this.targetMenuTypeBulk) {
         this.$message.warning("请先在上方选择目标菜单类型")
         return
       }
-      if (this.selectedPluginModules.length === 0) return
-
-      const loading = this.getLoading(".bulk-actions")
-
-      const updates = this.selectedPluginModules.map((module) => ({
-        module: module,
-        menu_type: this.targetMenuTypeBulk,
-      }))
-
-      this.putRequest(`${this.$root.prefix}/plugin/plugins/batch_update`, {
-        updates: updates,
-      })
-        .then((resp) => {
-          loading.close()
-          if (!resp) {
-            this.$message.error("批量修改菜单类型失败：无效的响应")
-            return
-          }
-          if (resp.suc) {
-            if (resp.warning) {
-              this.$message.warning(resp.warning)
-            } else {
-              const result = resp.data
-              if (result.success) {
-                this.$message.success(
-                  `成功更新 ${result.updated_count} 个插件的菜单类型！`
-                )
-                if (result.errors && result.errors.length > 0) {
-                  result.errors.forEach((err) =>
-                    this.$message.warning(`插件 ${err.module}: ${err.error}`)
-                  )
-                }
-                this.targetMenuTypeBulk = null
-                this.cancelSelection()
-                this.pltKey++
-              } else {
-                let errorMsg = "批量修改菜单类型失败"
-                if (result.errors && result.errors.length > 0) {
-                  errorMsg +=
-                    ": " +
-                    result.errors
-                      .map((e) => `${e.module}(${e.error})`)
-                      .join(", ")
-                }
-                this.$message.error(errorMsg)
-              }
-            }
-          } else {
-            this.$message.error(resp.info || "批量修改菜单类型失败")
-          }
-        })
-        .catch((error) => {
-          loading.close()
-          this.$message.error("请求失败: " + error)
-        })
+      if (await this.bulkUpdate({ menu_type: this.targetMenuTypeBulk }, "批量修改菜单类型")) {
+        this.targetMenuTypeBulk = null
+      }
     },
 
     addNewMenuType() {
@@ -579,7 +478,7 @@ export default {
       } else {
         this.menuTypeList.push(newType)
         this.$message.success(
-          `菜单类型 "${newType}" 已添加，您可以现在将其应用到插件`
+          `菜单类型 "${newType}" 已临时添加，通过批量“应用类型”分配给插件后才会保存`
         )
         this.newMenuTypeName = ""
         this.handleResize()
@@ -589,11 +488,10 @@ export default {
     startRenameType(type) {
       this.showRenameDialogFlag = true
       this.oldRenameMenuTypeName = type
+      this.renameMenuTypeName = type
     },
     triggerRenameType() {
-      if (!this.renameMenuTypeName) return
-
-      const newName = this.renameMenuTypeName.trim()
+      const newName = (this.renameMenuTypeName || "").trim()
       if (!newName) {
         this.$message.warning("菜单类型名称不能为空")
         return
@@ -632,6 +530,10 @@ export default {
             if (index !== -1) {
               this.menuTypeList.splice(index, 1, newName)
             }
+            if (this.searchMenuType === this.oldRenameMenuTypeName) {
+              this.searchMenuType = newName
+            }
+            this.pltKey++
             this.manageTypesDialogVisible = false
             this.showRenameDialogFlag = false
           } else {

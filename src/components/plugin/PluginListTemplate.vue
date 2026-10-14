@@ -120,15 +120,6 @@
               @click="goToManagement(data)"
             />
             <NormalButton
-              v-else-if="data.management_source === 'local_archive'"
-              iconClass="store"
-              text="归档"
-              title="前往归档管理或卸载"
-              base-class="hover:scale-110"
-              active-class="bg-blue-100 text-blue-600 hover:bg-blue-200 hover:text-blue-800"
-              @click="goToManagement(data)"
-            />
-            <NormalButton
               v-else
               text="卸载"
               :iconClass="
@@ -140,9 +131,9 @@
               :active-class="'bg-purple-100 text-purple-600 hover:bg-purple-200 hover:text-purple-800'"
               @click="uninstallPlugin(data)"
             />
-            <div class="plugin-switch flex items-center ml-auto" title="启用或停用命令响应，不会卸载插件或释放运行时资源" @click.stop>
-              <MySwitch :value="data.status" :disabled="!data.allow_switch" @input="onSwitchChange(data, $event)" />
-              <span class="ml-2 text-xs" :style="{ color: data.status ? 'var(--el-color-success)' : 'var(--el-color-danger)' }">{{ data.allow_switch ? (data.status ? "开启" : "关闭") : "禁用" }}</span>
+            <div class="plugin-switch flex items-center ml-auto" title="全局关闭后会在后台卸载插件以释放资源，重新开启时自动加载" @click.stop>
+              <el-switch :value="data.status" :disabled="!data.allow_switch" @change="onSwitchChange(data, $event)" />
+              <span class="ml-2 text-xs" :style="{ color: data.status ? 'var(--el-color-success)' : 'var(--el-color-danger)' }">{{ switchLabel(data) }}</span>
             </div>
           </div>
         </div>
@@ -173,27 +164,25 @@
         >打开插件主页</el-button>
       </div>
     </el-drawer>
-    <PluginArchiveDialog
-      v-if="archiveUninstallKey"
-      :visible="true"
-      :initial-store-key="archiveUninstallKey"
-      initial-action="uninstall"
-      @close="archiveUninstallKey = ''"
-      @changed="getPluginList"
-    />
   </div>
 </template>
 
 <script>
 import UpdateDialog from "./UpdateDialog"
-import PluginArchiveDialog from "./PluginArchiveDialog.vue"
 import NormalButton from "@/components/ui/NormalButton.vue"
-import MySwitch from "@/components/ui/MySwitch.vue"
+import { notifyRestartStatusChanged } from "@/utils/apply-result"
+import { newOperationId, reasonText, rememberPluginOperation, storeOperationResult } from "@/utils/plugin-operation"
+
+const PLUGIN_TYPE_GROUPS = {
+  ADMIN: ["ADMIN", "ADMIN_SUPER"],
+  SUPERUSER: ["SUPERUSER", "ADMIN_SUPER"],
+  HIDDEN: ["HIDDEN", "DEPENDANT"],
+}
 
 export default {
   name: "PluginListTemplate",
   props: { pluginType: String, menuType: String },
-  components: { UpdateDialog, PluginArchiveDialog, NormalButton, MySwitch },
+  components: { UpdateDialog, NormalButton },
   data() {
     return {
       dataList: [],
@@ -202,7 +191,6 @@ export default {
       selectedPlugins: [],
       usageVisible: false,
       usagePlugin: null,
-      archiveUninstallKey: "",
     }
   },
   computed: {
@@ -214,17 +202,12 @@ export default {
     this.getPluginList()
   },
   methods: {
-    newOperationId() {
-      const bytes = new Uint8Array(16)
-      window.crypto.getRandomValues(bytes)
-      return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")
-    },
     getPluginList() {
       this.clearSelection()
       const loading = this.getLoading(".plugin-list-container")
 
       this.getRequest(`${this.$root.prefix}/plugin/get_plugin_list`, {
-        plugin_type: [this.pluginType],
+        plugin_type: PLUGIN_TYPE_GROUPS[this.pluginType] || [this.pluginType],
         menu_type: this.menuType,
       })
         .then((resp) => {
@@ -243,9 +226,6 @@ export default {
           this.dataList = []
         })
         .finally(() => loading.close())
-    },
-    changeSwitch(data) {
-      this.onSwitchChange(data, !data.status)
     },
     onSwitchChange(data, newStatus) {
       if (data.switching) return
@@ -303,14 +283,10 @@ export default {
           query: { source: "nonebot", search: project, action: "uninstall" },
         }).catch(() => {})
       }
-      if (data.management_source === "local_archive") {
-        this.archiveUninstallKey = data.management_key || data.store_key || ""
-        return
-      }
       return null
     },
     async uninstallPlugin(data) {
-      const result = await this.$cuteConfirm({
+      const result = await this.$confirmAction({
         title: "卸载确认",
         message: `确定要卸载插件 "${data.plugin_name}" 吗?`,
         cancelButtonText: "我再想想",
@@ -318,37 +294,34 @@ export default {
       })
 
       if (result) {
-        const operationId = this.newOperationId()
-        sessionStorage.setItem("zhenxun_plugin_operation", JSON.stringify({ operationId, action: "remove", pluginName: data.plugin_name }))
+        const operationId = newOperationId()
+        rememberPluginOperation(operationId, "remove", data.plugin_name, "zhenxun")
         this.$store.commit("START_PLUGIN_OPERATION", { action: "remove", pluginName: data.plugin_name, title: "正在卸载插件", message: "请稍后，插件正在卸载，请不要刷新页面" })
         try {
           const resp = await this.postRequest(`${this.$root.prefix}/store/remove_plugin`, {
             store_key: data.store_key,
-            module: data.runtime_module,
             operation_id: operationId,
           }, { suppressErrorToast: true })
           if (resp.suc) {
-            const mode = resp.data?.apply_mode
-            const pending = mode === "restart_pending"
+            const operation = storeOperationResult(resp, resp.info || "卸载已完成。", "remove")
+            notifyRestartStatusChanged()
             this.$store.commit("FINISH_PLUGIN_OPERATION", {
-              status: mode === "failed" ? "error" : pending ? "pending" : "success",
-              title: mode === "failed" ? "插件卸载失败" : pending ? "插件卸载等待重启" : "插件卸载完成",
-              message: pending ? "插件卸载已暂存，明确重启后统一应用。" : mode === "failed" ? "卸载失败，插件文件和运行状态已保留。" : "插件已卸载并清理运行时资源。",
-              applyMode: mode,
-              restartAvailable: resp.data?.restart_available,
-              accessUrls: resp.data?.access_urls || [],
-              accessTargets: resp.data?.access_targets || [],
+              ...operation,
+              title: operation.status === "error" ? "插件卸载后应用失败" : "插件卸载完成",
             })
             await this.getPluginList()
           } else {
             throw new Error(resp.info || "卸载失败")
           }
         } catch (error) {
-          this.$store.commit("FINISH_PLUGIN_OPERATION", { status: "error", title: "插件卸载失败", message: error.response?.data?.detail || error.message || "卸载失败" })
+          this.$store.commit("FINISH_PLUGIN_OPERATION", { status: "error", title: "插件卸载失败", message: reasonText(error.response?.data?.info || error.response?.data?.detail || error.message || "卸载失败") })
         }
-      } else {
-        console.log("取消卸载")
       }
+    },
+    switchLabel(data) {
+      if (!data.allow_switch) return "不可切换"
+      if (!data.status) return "关闭"
+      return { GROUP: "群聊禁用", PRIVATE: "私聊禁用" }[data.block_type] || "开启"
     },
     isSelected(module) {
       return this.selectedPlugins.includes(module)

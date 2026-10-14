@@ -70,7 +70,7 @@
               <span :style="{ color: 'var(--el-text-color-regular)' }"
                 >封禁状态:</span
               >
-              <MySwitch v-model="data.is_ban" :disabled="true" />
+              <el-switch v-model="data.is_ban" disabled />
             </div>
 
             <div class="grid grid-cols-2 gap-4">
@@ -104,9 +104,9 @@
           <div class="grid grid-cols-2 gap-4 mb-4">
             <div class="flex items-center justify-between">
               <span :style="{ color: 'var(--el-text-color-regular)' }"
-                >状态:</span
+                >群唤醒状态:</span
               >
-              <MySwitch v-model="data.status" />
+              <el-switch v-model="data.status" />
             </div>
 
             <div class="flex items-center justify-between">
@@ -224,15 +224,7 @@
 
           <!-- 应用按钮 -->
           <div class="flex justify-end">
-            <MyButton
-              text="应用设置"
-              type="primary"
-              :rounded="'lg'"
-              :shadow="'lg'"
-              :glow="true"
-              :width="120"
-              @click="commit"
-            />
+            <CuteButton type="primary" @click="commit">应用设置</CuteButton>
           </div>
         </template>
       </div>
@@ -259,13 +251,12 @@
 
 <script>
 import emptyDetailUrl from "@/assets/image/empty.png"
-import MyButton from "../ui/MyButton.vue"
-import MySwitch from "../ui/MySwitch.vue"
+import CuteButton from "../ui/CuteButton.vue"
 
 import { getChartOption } from "@/utils/template"
 
 export default {
-  components: { MySwitch, MyButton },
+  components: { CuteButton },
   name: "DetailInfo",
   data() {
     return {
@@ -335,13 +326,12 @@ export default {
         bot_id: this.botId,
         user_id: user_id,
       }).then((resp) => {
-        if (resp.suc) {
+        if (resp.suc && resp.data) {
           this.processFriendData(resp.data)
         } else {
-          this.$message.error(resp.info)
+          this.$message.warning(resp.warning || resp.info)
         }
-        loading.close()
-      })
+      }).finally(() => loading.close())
     },
     async getGroup(group_id) {
       if (!this.botId) return
@@ -355,13 +345,12 @@ export default {
         bot_id: this.botId,
         group_id: group_id,
       }).then((resp) => {
-        if (resp.suc) {
+        if (resp.suc && resp.data) {
           this.processGroupData(resp.data)
         } else {
-          this.$message.error(resp.info)
+          this.$message.warning(resp.warning || resp.info)
         }
-        loading.close()
-      })
+      }).finally(() => loading.close())
     },
     processFriendData(data) {
       data.name = data.remark || data.nickname
@@ -371,20 +360,15 @@ export default {
       this.$emit("startChat", this.data)
     },
     processGroupData(data) {
-      this.tmpAllPluginList = [...this.allPluginList]
       data.task_status = data.task.filter((e) => e.status).map((e) => e.name)
       data.plugin_status = data.close_plugins.map((e) => e.module)
-
-      if (data.close_plugins.length) {
-        const sbList = data.close_plugins
-          .filter((e) => e.is_super_block)
-          .map((e) => e.module)
-        this.tmpAllPluginList.forEach((e) => {
-          if (sbList.includes(e.module)) {
-            e.plugin_name += "(超级用户禁用)"
-          }
-        })
-      }
+      const sbList = data.close_plugins
+        .filter((e) => e.is_super_block)
+        .map((e) => e.module)
+      this.tmpAllPluginList = this.allPluginList.map((e) => ({
+        ...e,
+        plugin_name: sbList.includes(e.module) ? `${e.plugin_name}(超级用户禁用)` : e.plugin_name,
+      }))
 
       this.data = data
       this.detailType = "group"

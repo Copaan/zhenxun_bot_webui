@@ -5,7 +5,7 @@
       <el-button icon="el-icon-refresh" :disabled="busy" @click="reload">重新加载</el-button>
     </header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
-    <el-alert v-if="saved.mode === 'legacy'" title="旧代理配置：继续沿用原有行为。首次保存新策略需要确认，不会自动升级为强制代理。" type="warning" :closable="false" show-icon />
+    <el-alert v-if="saved.mode === 'legacy'" title="旧代理配置：当前继续沿用原有行为。下方草稿默认为“关闭本体代理”，请选择新的代理模式后再保存。" type="warning" :closable="false" show-icon />
     <section class="proxy-runtime" aria-label="当前生效状态">
       <div class="section-heading"><h2>当前生效状态</h2><el-tooltip content="刷新运行状态" placement="top"><el-button icon="el-icon-refresh" size="small" aria-label="刷新运行状态" :loading="statusLoading" :disabled="busy" @click="refreshStatus" /></el-tooltip></div>
       <dl><div><dt>模式</dt><dd>{{ runtime.current ? modeName(runtime.current.mode) : '未确认' }}</dd></div><div><dt>代理服务器</dt><dd>{{ runtime.current && runtime.current.url || '未配置' }}</dd></div><div><dt>活动请求引用 / 排空池</dt><dd>{{ runtime.active_requests || 0 }} / {{ runtime.retired_pools || 0 }}</dd></div></dl>
@@ -24,10 +24,10 @@
         <el-alert v-if="draft.mode !== 'disabled'" title="强制范围内的受管外网请求不允许直连回退；本机基础设施通信固定直连。" type="info" :closable="false" />
         <div class="server-grid">
           <el-form-item label="代理服务器"><el-input v-model.trim="draft.url" placeholder="http://127.0.0.1:7890" autocomplete="off" /></el-form-item>
-          <el-form-item label="用户名"><el-input v-model="draft.username" :placeholder="saved.has_auth ? '留空沿用同服务器认证' : '可选'" autocomplete="off" :disabled="draft.clear_auth" /></el-form-item>
-          <el-form-item label="密码"><el-input v-model="draft.password" type="password" show-password :placeholder="saved.has_auth ? '留空沿用同服务器密码' : '可选'" autocomplete="new-password" :disabled="draft.clear_auth" /></el-form-item>
+          <el-form-item label="用户名"><el-input v-model="draft.username" placeholder="可选" autocomplete="off" /></el-form-item>
+          <el-form-item label="密码"><el-input v-model="draft.password" placeholder="可选" autocomplete="new-password" show-password /></el-form-item>
         </div>
-        <div class="auth-status"><el-tag v-if="saved.has_auth" size="small">已保存认证</el-tag><el-checkbox v-model="draft.clear_auth">清除已保存认证</el-checkbox><span>更换服务器不会携带原认证</span></div>
+        <div class="auth-status"><span>更换代理服务器后会清空原用户名和密码，需要时请重新填写</span></div>
       </section>
       <section v-if="draft.mode === 'selected'">
         <div class="section-heading"><h2>插件范围</h2><el-switch v-model="draft.core_enabled" active-text="本体受管请求走代理" /></div>
@@ -53,7 +53,7 @@
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 import { handleApplyResult } from "@/utils/apply-result"
 
-const newDraft = () => ({ mode: "disabled", url: "", username: "", password: "", clear_auth: false, plugins: [], core_enabled: false, bypassText: "" })
+const newDraft = () => ({ mode: "disabled", url: "", username: "", password: "", plugins: [], core_enabled: false, bypassText: "" })
 const errors = {
   proxy_revision_conflict: "配置已被其他操作修改。草稿已保留，请核对后重新加载。",
   proxy_pools_draining: "旧连接池仍在排空，请在传输结束后重试；草稿已保留。",
@@ -70,6 +70,16 @@ const errors = {
   proxy_probe_busy: "已有探测正在执行或等待清理，请稍后重试。",
   proxy_probe_cleanup_unresolved: "探测资源尚未确认释放，请查看运行状态。",
   proxy_cleanup_budget_exhausted: "清理预算已耗尽，资源仍由本体跟踪。",
+  proxy_legacy_confirmation_required: "旧代理配置迁移需要确认，请重新保存并确认。",
+  proxy_configuration_invalid: "代理配置无效，请检查各项设置。",
+  proxy_configuration_unavailable: "代理配置暂不可用，请稍后重试。",
+  proxy_mode_invalid: "代理模式无效。",
+  proxy_plugin_invalid: "插件范围包含无效的插件模块。",
+  proxy_list_invalid: "插件或排除地址列表格式无效。",
+  proxy_core_flag_invalid: "“本体受管请求走代理”设置无效。",
+  proxy_runtime_stopping: "真寻正在停止，暂时无法修改代理。",
+  proxy_tls_verification_required: "代理请求不允许关闭 TLS 证书校验。",
+  proxy_request_failed: "请求失败，请检查网络或稍后重试。",
 }
 export default {
   name: "NetworkProxy",
@@ -84,7 +94,17 @@ export default {
       return [...rows.values()].filter((item) => `${item.name} ${item.module}`.toLowerCase().includes(query))
     },
   },
-  watch: { dirty(value) { setDirtyState("network-proxy", value) }, draft: { deep: true, handler() { this.probeResult = null } } },
+  watch: {
+    dirty(value) { setDirtyState("network-proxy", value) },
+    draft: { deep: true, handler() { this.probeResult = null } },
+    "draft.url"(url) {
+      if (url === (this.saved.url || "")) return
+      if (this.draft.username === (this.saved.username || "") && this.draft.password === (this.saved.password || "")) {
+        this.draft.username = ""
+        this.draft.password = ""
+      }
+    },
+  },
   mounted() { this.load() },
   beforeDestroy() { this.sequence++; this.statusSequence++; clearDirtyState("network-proxy") },
   methods: {
@@ -97,9 +117,11 @@ export default {
       })
     },
     modeName(mode) { return { disabled: "关闭本体代理", global: "全局强制代理", selected: "指定插件代理", legacy: "旧代理配置" }[mode] || "未确认" },
-    routeName(route) { return { forced_proxy: "强制代理", explicit_proxy: "显式代理", legacy_proxy: "旧代理", direct: "直连", local_direct: "本地直连", proxy_error: "代理失败" }[route] || route },
     errorText(code) { return errors[code] || code || "请求失败" },
-    capture(error) { this.error = this.errorText(error?.response?.data?.detail?.code || (error?.response?.status === 409 ? "proxy_revision_conflict" : "proxy_request_failed")) },
+    capture(error) {
+      const detail = error?.response?.data?.detail
+      this.error = typeof detail === "string" ? this.errorText(detail) : this.errorText(detail?.code || (error?.response?.status === 409 ? "proxy_revision_conflict" : "proxy_request_failed"))
+    },
     async refreshStatus() {
       if (this.statusLoading || this.busy) return
       const seq = ++this.statusSequence
@@ -122,7 +144,7 @@ export default {
       this.revision = data.revision
       this.saved = data.saved
       this.runtime = data.runtime || {}
-      this.draft = { ...newDraft(), ...Object.fromEntries(["url", "plugins", "core_enabled"].map((key) => [key, data.saved[key] ?? newDraft()[key]])), mode: data.saved.mode === "legacy" ? "disabled" : data.saved.mode, bypassText: (data.saved.bypass || []).join("\n") }
+      this.draft = { ...newDraft(), ...Object.fromEntries(["url", "username", "password", "plugins", "core_enabled"].map((key) => [key, data.saved[key] ?? newDraft()[key]])), mode: data.saved.mode === "legacy" ? "disabled" : data.saved.mode, bypassText: (data.saved.bypass || []).join("\n") }
       this.baseline = this.normalizeDraft(this.draft)
       this.error = data.saved.error_code ? this.errorText(data.saved.error_code) : ""
     },
@@ -141,14 +163,14 @@ export default {
     },
     togglePlugin(module, checked) { this.draft.plugins = checked ? [...new Set([...this.draft.plugins, module])] : this.draft.plugins.filter((item) => item !== module) },
     selectVisible(checked) { this.filteredPlugins.forEach((item) => this.togglePlugin(item.module, checked)) },
-    payload() { return { ...this.draft, username: this.draft.username || null, password: this.draft.password || null, bypass: this.draft.bypassText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean), expected_revision: this.revision } },
+    payload() { return { ...this.draft, username: this.draft.username, password: this.draft.password, bypass: this.draft.bypassText.split(/\r?\n/).map((s) => s.trim()).filter(Boolean), expected_revision: this.revision } },
     async save() {
       if (this.busy || !this.dirty) return
       this.saving = true
       const seq = ++this.sequence
       try {
         const payload = this.payload()
-        if (this.saved.mode === "legacy") { try { await this.$confirm(`将旧配置改为“${this.modeName(payload.mode)}”，仅作用于受管请求。`, "确认迁移代理策略", { type: "warning" }) } catch (_) { return } payload.confirm_legacy = true }
+        if (this.saved.mode === "legacy") { try { await this.$confirm(payload.mode === "disabled" ? "将关闭本体代理，原有代理配置不再生效。" : `将旧配置改为“${this.modeName(payload.mode)}”，仅作用于受管请求。`, "确认迁移代理策略", { type: "warning" }) } catch (_) { return } payload.confirm_legacy = true }
         const response = await this.putRequest(`${this.$root.prefix}/network-proxy/configuration`, payload, { suppressErrorToast: true })
         if (seq !== this.sequence) return
         if (!response.suc || response.data?.apply_mode === "failed") throw new Error()

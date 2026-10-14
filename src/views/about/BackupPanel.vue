@@ -5,7 +5,7 @@
       <div class="backup-heading-actions">
         <el-button icon="el-icon-refresh" size="small" :loading="loading" @click="refresh">刷新</el-button>
         <el-button icon="el-icon-upload2" size="small" :loading="uploading !== null" @click="$refs.upload.click()">上传备份</el-button>
-        <el-button icon="el-icon-coin" size="small" :disabled="restoring" @click="switching = true">切换数据库</el-button>
+        <el-button icon="el-icon-coin" size="small" :disabled="restoring || !launcherManaged" :title="launcherManaged ? '' : manualRestartHint" @click="switching = true">切换数据库</el-button>
         <el-button type="primary" icon="el-icon-download" size="small" :disabled="running" @click="openExport">导出备份</el-button>
         <input ref="upload" type="file" accept=".zx" hidden @change="upload">
       </div>
@@ -33,9 +33,9 @@
         <strong>{{ item.name }}</strong>
         <el-tag v-if="item.encrypted" size="mini" type="success">已加密</el-tag>
       </div>
-      <span>{{ formatTime(item.created_at) }} · {{ size(item.size) }}</span>
+      <span>{{ formatTime(item.created_at) }} · {{ formatBytes(item.size) }}</span>
       <div class="backup-item-actions">
-        <el-button size="mini" icon="el-icon-refresh-left" :disabled="restoring" @click="restoreItem = item">恢复</el-button>
+        <el-button size="mini" icon="el-icon-refresh-left" :disabled="restoring || !launcherManaged" :title="launcherManaged ? '' : manualRestartHint" @click="restoreItem = item">恢复</el-button>
         <el-button size="mini" icon="el-icon-download" :loading="downloading === item.name" @click="download(item)">下载</el-button>
         <el-button size="mini" icon="el-icon-delete" type="danger" plain @click="remove(item)">删除</el-button>
       </div>
@@ -48,7 +48,7 @@
         <p class="backup-hint">数据库总是完整导出，可恢复到 SQLite / MySQL / PostgreSQL 任一类型。</p>
         <el-checkbox-group v-model="categories" class="backup-categories">
           <el-checkbox v-for="(info, key) in scan.categories" :key="key" :label="key">
-            {{ categoryLabels[key] }} <small>{{ info.files }} 个文件 · {{ size(info.bytes) }}</small>
+            {{ categoryLabels[key] }} <small>{{ info.files }} 个文件 · {{ formatBytes(info.bytes) }}</small>
           </el-checkbox>
         </el-checkbox-group>
         <template v-if="scan.dependencies.length">
@@ -67,7 +67,7 @@
         </template>
         <h3>加密</h3>
         <el-input v-model="password" type="password" show-password autocomplete="new-password" placeholder="留空则不加密" />
-        <p v-if="!password && categories.includes('configuration')" class="backup-warning">未加密的备份包含 .env 中的账号、密钥和数据库连接信息，请妥善保管。</p>
+        <p v-if="!password && categories.includes('configuration')" class="backup-warning">未加密的备份包含 .env、插件配置和证书私钥中的账号、密钥与数据库连接信息，请妥善保管。</p>
       </template>
       <span slot="footer">
         <el-button @click="dialog = false">取消</el-button>
@@ -83,6 +83,7 @@
 import { getBaseUrl } from "@/utils/api"
 import { getAuthToken } from "@/utils/auth-token"
 import { startRestartRecovery } from "@/utils/restart-recovery"
+import { formatBytes } from "@/utils/utils"
 import BackupRestoreDialog from "./BackupRestoreDialog.vue"
 import BackupSwitchDialog from "./BackupSwitchDialog.vue"
 
@@ -91,8 +92,10 @@ const RESTORING = ["pending", "importing", "failed_import", "rollback_import"]
 export default {
   name: "BackupPanel",
   components: { BackupRestoreDialog, BackupSwitchDialog },
+  props: { launcherManaged: { type: Boolean, default: false } },
   data() {
     return {
+      manualRestartHint: "恢复和切换数据库需要自动重启，当前不是 launcher 托管模式",
       loading: false,
       error: "",
       items: [],
@@ -141,14 +144,8 @@ export default {
   mounted() { this.refresh() },
   beforeDestroy() { clearTimeout(this.timer); clearTimeout(this.restoreTimer) },
   methods: {
+    formatBytes,
     api(path) { return `${this.$root.prefix}/backup${path}` },
-    size(bytes) {
-      if (bytes < 1024) return `${bytes} B`
-      const units = ["KB", "MB", "GB", "TB"]
-      let value = bytes / 1024; let index = 0
-      while (value >= 1024 && index < units.length - 1) { value /= 1024; index++ }
-      return `${value.toFixed(1)} ${units[index]}`
-    },
     formatTime(value) { return new Date(value).toLocaleString() },
     async refresh() {
       this.loading = true; this.error = ""

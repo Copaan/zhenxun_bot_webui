@@ -8,13 +8,20 @@
 <script>
 import { getBaseUrlLocalStorage, setBaseApiUrl } from "@/utils/api"
 import RestartRecoveryOverlay from "@/components/system/RestartRecoveryOverlay"
+
+const THEMES = [
+  { value: "pink", label: "真寻可爱", icon: "el-icon-present", color: "#F59E0B" },
+  { value: "dark", label: "暗黑模式", icon: "el-icon-moon", color: "#6B7280" },
+  { value: "light", label: "亮色模式", icon: "el-icon-sunny", color: "#F59E0B" },
+  { value: "one-dark", label: "One Dark", icon: "el-icon-monitor", color: "#7C3AED" },
+]
+
 export default {
   name: "App",
   components: { RestartRecoveryOverlay },
   data() {
     return {
       windowHeight: window.innerHeight,
-      theme: "light",
     }
   },
   computed: {
@@ -30,27 +37,16 @@ export default {
   },
   mounted() {
     window.addEventListener("resize", this.handleResize)
-    const savedTheme = localStorage.getItem("app-theme") || "light"
-    this.setTheme(savedTheme)
+    this.setTheme(localStorage.getItem("app-theme"))
   },
   methods: {
     handleResize() {
       this.windowHeight = window.innerHeight
     },
     setTheme(themeName) {
-      if (["light", "dark", "pink", "one-dark"].includes(themeName)) {
-        this.theme = themeName
-        localStorage.setItem("app-theme", themeName)
-        document.documentElement.setAttribute("data-theme", themeName)
-      } else {
-        console.warn(`Invalid theme name: ${themeName}. Defaulting to light.`)
-        this.setTheme("light")
-      }
-    },
-  },
-  watch: {
-    theme(newTheme) {
-      document.documentElement.setAttribute("data-theme", newTheme)
+      const theme = THEMES.some((item) => item.value === themeName) ? themeName : "light"
+      localStorage.setItem("app-theme", theme)
+      document.documentElement.setAttribute("data-theme", theme)
     },
   },
   beforeDestroy() {
@@ -59,6 +55,7 @@ export default {
   provide() {
     return {
       setAppTheme: this.setTheme,
+      appThemes: THEMES,
     }
   },
 }

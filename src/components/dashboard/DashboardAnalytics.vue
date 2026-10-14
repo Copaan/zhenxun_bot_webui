@@ -22,20 +22,17 @@
       </section>
 
       <div class="ranking-grid">
-        <ranking-panel
-          title="活跃群组"
-          value-key="chat_num"
-          name-key="name"
-          identity-key="group_id"
-          :items="groups"
-        />
-        <ranking-panel
-          title="热门插件"
-          value-key="count"
-          name-key="name"
-          identity-key="module"
-          :items="plugins"
-        />
+        <section v-for="panel in rankings" :key="panel.title" class="ranking-panel">
+          <div class="panel-title"><strong>{{ panel.title }}</strong></div>
+          <div v-if="panel.rows.length" class="ranking-list">
+            <div v-for="row in panel.rows" :key="row.key" class="ranking-row">
+              <span>{{ row.name }}</span>
+              <div><i :style="{ width: row.width + '%' }"></i></div>
+              <strong>{{ row.value }}</strong>
+            </div>
+          </div>
+          <div v-else class="feedback">暂无统计数据</div>
+        </section>
       </div>
     </template>
     <div v-else class="feedback"><i class="el-icon-loading"></i>正在加载统计</div>
@@ -43,45 +40,19 @@
 </template>
 
 <script>
-const RankingPanel = {
-  props: {
-    title: String,
-    items: Array,
-    valueKey: String,
-    nameKey: String,
-    identityKey: String,
-  },
-  computed: {
-    visibleItems() {
-      return (this.items || []).slice(0, 8)
-    },
-    maximum() {
-      return Math.max(1, ...this.visibleItems.map((item) => Number(item[this.valueKey]) || 0))
-    },
-  },
-  methods: {
-    width(value) {
-      return Math.max(3, Math.round(((Number(value) || 0) / this.maximum) * 100))
-    },
-  },
-  template: `
-    <section class="ranking-panel">
-      <div class="panel-title"><strong>{{ title }}</strong><span>全部</span></div>
-      <div v-if="visibleItems.length" class="ranking-list">
-        <div v-for="item in visibleItems" :key="item[identityKey]" class="ranking-row">
-          <span>{{ item[nameKey] || item[identityKey] }}</span>
-          <div><i :style="{ width: width(item[valueKey]) + '%' }"></i></div>
-          <strong>{{ item[valueKey] }}</strong>
-        </div>
-      </div>
-      <div v-else class="feedback">暂无统计数据</div>
-    </section>
-  `,
+const rankingRows = (items, valueKey, identityKey) => {
+  const visible = (items || []).slice(0, 8)
+  const maximum = Math.max(1, ...visible.map((item) => Number(item[valueKey]) || 0))
+  return visible.map((item) => ({
+    key: item[identityKey],
+    name: item.name || item[identityKey],
+    value: item[valueKey],
+    width: Math.max(3, Math.round(((Number(item[valueKey]) || 0) / maximum) * 100)),
+  }))
 }
 
 export default {
   name: "DashboardAnalytics",
-  components: { RankingPanel },
   data: () => ({
     loaded: false,
     error: "",
@@ -90,6 +61,12 @@ export default {
     plugins: [],
   }),
   computed: {
+    rankings() {
+      return [
+        { title: "活跃群组", rows: rankingRows(this.groups, "chat_num", "group_id") },
+        { title: "热门插件", rows: rankingRows(this.plugins, "count", "module") },
+      ]
+    },
     trendRows() {
       const start = Math.max(0, this.trend.date.length - 14)
       const chat = this.trend.chat.slice(start)

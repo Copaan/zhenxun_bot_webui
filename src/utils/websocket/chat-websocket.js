@@ -41,10 +41,11 @@ async function chatWebsocketOnmessage(event) {
   const data = JSON.parse(event.data)
   const botInfo = vue.$store.state.botInfo
   if (!botInfo?.self_id || !Array.isArray(data.message)) return
+  if (data.bot_id && data.bot_id != botInfo.self_id) return
 
   for (let i = 0; i < data.message.length; i++) {
     const e = data.message[i]
-    e.msg = e.msg.replace("&#91;", "[").replace("&#93;", "]")
+    e.msg = e.msg.replace(/&#91;/g, "[").replace(/&#93;/g, "]")
   }
   const bot_id = botInfo.self_id
   if (data.user_id != bot_id) {
@@ -68,49 +69,37 @@ async function chatWebsocketOnmessage(event) {
 const chatWebSocket = {
   ws: null,
   //发送ws方法
-  sendMessage: function (botInfo, groupId, userId, msg) {
-    return new Promise((resolve, reject) => {
-      if (isBusinessNetworkFrozen() || !msg || !botInfo?.self_id) {
-        return resolve()
-      }
-
-      vue
-        .postRequest(`${vue.$root.prefix}/manage/send_message`, {
-          bot_id: botInfo.self_id,
-          group_id: groupId,
-          user_id: userId,
-          message: msg,
-        })
-        .then((resp) => {
-          if (resp.suc) {
-            if (resp.warning) {
-              vue.$message.warning(resp.warning)
-            } else {
-              vue.$message.success(resp.info)
-
-              const msgObj = {
-                user_id: botInfo.self_id,
-                message: [{ type: "text", msg: msg }],
-                name: botInfo.name,
-                ava_url: `http://q1.qlogo.cn/g?b=qq&nk=${botInfo.self_id}&s=160`,
-              }
-              vue.$store.commit("ADD_CHAT_MSG", {
-                chatId: groupId || userId,
-                obj: msgObj,
-              })
-              vue.$nextTick(() => {
-                var divElement = document.getElementById("chat")
-                if (divElement) {
-                  divElement.scrollTop = divElement.scrollHeight
-                }
-              })
-            }
-          } else {
-            vue.$message.error(resp.info)
-          }
-          return resolve(resp)
-        })
+  sendMessage: async function (botInfo, groupId, userId, msg) {
+    if (isBusinessNetworkFrozen() || !msg || !botInfo?.self_id) return
+    const resp = await vue.postRequest(`${vue.$root.prefix}/manage/send_message`, {
+      bot_id: botInfo.self_id,
+      group_id: groupId,
+      user_id: userId,
+      message: msg,
     })
+    if (!resp.suc) {
+      vue.$message.error(resp.info)
+    } else if (resp.warning) {
+      vue.$message.warning(resp.warning)
+    } else {
+      vue.$message.success(resp.info)
+      vue.$store.commit("ADD_CHAT_MSG", {
+        chatId: groupId || userId,
+        obj: {
+          user_id: botInfo.self_id,
+          message: [{ type: "text", msg: msg }],
+          name: botInfo.nickname,
+          ava_url: botInfo.ava_url,
+        },
+      })
+      vue.$nextTick(() => {
+        var divElement = document.getElementById("chat")
+        if (divElement) {
+          divElement.scrollTop = divElement.scrollHeight
+        }
+      })
+    }
+    return resp
   },
   //初始化ws
   initWebSocket: function () {

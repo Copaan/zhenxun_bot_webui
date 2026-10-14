@@ -39,7 +39,7 @@
           <div v-else-if="type === 'boolean'" class="switch-control"><el-switch :id="controlId" :value="displayValue === true" :aria-label="label" @input="emitValue" /><span>{{ value === null ? 'null' : displayValue === true ? '开启' : '关闭' }}</span></div>
           <div v-else-if="['number', 'integer'].includes(type)" class="number-control"><el-input-number :id="controlId" :value="value == null ? undefined : value" :placeholder="placeholder" :precision="type === 'integer' ? 0 : undefined" :min="resolved.minimum" :max="resolved.maximum" controls-position="right" @change="emitValue" /><span v-if="ui.unit">{{ ui.unit }}</span></div>
           <span v-else-if="type === 'null'" class="setting-readonly">null</span>
-          <el-input v-else :id="controlId" :value="value == null ? '' : value" :placeholder="placeholder" :type="ui.secret ? 'password' : ui.component === 'textarea' ? 'textarea' : 'text'" :show-password="ui.secret" :autosize="{ minRows: 3, maxRows: 8 }" @input="emitValue" />
+          <el-input v-else :id="controlId" :value="value == null ? '' : value" :placeholder="placeholder" :type="ui.component === 'textarea' ? 'textarea' : 'text'" :show-password="ui.component !== 'textarea' && secret" autocomplete="off" :autosize="{ minRows: 3, maxRows: 8 }" @input="emitValue" />
         </div>
         <el-dropdown v-if="!readonly" trigger="click" @command="operate">
           <el-button type="text" icon="el-icon-more" :aria-label="`${label}操作`" class="setting-more" />
@@ -83,7 +83,7 @@
 </template>
 
 <script>
-import { valueType, resolveReference, matchesSchema, emptyValue, valueSummary, fieldMatches, validateField } from './schema-utils'
+import { valueType, resolveReference, matchesSchema, emptyValue, valueSummary, fieldMatches, validateField, isSecretPath } from './schema-utils'
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 export default {
   name: 'SettingsField',
@@ -95,6 +95,7 @@ export default {
   },
   data() { return { selectedVariant: null, selectedType: '', expanded: this.initiallyOpen || this.depth === 0, dialog: false, draft: undefined, draftIssues: [], newKey: '', localError: '' } },
   computed: {
+    secret() { return isSecretPath(this.path) },
     controlId() { return `setting-${this._uid}` },
     root() { return this.schema['x-root-schema'] || (Object.keys(this.rootSchema).length ? this.rootSchema : this.schema) },
     base() { return resolveReference(this.schema, this.root) },
@@ -114,7 +115,7 @@ export default {
     simpleItem() { return resolveReference(this.resolved.items || {}, this.root) },
     simpleArray() { const item = this.simpleItem; return this.type === 'array' && !this.resolved.prefixItems && !Array.isArray(this.resolved.items) && (['string','number','integer','boolean'].includes(item.type) || (!item.type && this.arrayValue.length > 0 && this.arrayValue.every(value => typeof value === 'string'))) },
     nullable() { return this.base.type === 'null' || this.variants.some(item => item.type === 'null') || this.untyped },
-    hasDefault() { return !this.ui.secret && !this.base.writeOnly && Object.prototype.hasOwnProperty.call(this.base, 'default') },
+    hasDefault() { return !this.base.writeOnly && Object.prototype.hasOwnProperty.call(this.base, 'default') },
     displayValue() { return this.value === undefined && this.hasDefault ? this.base.default : this.value },
     placeholder() { return this.value === null ? 'null' : this.hasDefault ? `默认：${valueSummary(this.base.default)}` : this.ui.placeholder || '未设置' },
     description() { return this.ui.description || this.resolved.description || '' },

@@ -62,7 +62,7 @@
                 <div class="setting-content">
                   <div class="setting-label" title="仅决定加入新群时的初始状态，不改变现有群或私聊的启用状态">新群默认启用</div>
                   <div class="setting-control">
-                    <MySwitch v-model="updateData.default_status" />
+                    <el-switch v-model="updateData.default_status" />
                   </div>
                 </div>
               </div>
@@ -74,7 +74,7 @@
                 <div class="setting-content">
                   <div class="setting-label">限制超级用户</div>
                   <div class="setting-control">
-                    <MySwitch v-model="updateData.limit_superuser" />
+                    <el-switch v-model="updateData.limit_superuser" />
                   </div>
                 </div>
               </div>
@@ -106,12 +106,13 @@
                   <div class="setting-content">
                     <div class="setting-label">菜单类型</div>
                     <div class="setting-control">
-                      <neko-select
+                      <el-select
                         v-model="updateData.menu_type"
                         placeholder="选择类型"
                         class="neko-select"
-                        :options="menuTypeOptions"
-                      />
+                      >
+                        <el-option v-for="item in menuTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+                      </el-select>
                     </div>
                   </div>
                 </div>
@@ -130,12 +131,13 @@
                 <div class="setting-content">
                   <div class="setting-label">群权限</div>
                   <div class="setting-control">
-                    <neko-select
+                    <el-select
                       v-model="updateData.level"
                       placeholder="选择等级"
                       class="neko-select"
-                      :options="levelOptions"
-                    />
+                    >
+                      <el-option v-for="item in levelOptions" :key="item.value" :label="item.label" :value="item.value" />
+                    </el-select>
                   </div>
                 </div>
               </div>
@@ -147,13 +149,14 @@
                 <div class="setting-content">
                   <div class="setting-label">禁用类型</div>
                   <div class="setting-control">
-                    <neko-select
+                    <el-select
                       v-model="updateData.block_type"
                       placeholder="选择类型"
                       class="neko-select"
-                      :options="blockTypeOptions"
                       clearable
-                    />
+                    >
+                      <el-option v-for="item in blockTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
+                    </el-select>
                   </div>
                 </div>
               </div>
@@ -214,8 +217,6 @@ import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 import NeonInput from "@/components/ui/NeonInput.vue"
-import NekoSelect from "@/components/ui/NekoSelect.vue"
-import MySwitch from "@/components/ui/MySwitch.vue"
 import { checkConfig } from "@/utils/check"
 
 export default {
@@ -226,8 +227,6 @@ export default {
   components: {
     SchemaField,
     "neon-input": NeonInput,
-    "neko-select": NekoSelect,
-    MySwitch,
   },
   data() {
     var checkCostGold = (rule, value, callback) => {
@@ -294,7 +293,7 @@ export default {
   },
   computed: {
     canUninstall() {
-      return ["zhenxun_store", "nonebot_store", "local_archive"].includes(
+      return ["zhenxun_store", "nonebot_store"].includes(
         this.updateData.management_source
       ) && this.updateData.uninstall_supported && !this.updateData.is_builtin
     },
@@ -352,24 +351,21 @@ export default {
       this.getRequest(`${this.$root.prefix}/plugin/get_plugin`, {
         module: this.module,
       }).then((resp) => {
-        if (resp.suc) {
-          if (resp.warning) {
-            this.$message.warning(resp.warning)
-          } else {
-            this.updateData = resp.data
-            this.initialData = JSON.stringify(resp.data)
-            clearDirtyState(this.dirtySource)
-            if (!resp.data.config_list || !resp.data.config_list.length) {
-              this.dialogWidth = "700px"
-            }
-            this.visible = true
+        if (resp.suc && !resp.warning) {
+          this.updateData = resp.data
+          this.initialData = JSON.stringify(resp.data)
+          clearDirtyState(this.dirtySource)
+          if (!resp.data.config_list || !resp.data.config_list.length) {
+            this.dialogWidth = "700px"
           }
+          this.visible = true
         } else {
-          this.$message.error(resp.info)
+          this.$message.warning(resp.warning || resp.info)
           this.$emit("close")
         }
-        loading.close()
-      })
+      }).catch(() => {
+        this.$emit("close")
+      }).finally(() => loading.close())
     },
     getPluginMenuType() {
       this.getRequest(`${this.$root.prefix}/plugin/get_plugin_menu_type`).then(
@@ -435,7 +431,6 @@ export default {
                 clearDirtyState(this.dirtySource)
                 await handleApplyResult(this, resp, {
                   restartPrompt: "插件配置已保存，需要重启后生效。",
-                  restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
                   returnRoute: this.$route.path,
                 })
                 this.$emit("close", true)

@@ -89,11 +89,11 @@ export default {
         full_path: this.fullPath,
       })
         .then((resp) => {
-          if (resp.suc) {
+          if (resp.suc && resp.data) {
             resp.data = resp.data.replace("base64://", "")
             this.imageData = "data:image/png;base64," + resp.data
           } else {
-            this.$message.error(resp.info || "图片加载失败")
+            this.$message.error(resp.warning || resp.info || "图片加载失败")
           }
           loadingInstance.close()
           this.loading = false

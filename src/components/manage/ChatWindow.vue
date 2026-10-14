@@ -50,16 +50,7 @@
           </h2>
         </div>
 
-        <MyButton
-          text="清空记录"
-          @click="clearMessage"
-          type="pink"
-          :rounded="'lg'"
-          :shadow="'sm'"
-          :height="35"
-          :width="100"
-          :fontSize="12"
-        />
+        <CuteButton type="secondary" size="sm" @click="clearMessage">清空本地消息</CuteButton>
       </div>
       <!-- 消息区域 -->
       <div class="message-container" :style="{ height: chatHeight + 'px' }">
@@ -163,27 +154,8 @@
         ></el-input>
 
         <div class="flex justify-end space-x-2">
-          <MyButton
-            text="清空"
-            @click="message = ''"
-            type="default"
-            :rounded="'lg'"
-            :shadow="'sm'"
-            :height="35"
-            :width="70"
-            :fontSize="14"
-          />
-          <MyButton
-            text="发送"
-            @click="sendMessage"
-            type="purple"
-            :rounded="'lg'"
-            :shadow="'md'"
-            :glow="true"
-            :height="35"
-            :width="70"
-            :fontSize="14"
-          />
+          <CuteButton type="normal" size="sm" @click="message = ''">清空</CuteButton>
+          <CuteButton type="primary" size="sm" @click="sendMessage">发送</CuteButton>
         </div>
       </div>
     </div>
@@ -193,11 +165,11 @@
 <script>
 import { debounce } from "lodash"
 import emptyChatUrl from "@/assets/image/empty1.png"
-import MyButton from "../ui/MyButton.vue"
+import CuteButton from "../ui/CuteButton.vue"
 
 export default {
   name: "ChatWindow",
-  components: { MyButton },
+  components: { CuteButton },
   data() {
     return {
       emptyChatUrl,
@@ -261,12 +233,13 @@ export default {
       const loading = this.getLoading(".el-textarea")
 
       try {
-        await this.$chatWebSocket.sendMessage(
+        const resp = await this.$chatWebSocket.sendMessage(
           this.botInfo,
           this.chatInfo.group_id,
           this.chatInfo.user_id,
           this.message
-        )
+        ).catch(() => null)
+        if (!resp?.suc || resp.warning) return
         this.message = ""
         this.reloadKey++
         this.$nextTick(() => {
@@ -296,16 +269,16 @@ export default {
     },
 
     async clearMessage() {
-      const result = await this.$cuteConfirm({
-        title: "清空确认",
-        message: `确认清空聊天记录?`,
+      const result = await this.$confirmAction({
+        title: "清空本地消息",
+        message: `只清空当前页面缓存的消息，不会删除服务器上的聊天记录。确认清空？`,
         cancelButtonText: "我再想想",
         confirmButtonText: "清空内容",
       })
       if (result) {
         this.$store.commit("CLEAR_CHAT", this.chatId)
         this.$message.success({
-          message: "清空记录成功!",
+          message: "本地消息已清空",
           iconClass: "el-icon-success",
           customClass: "cute-message",
         })

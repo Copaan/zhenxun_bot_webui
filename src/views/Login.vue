@@ -156,17 +156,6 @@
       </div>
     </div>
 
-    <!-- 对话框 - 添加了动画效果 -->
-    <transition name="el-fade-in">
-      <CuteConfirm
-        v-if="dialogVisible"
-        :visible.sync="dialogVisible"
-        title="温馨提示"
-        :message="dialogMessage"
-        @confirm="dialogVisible = false"
-      />
-    </transition>
-
     <!-- 添加了键盘提示 -->
     <transition name="el-fade-in">
       <div
@@ -191,15 +180,15 @@
 <script>
 import qs from "qs"
 import logoUrl from "@/assets/image/logo.png"
-import { setCookie, clearCookie, syncApiWithBrowserLocation } from "@/utils/api"
+import { syncApiWithBrowserLocation } from "@/utils/api"
+import { establishSession } from "@/utils/auth-session"
 import { clearAuthenticationState } from "@/utils/auth-session"
-import CuteConfirm from "@/components/ui/CuteConfirm"
 import InteractiveInput from "@/components/ui/NeonInput.vue"
 import CuteButton from "@/components/ui/CuteButton.vue"
 
 export default {
   name: "MainLogin",
-  components: { CuteConfirm, InteractiveInput, CuteButton },
+  components: { InteractiveInput, CuteButton },
   data() {
     const validateName = (rules, value, callback) => {
       if (!value) {
@@ -226,16 +215,7 @@ export default {
         password: [{ validator: validatePwd, trigger: "blur" }],
       },
       loading: false,
-      dialogVisible: false,
-      dialogMessage: "请等待小真寻重启成功后登录！",
       showKeyboardHint: false,
-
-      // 密码强度检测
-      passwordStrength: {
-        show: false,
-        text: "",
-        color: "",
-      },
 
       // 忘记密码按钮相关状态
       isButtonMoving: false,
@@ -315,11 +295,7 @@ export default {
               showClose: true,
             })
 
-            const tokenStr =
-              response.data.token_type + " " + response.data.access_token
-            clearCookie("tokenStr")
-            setCookie("tokenStr", tokenStr)
-            window.sessionStorage.setItem("isAuthenticated", true)
+            establishSession(`${response.data.token_type} ${response.data.access_token}`)
 
             const requestedPath = String(this.$route.query.redirect || "")
             const path = requestedPath.startsWith("/") && !requestedPath.startsWith("//")
@@ -366,17 +342,6 @@ export default {
       }
     },
 
-    calculatePasswordStrength(password) {
-      let strength = 0
-      // 长度加分
-      strength += Math.min(password.length * 5, 30)
-      // 多样性加分
-      if (/[A-Z]/.test(password)) strength += 10
-      if (/[a-z]/.test(password)) strength += 10
-      if (/[0-9]/.test(password)) strength += 10
-      if (/[^A-Za-z0-9]/.test(password)) strength += 20
-      return Math.min(strength, 100)
-    },
 
     // 忘记密码按钮相关方法
     startButtonDance() {
@@ -434,8 +399,8 @@ export default {
     handleForgetPassword() {
       if (!this.isButtonMoving) {
         this.$message.warning({
-          message: "忘记密码请联系管理员查看配置文件！",
-          duration: 2000,
+          message: "密码已加密保存，无法查看。可以打开控制台本次启动输出的连接链接直接登录，再修改密码；也可以在服务器上把 data/config.yaml 中 web-ui 的 password 改为新密码，重启后用新密码登录。",
+          duration: 8000,
         })
       } else {
         this.$message.error("抓不到我吧！")
@@ -450,7 +415,7 @@ export default {
     this.checkFirstRun()
     const firstSetting = this.$route.params.firstSetting
     if (firstSetting) {
-      this.dialogVisible = true
+      this.$alert("请等待小真寻重启成功后登录！", "温馨提示", { type: "info" }).catch(() => {})
     }
 
     // 添加键盘事件监听

@@ -17,11 +17,8 @@
 
 <script>
 import logoUrl from "@/assets/image/logo.png"
-import {
-  clearCookie,
-  setCookie,
-  syncApiWithBrowserLocation,
-} from "@/utils/api"
+import { syncApiWithBrowserLocation } from "@/utils/api"
+import { establishSession } from "@/utils/auth-session"
 
 const RESTART_RECEIPT_KEY = "zhenxunSetupRestartReceipt"
 
@@ -75,8 +72,7 @@ export default {
             return
           }
           this.clearSetupState()
-          setCookie("tokenStr", `${payload.token_type} ${payload.access_token}`)
-          window.sessionStorage.setItem("isAuthenticated", true)
+          establishSession(`${payload.token_type} ${payload.access_token}`)
           await this.$router.replace("/configure")
           return
         }
@@ -86,12 +82,7 @@ export default {
             return
           }
           this.clearSetupState()
-          clearCookie("tokenStr")
-          setCookie(
-            "tokenStr",
-            `${payload.token_type} ${payload.access_token}`
-          )
-          window.sessionStorage.setItem("isAuthenticated", true)
+          establishSession(`${payload.token_type} ${payload.access_token}`)
           await this.$router.replace("/home")
           this.$message.success(response.info || "连接成功")
           return

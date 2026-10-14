@@ -10,7 +10,6 @@
       <div><h1>AI 配置</h1><p>管理模型服务商、任务路由和运行策略</p></div>
       <div class="header-status">
         <el-button :disabled="Boolean(saving) || !validationIssues.length" @click="previewRepair">修复失效引用</el-button>
-        <el-tag size="small" :type="runtime.hot_reload_available ? 'success' : 'warning'">{{ runtime.hot_reload_available ? "运行时热加载可用" : "运行时状态待确认" }}</el-tag>
         <el-tag v-if="dirtyCount" size="small" type="warning">{{ dirtyCount }} 项未保存</el-tag>
         <el-button icon="el-icon-refresh" @click="loadConfiguration">重新加载</el-button>
       </div>
@@ -49,7 +48,7 @@
 
           <main v-if="providerDraft" class="provider-main">
             <div class="section-title">
-              <div><h2>{{ providerDraft.isNew ? "添加服务商" : providerDraft.name }}</h2><p>密钥不会从服务端回传；留空表示沿用当前值。</p></div>
+              <div><h2>{{ providerDraft.isNew ? "添加服务商" : providerDraft.name }}</h2><p>已保存的密钥默认隐藏，点击眼睛图标查看；删除某一行即删除该密钥。</p></div>
               <div class="provider-heading-actions">
                 <el-tag size="small" :type="providerDraftStatus.type">{{ providerDraftStatus.label }}</el-tag>
                 <el-button v-if="!providerDraft.isNew" type="text" icon="el-icon-delete" class="danger-text" @click="removeProvider">删除服务商</el-button>
@@ -63,9 +62,9 @@
             </el-form>
 
             <section class="secret-section">
-              <div class="subheading"><div><h3>API Keys</h3><p>支持多密钥轮询。替换值只会在保存或测试请求中发送。</p></div><el-button size="small" icon="el-icon-plus" @click="addKey">添加密钥</el-button></div>
+              <div class="subheading"><div><h3>API Keys</h3><p>支持多密钥轮询。</p></div><el-button size="small" icon="el-icon-plus" @click="addKey">添加密钥</el-button></div>
               <div v-for="(slot, index) in providerDraft.api_key_slots" :key="slot.clientId" class="secret-row">
-                <el-input v-model="slot.value" show-password autocomplete="new-password" :placeholder="slot.existing_index == null ? '输入新 API Key' : `密钥 ${slot.existing_index + 1} 已配置，留空沿用`" @input="markProviderDirty" />
+                <el-input v-model="slot.value" autocomplete="new-password" placeholder="输入 API Key" show-password @input="markProviderDirty" />
                 <el-button type="text" icon="el-icon-delete" class="danger-text" @click="removeKey(index)">删除</el-button>
               </div>
             </section>
@@ -164,7 +163,11 @@
       <el-tab-pane label="AI人设" name="persona">
         <section v-loading="personaLoading" class="settings-section persona-section">
           <div class="section-title"><div><h2>默认聊天人设</h2><p>设置 AI 聊天插件的身份、背景和表达方式，从下一条消息开始生效。</p></div><el-tag v-if="personaAvailable" size="small" type="success">运行时读取</el-tag></div>
-          <el-alert v-if="personaAvailable === false" title="当前没有可管理的人设" type="info" :closable="false" show-icon>
+          <el-alert v-if="personaError" title="AI 人设加载失败" type="error" :closable="false" show-icon>
+            <p>{{ personaError }}</p>
+            <el-button size="small" plain @click="loadPersona">重新加载</el-button>
+          </el-alert>
+          <el-alert v-else-if="personaAvailable === false" title="当前没有可管理的人设" type="info" :closable="false" show-icon>
             <p>请先在“AI聊天”中安装支持人设管理的聊天插件。</p>
             <el-button size="small" type="primary" plain @click="activeSection = 'chat_plugins'">前往 AI聊天</el-button>
           </el-alert>
@@ -175,14 +178,14 @@
             </div>
             <el-form-item label="身份与背景设定"><el-input v-model="personaDraft.prompt" type="textarea" :rows="10" maxlength="20000" show-word-limit placeholder="描述角色身份、背景、性格、知识边界和相处方式" @input="markPersonaDirty" /></el-form-item>
             <el-form-item label="表达风格"><el-input v-model="personaDraft.style" type="textarea" :rows="3" maxlength="2000" show-word-limit placeholder="例如：简短、自然、避免客服口吻" @input="markPersonaDirty" /></el-form-item>
-            <el-form-item label="语气样例"><el-input v-model="personaToneText" type="textarea" :rows="4" placeholder="每行一条，只用于参考表达方式" @input="markPersonaDirty" /></el-form-item>
-            <el-form-item label="示例对话"><el-input v-model="personaDialogueText" type="textarea" :rows="6" placeholder="每段一组示例对话，段落之间留一个空行" @input="markPersonaDirty" /></el-form-item>
+            <el-form-item label="语气样例"><el-input v-model="personaToneText" type="textarea" :rows="4" placeholder="每行一条，最多 12 条，只用于参考表达方式" @input="markPersonaDirty" /></el-form-item>
+            <el-form-item label="示例对话"><el-input v-model="personaDialogueText" type="textarea" :rows="6" placeholder="每段一组示例对话，段落之间留一个空行，最多 12 段" @input="markPersonaDirty" /></el-form-item>
           </el-form>
         </section>
         <SectionAction v-if="personaAvailable" :dirty="personaDirty" :saving="personaSaving" :invalid="!personaDraft.name.trim() || !personaDraft.prompt.trim()" effect="下一条消息生效" @reset="resetPersona" @save="savePersona" />
       </el-tab-pane>
 
-      <el-tab-pane label="AI聊天" name="chat_plugins">
+      <el-tab-pane label="AI聊天" name="chat_plugins" lazy>
         <StoreTemplate ref="chatStore" capability="ai_chat" embedded @session-expired="sessionExpired = true; aiEpoch += 1" />
       </el-tab-pane>
 
@@ -260,10 +263,10 @@ export default {
   data() {
     return {
       advancedCategory: "client_settings", advancedSearch: "", advancedLocalIssues: [], repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
-      loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, apiTypes: [], defaultApiBases: {}, discoveryApiTypes: [], effects: {}, runtime: {}, providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
+      loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, apiTypes: [], defaultApiBases: {}, discoveryApiTypes: [], providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
       providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, sandbox: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
       discovering: false, discoveryDialog: false, discoveredModels: [], selectedDiscovered: [], discoverySearch: "", providerProbeResults: {}, modelDialog: false, modelDraft: emptyModel(), modelEditIndex: null, testingModelKey: "",
-      personaLoading: false, personaSaving: false, personaAvailable: null, personaRevision: "", personaDraft: { name: "", prompt: "", style: "", enabled: true }, personaOriginal: null, personaToneText: "", personaDialogueText: "", personaDirty: false,
+      personaLoading: false, personaSaving: false, personaAvailable: null, personaError: "", personaRevision: "", personaDraft: { name: "", prompt: "", style: "", enabled: true }, personaOriginal: null, personaToneText: "", personaDialogueText: "", personaDirty: false,
       defaultTasks: [{ key: "chat", label: "对话" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
       schemaTabs: [
         { name: "context", label: "上下文", title: "上下文管理", description: "控制对话总结、多模态窗口和工具结果修剪。", effect: "保存后立即热加载" },
@@ -292,12 +295,17 @@ export default {
       const original = this.providers.find((item) => item.name === this.selectedProviderName)
       const draftBase = String(this.providerDraft.api_base || this.defaultApiBases[this.providerDraft.api_type] || "").replace(/\/$/, "")
       const originalBase = String(original?.api_base || this.defaultApiBases[original?.api_type] || "").replace(/\/$/, "")
-      const temporaryKey = this.providerDraft.api_key_slots.some((slot) => String(slot.value || "").trim())
+      const temporaryKey = Boolean(this.temporaryKey)
       if (original && !temporaryKey && (original.api_type !== this.providerDraft.api_type || originalBase !== draftBase)) return { code: "scope_changed", label: "凭据范围已变化", type: "warning", reason: "修改 API 类型或地址后，请填写临时 API Key 再测试" }
       if (!draftBase) return { code: "missing_base", label: "缺少 API 地址", type: "warning", reason: "请先填写 API 地址" }
-      const hasSavedKey = this.providerDraft.api_key_slots.some((slot) => slot.existing_index != null)
+      const hasSavedKey = this.providerDraft.api_key_slots.some((slot) => (original?.api_key || []).includes(String(slot.value || "").trim()))
       if (!temporaryKey && !hasSavedKey) return { code: "missing_credentials", label: "缺少有效凭据", type: "warning", reason: "请先填写有效 API Key" }
       return { code: "ready", label: "可自动发现", type: "success", reason: "" }
+    },
+    temporaryKey() {
+      if (!this.providerDraft) return null
+      const saved = this.providerDraft.isNew ? [] : this.providers.find((item) => item.name === this.selectedProviderName)?.api_key || []
+      return this.providerDraft.api_key_slots.map((slot) => String(slot.value || "").trim()).find((value) => value && !saved.includes(value)) || null
     },
     selectedProbeResult() { return this.providerProbeResults[this.selectedProviderName || "__new__"] || null },
     groupNameErrors() {
@@ -308,7 +316,9 @@ export default {
   },
   watch: {
     activeSection(value) {
-      if (value === "chat_plugins") this.$nextTick(() => this.$refs.chatStore?.loadChatSwitches().catch(error => { if (error.response?.status === 401) this.sessionExpired = true }))
+      const chatStore = this.$refs.chatStore
+      if (value === "chat_plugins" && chatStore) chatStore.loadChatSwitches().catch(error => { if (error.response?.status === 401) this.sessionExpired = true })
+      if (value === "persona" && this.personaAvailable === false && !this.personaLoading) this.loadPersona()
     },
   },
   mounted() { this.loadConfiguration() },
@@ -328,6 +338,7 @@ export default {
     aiGet(...args) { return this.aiRequest("get", ...args) },
     aiPost(...args) { return this.aiRequest("post", ...args) },
     aiPut(...args) { return this.aiRequest("put", ...args) },
+    aiDelete(...args) { return this.aiRequest("delete", ...args) },
     async relogin() {
       if (this.loggingIn) return
       this.loggingIn = true
@@ -371,7 +382,7 @@ export default {
     },
     applyConfiguration(data, preferredName = "") {
       this.advancedLocalIssues = []
-      this.revision = data.revision; this.schema = data.schema || {}; this.apiTypes = data.api_types || []; this.defaultApiBases = data.default_api_bases || {}; this.discoveryApiTypes = data.discovery_api_types || []; this.effects = data.effects || {}; this.runtime = data.runtime || {}; this.providers = clone(data.providers || []); this.validationIssues = data.validation_issues || []; this.operationIssues = []
+      this.revision = data.revision; this.schema = data.schema || {}; this.apiTypes = data.api_types || []; this.defaultApiBases = data.default_api_bases || {}; this.discoveryApiTypes = data.discovery_api_types || []; this.providers = clone(data.providers || []); this.validationIssues = data.validation_issues || []; this.operationIssues = []
       this.originalSections = clone(data.sections || {}); this.sectionDrafts = clone(data.sections || {}); this.dirtySections = {}; this.invalidSections = {}; this.groupRows = this.groupsToRows(this.sectionDrafts.model_groups); this.selectedRouteGroupId = this.groupRows.some((item) => item.clientId === this.selectedRouteGroupId) ? this.selectedRouteGroupId : this.groupRows[0]?.clientId || ""; this.routingIssues = []
       const target = preferredName || this.selectedProviderName; this.selectedProviderName = this.providers.some((item) => item.name === target) ? target : this.providers[0]?.name || ""
       this.resetProviderDraft(); this.providerDirty = false; this.modelsDirty = false; this.syncDirty()
@@ -379,8 +390,8 @@ export default {
     resetProviderDraft() {
       const provider = this.providers.find((item) => item.name === this.selectedProviderName)
       if (!provider) { this.providerDraft = null; return }
-      const slots = provider.api_key_slots.map((slot) => ({ ...slot, value: "", clientId: uid() }))
-      if (!slots.length) slots.push({ existing_index: null, value: "", clientId: uid() })
+      const slots = (provider.api_key || []).map((value) => ({ value, clientId: uid() }))
+      if (!slots.length) slots.push({ value: "", clientId: uid() })
       this.providerDraft = { ...clone(provider), api_key_slots: slots, isNew: false }
     },
     applySavedConfiguration(data, preferredName, submitted) {
@@ -407,14 +418,7 @@ export default {
         const { models, ...fields } = draft
         if (providerDirty && submitted.provider !== JSON.stringify(fields)) {
           this.providerDraft = { ...fields, models: this.providerDraft?.models || [] }
-          if (submitted.provider) {
-            const savedSlots = JSON.parse(submitted.provider).api_key_slots.filter(slot => slot.existing_index != null || slot.value)
-            this.providerDraft.isNew = false
-            this.providerDraft.api_key_slots = fields.api_key_slots.map(slot => {
-              const index = savedSlots.findIndex(saved => saved.clientId === slot.clientId)
-              return index < 0 ? slot : { ...slot, existing_index: index, value: slot.value === savedSlots[index].value ? "" : slot.value }
-            })
-          }
+          if (submitted.provider) this.providerDraft.isNew = false
           this.providerDirty = true
         }
         if (modelsDirty && submitted.models !== JSON.stringify(models)) {
@@ -427,16 +431,16 @@ export default {
     },
     async selectProvider(name) { if (this.saving) return; if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = name; this.providerDirty = false; this.modelsDirty = false; this.resetProviderDraft(); this.syncDirty() },
     async confirmDiscard() { try { await this.$confirm("当前 AI 配置有尚未保存的修改。", "放弃修改？", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑", type: "warning" }); return true } catch (_) { return false } },
-    async createProvider() { if (this.saving) return; if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = ""; this.providerDraft = { name: "", api_type: "openai", api_base: "", timeout: 180, temperature: null, max_output_tokens: null, api_key_slots: [{ existing_index: null, value: "", clientId: uid() }], models: [], discovery_supported: true, isNew: true }; this.providerDirty = true; this.modelsDirty = false; this.syncDirty() },
+    async createProvider() { if (this.saving) return; if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = ""; this.providerDraft = { name: "", api_type: "openai", api_base: "", timeout: 180, temperature: null, max_output_tokens: null, api_key_slots: [{ value: "", clientId: uid() }], models: [], isNew: true }; this.providerDirty = true; this.modelsDirty = false; this.syncDirty() },
     invalidateProbeResults() {
       const key = this.selectedProviderName || "__new__"
       if (this.providerProbeResults[key]) this.$delete(this.providerProbeResults, key)
     },
     markProviderDirty() { this.providerDirty = true; this.invalidateProbeResults(); this.syncDirty() },
     handleApiTypeChange(value) { if (!this.providerDraft.api_base && this.defaultApiBases[value]) this.providerDraft.api_base = this.defaultApiBases[value]; this.markProviderDirty() },
-    addKey() { this.providerDraft.api_key_slots.push({ existing_index: null, value: "", clientId: uid() }); this.markProviderDirty() },
+    addKey() { this.providerDraft.api_key_slots.push({ value: "", clientId: uid() }); this.markProviderDirty() },
     removeKey(index) { this.providerDraft.api_key_slots.splice(index, 1); this.markProviderDirty() },
-    providerPayload({ includeModels = false } = {}) { return { expected_revision: this.revision, name: this.providerDraft.name.trim(), api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base?.trim() || null, timeout: this.providerDraft.timeout, temperature: this.providerDraft.temperature, max_output_tokens: this.providerDraft.max_output_tokens, api_keys: this.providerDraft.api_key_slots.map(({ existing_index, value }) => ({ existing_index, value: value || null })), models: this.providerDraft.isNew || includeModels ? this.providerDraft.models.map(({ capabilities, ...model }) => model) : null } },
+    providerPayload({ includeModels = false } = {}) { return { expected_revision: this.revision, name: this.providerDraft.name.trim(), api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base?.trim() || null, timeout: this.providerDraft.timeout, temperature: this.providerDraft.temperature, max_output_tokens: this.providerDraft.max_output_tokens, api_keys: this.providerDraft.api_key_slots.map((slot) => String(slot.value || "").trim()).filter(Boolean), models: this.providerDraft.isNew || includeModels ? this.providerDraft.models.map(({ capabilities, ...model }) => model) : null } },
     async saveProvider(options = {}) {
       if (this.saving) return false
       const includeModels = Boolean(options?.includeModels)
@@ -458,14 +462,13 @@ export default {
       if (this.saving) return
       try { await this.$confirm(`删除 ${this.providerDraft.name} 后，引用该服务商的默认模型和路由必须先调整。`, "删除服务商？", { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }) } catch (_) { return }
       this.saving = "provider"
-      try { const { models, ...fields } = this.providerDraft; const submitted = { provider: JSON.stringify(fields), models: JSON.stringify(models) }; const response = await this.deleteRequest(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}?expected_revision=${encodeURIComponent(this.revision)}`); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, "", submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "服务商删除失败。") } finally { this.saving = "" }
+      try { const { models, ...fields } = this.providerDraft; const submitted = { provider: JSON.stringify(fields), models: JSON.stringify(models) }; const response = await this.aiDelete(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}?expected_revision=${encodeURIComponent(this.revision)}`); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, "", submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "服务商删除失败。") } finally { this.saving = "" }
     },
     async discoverModels() {
       this.discovering = true
       const resultKey = this.selectedProviderName || "__new__"
       try {
-        const temporaryKey = this.providerDraft.api_key_slots.find((slot) => slot.value)?.value || null
-        const response = await this.aiPost(`${this.$root.prefix}/ai/providers/discover`, { expected_revision: this.revision, provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base, api_key: temporaryKey }, { suppressErrorToast: true })
+        const response = await this.aiPost(`${this.$root.prefix}/ai/providers/discover`, { expected_revision: this.revision, provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base, api_key: this.temporaryKey }, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
         this.$set(this.providerProbeResults, resultKey, { success: true, message: `连接成功，发现 ${response.data.models?.length || 0} 个模型，耗时 ${response.data.latency_ms || 0} ms。` })
         this.discoveredModels = response.data.models || []; this.selectedDiscovered = []; this.discoveryDialog = true
@@ -521,7 +524,6 @@ export default {
       this.testingModelKey = testKey
       try { await this.$confirm(`将对 ${providerName}/${model.model_name} 发起一次最小 ${task} 请求，可能产生费用。`, "确认模型测试", { type: "warning" }) } catch (_) { this.testingModelKey = ""; return }
       try {
-        const temporaryKey = this.providerDraft.api_key_slots.find((slot) => String(slot.value || "").trim())?.value || null
         const { capabilities, ...modelConfig } = model
         const response = await this.aiPost(`${this.$root.prefix}/ai/models/test`, {
           expected_revision: this.revision,
@@ -530,7 +532,7 @@ export default {
           saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName,
           api_type: this.providerDraft.api_type,
           api_base: this.providerDraft.api_base,
-          api_key: temporaryKey,
+          api_key: this.temporaryKey,
           timeout: this.providerDraft.timeout,
           model_config: modelConfig,
           task,
@@ -541,7 +543,7 @@ export default {
       finally { if (this.testingModelKey === testKey) this.testingModelKey = "" }
     },
     async loadPersona() {
-      this.personaLoading = true
+      this.personaLoading = true; this.personaError = ""
       try {
         const response = await this.aiGet(`${this.$root.prefix}/ai/personas/default`, {}, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
@@ -555,7 +557,7 @@ export default {
         this.personaDirty = false
       } catch (error) {
         this.personaAvailable = false
-        this.$message.error(apiErrorDetail(error, "AI 人设加载失败。"))
+        this.personaError = apiErrorDetail(error, "AI 人设加载失败。")
       } finally { this.personaLoading = false; this.syncDirty() }
     },
     personaSnapshot() { return { ...clone(this.personaDraft), tone_examples: this.personaToneText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean), preset_dialogues: this.personaDialogueText.split(/(?:\r?\n){2,}/).map((item) => item.trim()).filter(Boolean) } },
@@ -569,9 +571,11 @@ export default {
     },
     async savePersona() {
       if (!this.personaDraft.name.trim() || !this.personaDraft.prompt.trim()) return
+      const snapshot = this.personaSnapshot()
+      if (snapshot.tone_examples.length > 12 || snapshot.preset_dialogues.length > 12) return this.$message.warning("语气样例和示例对话各最多 12 条。")
       this.personaSaving = true
       try {
-        const response = await this.aiPut(`${this.$root.prefix}/ai/personas/default`, { expected_revision: this.personaRevision, ...this.personaSnapshot() })
+        const response = await this.aiPut(`${this.$root.prefix}/ai/personas/default`, { expected_revision: this.personaRevision, ...snapshot })
         if (!response.suc) throw new Error(response.info)
         this.personaRevision = response.data.revision; this.personaDraft = clone(response.data.persona)
         this.personaToneText = (this.personaDraft.tone_examples || []).join("\n"); this.personaDialogueText = (this.personaDraft.preset_dialogues || []).join("\n\n")
@@ -638,12 +642,10 @@ export default {
     async saveSection(name, value = this.sectionDrafts[name]) { if (this.sectionInvalid(name) || (this.saving && this.saving !== "model_groups")) return; this.saving = name; try { const submitted = { section: name, value: JSON.stringify(name === "model_groups" ? this.groupRows : this.sectionDrafts[name]) }; const response = await this.aiPut(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
     groupsToRows(groups) { const names = new Set(Object.keys(groups || {})); return Object.entries(groups || {}).map(([name, targets]) => ({ name, targets: targets.map((value) => ({ kind: names.has(value) ? "group" : "model", value, clientId: uid() })), clientId: uid() })) },
     addGroup() { const group = { name: "", targets: [], clientId: uid() }; this.groupRows.push(group); this.selectedRouteGroupId = group.clientId; this.markGroupsDirty() },
-    removeGroup(index) { this.groupRows.splice(index, 1); this.markGroupsDirty() },
     async removeSelectedGroup() {
       const index = this.groupRows.findIndex(item => item.clientId === this.selectedRouteGroupId)
       if (index < 0 || this.saving) return
-      const name = this.groupRows[index].name.trim()
-      const change = removeRoutingGroup(this.groupRows, this.sectionDrafts.default_models, name)
+      const change = removeRoutingGroup(this.groupRows, this.sectionDrafts.default_models, this.selectedRouteGroupId)
       if (change.tasks.length || change.affected.length || change.removed.length > 1) {
         try { await this.$confirm(`将删除路由组 ${change.removed.join("、")}，清除默认任务 ${change.tasks.join("、") || "无"} 及路由组 ${change.affected.join("、") || "无"} 的引用，保存时一起应用。`, "删除引用确认", { type: "warning" }) } catch (_) { return }
       }
@@ -679,6 +681,7 @@ export default {
       if (this.hasGroupErrors) { this.$message.warning("请先修正路由组名称、目标或循环引用。"); return }
       const value = this.groupRows.map((item) => ({ name: item.name.trim(), targets: item.targets.map((target) => target.value.trim()) }))
       this.saving = "model_groups"
+      let fallback = "模型路由校验失败。"
       try {
         const defaults = clone(this.sectionDrafts.default_models)
         const submitted = { sections: { model_groups: JSON.stringify(this.groupRows), default_models: JSON.stringify(defaults) } }
@@ -686,11 +689,12 @@ export default {
         const validation = await this.aiPost(`${this.$root.prefix}/ai/configuration/validate-routing`, { value, default_models: defaults, expected_revision: expectedRevision })
         this.routingIssues = validation.data?.issues || []
         if (!validation.suc || !validation.data?.valid) { this.$message.warning("模型路由校验未通过。"); return }
+        fallback = "模型路由保存失败。"
         const response = await this.aiPut(`${this.$root.prefix}/ai/configuration/routing`, { expected_revision: expectedRevision, model_groups: value, default_models: defaults })
         if (!response.suc) throw new Error(response.info)
         if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted)
         await this.handleAiApply(response)
-      } catch (error) { this.captureOperationError(error, "模型路由校验失败。") }
+      } catch (error) { this.captureOperationError(error, fallback) }
       finally { if (this.saving === "model_groups") this.saving = "" }
     },
     modelsForTask(task) { return this.allModels.filter((model) => { const caps = model.capabilities || {}; if (!model.is_available) return false; if (task === "embedding") return caps.is_embedding_model || model.task_type === "embedding"; if (task === "rerank") return caps.is_rerank_model || model.task_type === "rerank"; if (task === "image") return (caps.output_modalities || []).includes("image") || model.task_type === "image_generation"; if (task === "tts") return (caps.output_modalities || []).includes("audio") || model.task_type === "tts"; return !caps.is_embedding_model && !caps.is_rerank_model && ((caps.output_modalities || ["text"]).includes("text")) }) },

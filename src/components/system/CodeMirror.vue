@@ -132,7 +132,9 @@ export default {
 
     setupCustomTheme() {
       // 动态添加自定义主题样式
+      if (document.getElementById('kawaii-codemirror-theme')) return
       const style = document.createElement('style')
+      style.id = 'kawaii-codemirror-theme'
       style.textContent = `
           /* 二次元可爱风格主题 */
           .CodeMirror {

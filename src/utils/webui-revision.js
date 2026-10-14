@@ -4,7 +4,6 @@ import { isAuthenticationExpired } from "./auth-session"
 import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "./restart-network"
 
 const EXPECTED_REVISION = process.env.VUE_APP_WEBUI_REVISION || ""
-const RESOURCE_REVISION = document.querySelector('meta[name="zhenxun-webui-resource-revision"]')?.content || ""
 const DEVELOPMENT = process.env.NODE_ENV === "development"
 const RELOAD_KEY = "zhenxunWebuiRevisionReload"
 let pollTimer = null
@@ -24,12 +23,9 @@ export const handleWebuiRevision = (value) => {
   if (DEVELOPMENT || isAuthenticationExpired() || isBusinessNetworkFrozen() || document.hidden || reloadIssued) return
   const manifest = typeof value === "string" ? { revision: value } : (value || {})
   if (manifest.resources_ready === false) return
-  const resource = manifest.resource_revision || ""
-  const revision = manifest.revision || manifest.webui_revision || ""
-  const expected = RESOURCE_REVISION || EXPECTED_REVISION
-  const actual = RESOURCE_REVISION ? resource : revision
-  if (!actual || !expected) return
-  if (actual === expected) {
+  const actual = manifest.revision || manifest.webui_revision || ""
+  if (!actual || !EXPECTED_REVISION) return
+  if (actual === EXPECTED_REVISION) {
     closeDraftNotice()
     return
   }
@@ -41,7 +37,7 @@ export const handleWebuiRevision = (value) => {
     return
   }
   closeDraftNotice()
-  const target = `${RESOURCE_REVISION ? "resource" : "build"}:${actual}`
+  const target = `build:${actual}`
   if (window.sessionStorage.getItem(RELOAD_KEY) === target) {
     if (mismatchNotified !== target) {
       mismatchNotified = target

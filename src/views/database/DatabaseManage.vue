@@ -8,36 +8,15 @@
     <DatabaseConnectionStatus :result="{ runtime: runtime.database?.connection }" :checking="loading" />
     <section class="settings-band">
       <div class="section-heading">
-        <div><h2>编辑连接配置</h2><p>以下为已保存配置及编辑草稿，保存后按实际应用结果生效。</p></div>
+        <div><h2>编辑连接配置</h2><p>这里只修改连接地址，不会迁移已有数据；需要把数据搬到新数据库时，请使用「更新与维护 → 切换数据库」。</p></div>
         <span class="status-pill" :class="`is-${databaseStatus.status || 'unknown'}`">
           <i></i>{{ statusLabel(databaseStatus.status) }}
           <em v-if="databaseStatus.latency_ms != null">{{ databaseStatus.latency_ms }} ms</em>
         </span>
       </div>
       <el-tabs v-model="databaseMode" class="database-tabs">
-        <el-tab-pane label="SQLite" name="sqlite">
-          <el-form label-position="top" class="form-grid"><el-form-item label="SQLite 路径" class="wide"><el-input v-model="databaseDrafts.sqlite.path" /></el-form-item></el-form>
-        </el-tab-pane>
-        <el-tab-pane label="MySQL" name="mysql">
-          <el-form label-position="top" class="form-grid">
-            <el-form-item label="主机"><el-input v-model="databaseDrafts.mysql.host" /></el-form-item>
-            <el-form-item label="端口"><el-input-number v-model="databaseDrafts.mysql.port" :min="1" :max="65535" controls-position="right" /></el-form-item>
-            <el-form-item label="用户名"><el-input v-model="databaseDrafts.mysql.username" /></el-form-item>
-            <el-form-item label="密码"><el-input v-model="databaseDrafts.mysql.password" type="password" show-password :placeholder="databaseDrafts.mysql.has_password ? '留空沿用当前密码' : '请输入密码'" /></el-form-item>
-            <el-form-item label="数据库名" class="wide"><el-input v-model="databaseDrafts.mysql.database" /></el-form-item>
-          </el-form>
-        </el-tab-pane>
-        <el-tab-pane label="PostgreSQL" name="postgres">
-          <el-form label-position="top" class="form-grid">
-            <el-form-item label="主机"><el-input v-model="databaseDrafts.postgres.host" /></el-form-item>
-            <el-form-item label="端口"><el-input-number v-model="databaseDrafts.postgres.port" :min="1" :max="65535" controls-position="right" /></el-form-item>
-            <el-form-item label="用户名"><el-input v-model="databaseDrafts.postgres.username" /></el-form-item>
-            <el-form-item label="密码"><el-input v-model="databaseDrafts.postgres.password" type="password" show-password :placeholder="databaseDrafts.postgres.has_password ? '留空沿用当前密码' : '请输入密码'" /></el-form-item>
-            <el-form-item label="数据库名" class="wide"><el-input v-model="databaseDrafts.postgres.database" /></el-form-item>
-          </el-form>
-        </el-tab-pane>
-        <el-tab-pane label="自定义 URL 地址" name="url">
-          <el-form label-position="top" class="form-grid"><el-form-item label="数据库连接 URL" class="wide"><el-input v-model="databaseDrafts.url.url" type="password" show-password :placeholder="databaseDrafts.url.has_saved_url ? '留空沿用当前 URL' : 'driver://user:password@host/database'" /></el-form-item></el-form>
+        <el-tab-pane v-for="tab in databaseTabs" :key="tab.name" :label="tab.label" :name="tab.name">
+          <el-form label-position="top"><DatabaseFields v-model="databaseDrafts[tab.name]" /></el-form>
         </el-tab-pane>
       </el-tabs>
     </section>
@@ -58,7 +37,7 @@
       <el-form v-if="cache.mode === 'REDIS'" label-position="top" class="form-grid redis-form">
         <el-form-item label="Redis 主机"><el-input v-model="cache.host" /></el-form-item>
         <el-form-item label="端口"><el-input-number v-model="cache.port" :min="1" :max="65535" controls-position="right" /></el-form-item>
-        <el-form-item label="密码" class="wide"><el-input v-model="cache.password" type="password" show-password :placeholder="cache.has_password ? '留空沿用当前密码' : '无密码可留空'" /></el-form-item>
+        <el-form-item label="密码" class="wide"><el-input v-model="cache.password" autocomplete="new-password" placeholder="无密码可留空" show-password /></el-form-item>
       </el-form>
       <div v-if="runtime.cache && runtime.cache.redis && cache.mode === 'REDIS'" class="metric-row">
         <span>Redis 键数 <strong>{{ formatNumber(runtime.cache.redis.dbsize) }}</strong></span>
@@ -100,22 +79,31 @@
 
 <script>
 import DatabaseConnectionStatus from "@/components/system/DatabaseConnectionStatus.vue"
+import DatabaseFields from "@/components/system/DatabaseFields.vue"
 import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
+import { formatBytes } from "@/utils/utils"
 
 const createDatabaseDrafts = () => ({
   sqlite: { mode: "sqlite", path: "data/db/zhenxun.db" },
-  mysql: { mode: "mysql", host: "127.0.0.1", port: 3306, username: "", password: "", database: "", has_password: false },
-  postgres: { mode: "postgres", host: "127.0.0.1", port: 5432, username: "", password: "", database: "", has_password: false },
-  url: { mode: "url", url: "", has_saved_url: false },
+  mysql: { mode: "mysql", host: "127.0.0.1", port: 3306, username: "", password: "", database: "" },
+  postgres: { mode: "postgres", host: "127.0.0.1", port: 5432, username: "", password: "", database: "" },
+  url: { mode: "url", url: "" },
 })
+const databaseTabs = [
+  { name: "sqlite", label: "SQLite" },
+  { name: "mysql", label: "MySQL" },
+  { name: "postgres", label: "PostgreSQL" },
+  { name: "url", label: "自定义 URL 地址" },
+]
 
 export default {
   name: "DatabaseManage",
-  components: { DatabaseConnectionStatus },
+  components: { DatabaseConnectionStatus, DatabaseFields },
   data() {
     return {
       loading: false, saving: false, probing: false, cacheAction: "", revision: "", launcherManaged: false, runtime: {}, operationError: "",
+      databaseTabs,
       databaseMode: "sqlite",
       savedDatabaseMode: "sqlite",
       databaseDrafts: createDatabaseDrafts(),
@@ -152,9 +140,9 @@ export default {
     cache: { deep: true, handler() { this.probeResults = {}; this.databaseProbeErrors = {}; this.updateDirtyState() } },
   },
   methods: {
+    formatBytes,
     statusLabel(status) { return { ok: "连接正常", warning: "需要注意", error: "连接异常" }[status] || "尚未检查" },
     formatNumber(value) { return value == null ? "-" : Number(value).toLocaleString() },
-    formatBytes(value) { if (!value) return "-"; const units = ["B", "KB", "MB", "GB"]; let size = Number(value); let index = 0; while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1 } return `${size.toFixed(index ? 1 : 0)} ${units[index]}` },
     async loadRuntime() {
       if (this.loading || this.saving) return
       this.loading = true; this.operationError = ""
@@ -219,7 +207,6 @@ export default {
         }
         await handleApplyResult(this, response, {
           restartPrompt: "数据与缓存配置已保存，需要重启后生效。",
-          restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/database",
           recoveryMessage: "数据服务配置将在新进程中生效。",
         })

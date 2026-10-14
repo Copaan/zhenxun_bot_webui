@@ -23,7 +23,7 @@
       </el-select>
       <el-switch v-else-if="fieldType === 'boolean'" :value="booleanDisplayValue" @input="emitValue" />
       <el-input-number v-else-if="['integer', 'number'].includes(fieldType)" :value="value" :precision="fieldType === 'integer' ? 0 : undefined" :min="resolvedSchema.minimum" :max="resolvedSchema.maximum" :step="fieldType === 'integer' ? 1 : 0.1" @change="emitValue" />
-      <el-input v-else :value="value" :type="ui.secret ? 'password' : /prompt|template|description/i.test(path) || ui.component === 'textarea' ? 'textarea' : 'text'" :show-password="ui.secret" @input="emitValue" />
+      <el-input v-else :value="value" :type="/prompt|template|description/i.test(path) || ui.component === 'textarea' ? 'textarea' : 'text'" :show-password="secret" autocomplete="off" @input="emitValue" />
     </template>
     <el-switch v-else-if="fieldType === 'boolean'" :value="booleanDisplayValue" @input="emitValue" />
     <el-dialog v-if="complex && value !== undefined && value !== null" :visible.sync="expanded" :title="`${label} · 编辑`" width="min(720px, calc(100vw - 32px))" append-to-body custom-class="schema-object-dialog">
@@ -59,7 +59,7 @@
 </template>
 
 <script>
-import { valueType, resolveReference, matchesSchema, emptyValue, valueSummary, fieldMatches, validateField } from "./schema-utils"
+import { valueType, resolveReference, matchesSchema, emptyValue, valueSummary, fieldMatches, validateField, isSecretPath } from "./schema-utils"
 import SettingsField from "./SettingsField.vue"
 
 export default {
@@ -73,6 +73,7 @@ export default {
   },
   data() { return { selectedVariant: null, expanded: false, advanced: false, deepExpanded: false, newKey: "", localError: "" } },
   computed: {
+    secret() { return isSecretPath(this.path) },
     summary() { return valueSummary(this.value) },
     complex() { return ["object", "array"].includes(this.fieldType) },
     matchesSearch() { return fieldMatches(this.query, `${this.path} ${this.label} ${this.ui.description || ""}`, this.schema, this.value, this.effectiveRoot) },

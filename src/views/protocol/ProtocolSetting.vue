@@ -1,7 +1,7 @@
 <template>
   <main class="protocol-page" v-loading="loading">
     <header class="page-heading">
-      <div><p class="eyebrow">BOT CONNECTION</p><h1>机器人接入</h1><p>扫码或手动接入 QQ 官方机器人，并管理 OneBot 连接。</p></div>
+      <div><p class="eyebrow">BOT CONNECTION</p><h1>机器人接入</h1><p>扫码或手动接入 QQ 官方机器人，管理 OneBot 连接，查看 Telegram 状态。</p></div>
       <div class="overall-status" :class="{ online: hasAnyConnection }"><span></span>{{ hasAnyConnection ? "已有机器人在线" : "暂无机器人在线" }}</div>
     </header>
 
@@ -37,12 +37,32 @@
       <el-form class="form-grid" label-position="top" :disabled="saving">
         <el-form-item label="反向连接主机（保存后重启生效）" class="span-2"><el-input v-model="onebotHost" placeholder="留空使用当前页面主机；仅主机名或 IP" maxlength="253" /><span v-if="protocolDirty" class="field-help">未保存修改</span></el-form-item>
         <el-form-item label="Access Token" class="span-2">
-          <el-input v-model="onebotToken" show-password autocomplete="new-password" :placeholder="configuration.onebot.has_access_token ? '已配置，留空表示沿用当前值' : '建议设置 Token'" />
-          <div class="field-actions"><span>协议端必须填写相同 Token，保存后重启生效。</span><el-button v-if="configuration.onebot.has_access_token" type="text" class="danger-text" @click="clearOnebotToken = !clearOnebotToken">{{ clearOnebotToken ? "取消清除" : "清除现有 Token" }}</el-button></div>
-          <el-alert v-if="clearOnebotToken" type="warning" :closable="false" title="保存后将移除 OneBot Access Token。" />
+          <el-input v-model="onebotToken" autocomplete="new-password" placeholder="建议设置 Token；留空表示不校验" show-password />
+          <div class="field-actions"><span>协议端必须填写相同 Token，保存后重启生效。</span></div>
         </el-form-item>
       </el-form>
       <el-button type="primary" :loading="saving" :disabled="!configuration.revision" @click="saveConfiguration">保存配置</el-button>
+    </section>
+
+    <section v-else-if="selectedPlatform === 'telegram'" class="configuration-section">
+      <div class="section-heading"><div><h2>Telegram</h2><p>通过 Telegram Bot API 接入，配置写在 .env 中，修改后需重启生效。</p></div><el-tag :type="status.telegram_connected ? 'success' : status.telegram_enabled ? 'warning' : 'info'" effect="plain">{{ telegramStatus }}</el-tag></div>
+      <div v-if="telegramConnections.length" class="connected-list">
+        <div class="section-heading compact"><div><h3>在线机器人</h3></div><el-button size="small" icon="el-icon-refresh" :loading="statusLoading" @click="loadStatus">刷新</el-button></div>
+        <div class="connection-row" v-for="bot in telegramConnections" :key="bot.self_id">
+          <el-avatar :size="34" :src="bot.avatar_url || logoUrl" icon="el-icon-user-solid" />
+          <span class="connection-identity"><strong>{{ bot.nickname || bot.self_id }}</strong><small>{{ bot.self_id }}</small></span>
+          <span>Telegram</span>
+          <el-tag size="mini" type="success">已连接</el-tag>
+        </div>
+      </div>
+      <div class="endpoint-section">
+        <h3>启用步骤</h3>
+        <p class="field-help">1. 安装可选依赖</p>
+        <div class="copy-field"><code>uv sync --extra telegram</code><el-button size="small" icon="el-icon-document-copy" @click="copyText('uv sync --extra telegram')">复制</el-button></div>
+        <p class="field-help">2. 在 .env 中开启适配器并填写 Bot Token，需要代理时填写 TELEGRAM_PROXY</p>
+        <div class="copy-field"><code>TELEGRAM_ADAPTER_LOAD=True<br />TELEGRAM_BOTS='[{"token": "你的 Bot Token", "is_webhook": false}]'</code></div>
+        <p class="field-help">3. 重启真寻。超级用户填写为 SUPERUSERS 中的 "telegram:用户id"，或 PLATFORM_SUPERUSERS 中的 "telegram" 列表。</p>
+      </div>
     </section>
 
     <section v-else class="qq-workspace">
@@ -106,16 +126,15 @@
                     <p class="field-help">关闭时沿用适配器自动分片；Webhook 模式不使用分片设置。</p>
                   </el-form-item>
                   <el-form-item label="AppID"><el-input v-model.trim="bot.id" placeholder="机器人 AppID" /></el-form-item>
-                  <el-form-item label="Secret"><el-input v-model="bot.secret" show-password autocomplete="new-password" :placeholder="bot.has_secret ? '已保存，留空沿用' : 'AppSecret'" /></el-form-item>
-                  <el-form-item label="Token（兼容旧配置，可选）"><el-input v-model="bot.token" show-password autocomplete="new-password" :placeholder="bot.has_token ? '已保存，留空沿用' : '可留空'" /></el-form-item>
-                  <div class="probe-row"><span v-if="bot.probeResult" class="probe-success"><i class="el-icon-circle-check"></i> {{ bot.probeResult }}</span><span v-else-if="bot.has_secret && !bot.secret" class="muted">已保存的凭据会在提交时重新验证</span><span v-else class="muted">验证不会保存凭据</span><el-button size="small" :loading="bot.probing" :disabled="!canProbeBot(bot)" @click="probeBot(bot)">验证凭据</el-button></div>
+                  <el-form-item label="Secret"><el-input v-model="bot.secret" autocomplete="new-password" placeholder="AppSecret" show-password /></el-form-item>
+                  <div class="probe-row"><span v-if="bot.probeResult" class="probe-success"><i class="el-icon-circle-check"></i> {{ bot.probeResult }}</span><span v-else class="muted">验证不会保存凭据</span><el-button size="small" :loading="bot.probing" :disabled="!canProbeBot(bot)" @click="probeBot(bot)">验证凭据</el-button></div>
                   <QQDiagnostic v-if="bot.probeError" class="probe-diagnostic" :error="bot.probeError" @copy="copyText" />
                 </article>
                 <div v-if="!qqForm.bots.length" class="bot-empty"><i class="el-icon-connection"></i><strong>还没有机器人凭据</strong><span>可以扫码接入，或点击“添加 Bot”手动填写。</span></div>
               </div>
               <div v-if="hasWebhookBots && qqForm.webhook_mode === 'builtin_https'" class="builtin-settings">
                 <div class="section-heading compact"><div><h3>内置 HTTPS</h3><p>需要通过 <code>zx run</code> 启动，并提供可信 PEM 证书。</p></div><el-tag size="mini" :type="configuration.launcher_managed ? 'success' : 'warning'">{{ configuration.launcher_managed ? "Launcher 已托管" : "需要 Launcher" }}</el-tag></div>
-                <div class="form-grid"><el-form-item label="监听地址"><el-input v-model.trim="qqForm.listen_host" placeholder="0.0.0.0" /></el-form-item><el-form-item label="HTTPS 端口"><el-input-number v-model="qqForm.listen_port" :min="1" :max="65535" controls-position="right" /></el-form-item><el-form-item label="证书链文件"><el-input v-model.trim="qqForm.tls_certfile" :placeholder="qqForm.has_tls_certfile ? '已配置，留空沿用' : 'C:\\certs\\fullchain.pem'" /></el-form-item><el-form-item label="私钥文件"><el-input v-model.trim="qqForm.tls_keyfile" show-password :placeholder="qqForm.has_tls_keyfile ? '已配置，留空沿用' : 'C:\\certs\\privkey.pem'" /></el-form-item></div>
+                <div class="form-grid"><el-form-item label="监听地址"><el-input v-model.trim="qqForm.listen_host" placeholder="0.0.0.0" /></el-form-item><el-form-item label="HTTPS 端口"><el-input-number v-model="qqForm.listen_port" :min="1" :max="65535" controls-position="right" /></el-form-item><el-form-item label="证书链文件"><el-input v-model.trim="qqForm.tls_certfile" placeholder="C:\certs\fullchain.pem" /></el-form-item><el-form-item label="私钥文件"><el-input v-model.trim="qqForm.tls_keyfile" placeholder="C:\certs\privkey.pem" /></el-form-item></div>
               </div>
             </el-form>
             <div v-if="hasWebhookBots" class="callback-panel" :class="{ ready: callbackReady }"><div class="callback-state"><i :class="callbackReady ? 'el-icon-circle-check' : 'el-icon-warning-outline'"></i></div><div><strong>Webhook 入口状态</strong><p>{{ callbackDescription }}</p><p>运行配置：{{ status.qq_webhook_callback_url ? '已配置' : '未配置' }} · 入口：{{ status.qq_webhook_mode === 'external' ? '外部反代未验证' : status.qq_webhook_ingress?.state === 'ready' ? '已监听' : '未确认监听' }} · 账号：{{ status.qq_bots.some(bot => bot.mode === 'webhook' && bot.connected) ? '已连接' : '未连接' }} · 公网验证：未知</p><code v-if="callbackUrl">{{ callbackUrl }}</code></div><el-button v-if="callbackUrl" size="small" icon="el-icon-document-copy" @click="copyText(callbackUrl)">复制回调地址</el-button></div>
@@ -147,7 +166,7 @@ import {
 } from "@/utils/restart-flow"
 
 let botKey = 0
-const emptyBot = () => ({ localKey: `bot-${++botKey}`, id: "", token: "", secret: "", use_websocket: true, intent: { c2c_group_at_messages: true, at_messages: false, guild_messages: false, direct_message: false, interaction: false, group_members: false }, shard: null, has_token: false, has_secret: false, probing: false, removing: false, probeResult: "", probeError: null })
+const emptyBot = () => ({ localKey: `bot-${++botKey}`, id: "", secret: "", use_websocket: true, intent: { c2c_group_at_messages: true, at_messages: false, guild_messages: false, direct_message: false, interaction: false, group_members: false }, shard: null, saved: false, probing: false, removing: false, probeResult: "", probeError: null })
 const emptyRegistration = () => ({ visible: false, starting: false, registrationId: "", qrDataUrl: "", qrUrl: "", status: "idle", error: "", interval: 2, expiresAt: 0, bot: {}, restartAvailable: false, accessUrls: [], accessTargets: [] })
 
 export default {
@@ -165,10 +184,10 @@ export default {
         { key: "interaction", label: "按钮回调" },
         { key: "group_members", label: "群成员变更" }
       ],
-      status: { onebot_v11_connected: false, qq_official_enabled: false, qq_official_connected: false, qq_webhook_mode: "external", qq_webhook_callback_url: null, connections: [], qq_bots: [], onebot_v11_reverse_ws_path: "/onebot/v11/ws", qq_webhook_path: "/qq/webhook" },
-      configuration: { revision: "", launcher_managed: false, onebot: { has_access_token: false }, qq: { bots: [] } },
-      onebotToken: "", onebotHost: "", clearOnebotToken: false, qqSetupMode: "scan", logoUrl, registration: emptyRegistration(), registrationTimer: null,
-      qqForm: { enabled: false, bots: [], webhook_mode: "external", public_base_url: "", listen_host: "0.0.0.0", listen_port: 443, tls_certfile: "", tls_keyfile: "", has_tls_certfile: false, has_tls_keyfile: false },
+      status: { onebot_v11_connected: false, qq_official_enabled: false, qq_official_connected: false, telegram_enabled: false, telegram_connected: false, qq_webhook_mode: "external", qq_webhook_callback_url: null, connections: [], qq_bots: [], onebot_v11_reverse_ws_path: "/onebot/v11/ws", qq_webhook_path: "/qq/webhook" },
+      configuration: { revision: "", launcher_managed: false, onebot: { access_token: "" }, qq: { bots: [] } },
+      onebotToken: "", onebotHost: "", qqSetupMode: "scan", logoUrl, registration: emptyRegistration(), registrationTimer: null,
+      qqForm: { enabled: false, bots: [], webhook_mode: "external", public_base_url: "", listen_host: "0.0.0.0", listen_port: 443, tls_certfile: "", tls_keyfile: "" },
       originalProtocol: "",
     }
   },
@@ -199,7 +218,9 @@ export default {
           }
         })
     },
-    platforms() { return [{ key: "qq_official", short: "QQ", name: "QQ 官方机器人", description: "扫码接入 · 官方 WebSocket", connected: this.status.qq_official_connected, status: this.status.qq_official_connected ? "已连接" : this.qqForm.enabled ? "等待连接" : "未接入" }, { key: "onebot_v11", short: "OB", name: "OneBot V11", description: "高级接入 · 反向 WebSocket", connected: this.status.onebot_v11_connected, status: this.status.onebot_v11_connected ? "已连接" : "未连接" }] },
+    telegramConnections() { return this.status.connections.filter((bot) => bot.adapter === "Telegram") },
+    telegramStatus() { return this.status.telegram_connected ? "已连接" : this.status.telegram_enabled ? "等待连接" : "未启用" },
+    platforms() { return [{ key: "qq_official", short: "QQ", name: "QQ 官方机器人", description: "扫码接入 · 官方 WebSocket", connected: this.status.qq_official_connected, status: this.status.qq_official_connected ? "已连接" : this.qqForm.enabled ? "等待连接" : "未接入" }, { key: "onebot_v11", short: "OB", name: "OneBot V11", description: "高级接入 · 反向 WebSocket", connected: this.status.onebot_v11_connected, status: this.status.onebot_v11_connected ? "已连接" : "未连接" }, { key: "telegram", short: "TG", name: "Telegram", description: "可选适配器 · .env 配置", connected: this.status.telegram_connected, status: this.telegramStatus }] },
     callbackUrl() { return this.status.qq_webhook_callback_url || (this.qqForm.public_base_url ? `${this.qqForm.public_base_url.replace(/\/$/, "")}/qq/webhook` : "") },
     callbackReady() { return Boolean(this.callbackUrl && this.status.qq_webhook_ingress?.state === "ready" && this.status.qq_bots.some((bot) => bot.mode === "webhook" && bot.connected)) },
     callbackDescription() { if (!this.status.qq_official_enabled) return "QQ适配器尚未启用，已保存的修改需要重启生效。"; if (!this.status.qq_webhook_callback_url) return "当前运行配置没有公网回调地址。"; if (this.status.qq_webhook_mode === "external") return "外部HTTPS反代状态尚未验证；账号在线不代表公网回调可达。"; if (this.status.qq_webhook_ingress?.state !== "ready") return "内置HTTPS入口尚未确认监听，请检查生命周期中的入口状态。"; if (!this.callbackReady) return "内置HTTPS入口已监听，Webhook账号尚未就绪。"; return "内置HTTPS入口已监听且Webhook账号在线；公网DNS、证书信任与平台回调仍需验证。" },
@@ -212,14 +233,13 @@ export default {
     qqForm: { deep: true, handler() { this.updateDirtyState() } },
     onebotToken() { this.updateDirtyState() },
     onebotHost() { this.updateDirtyState() },
-    clearOnebotToken() { this.updateDirtyState() },
   },
   methods: {
     async loadConfiguration() {
       const sequence = ++this.configurationSequence
       const snapshot = this.protocolSnapshot()
       this.loading = true
-      try { const response = await this.getRequest(`${this.$root.prefix}/protocol/configuration`, {}, { suppressErrorToast: true }); if (sequence !== this.configurationSequence || snapshot !== this.protocolSnapshot()) return; if (!response || !response.suc) throw new Error(response && response.info); this.configuration = response.data; this.onebotHost = response.data.onebot.reverse_ws_host || ""; const qq = response.data.qq; this.qqForm = { enabled: qq.enabled, bots: (qq.bots || []).map((bot) => ({ ...emptyBot(), ...bot, use_websocket: Boolean(qq.bot_modes?.[bot.id]) })), webhook_mode: qq.webhook_mode || "external", public_base_url: qq.public_base_url || "", listen_host: qq.listen_host || "0.0.0.0", listen_port: qq.listen_port || 443, tls_certfile: "", tls_keyfile: "", has_tls_certfile: qq.has_tls_certfile, has_tls_keyfile: qq.has_tls_keyfile }; this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration") }
+      try { const response = await this.getRequest(`${this.$root.prefix}/protocol/configuration`, {}, { suppressErrorToast: true }); if (sequence !== this.configurationSequence || snapshot !== this.protocolSnapshot()) return; if (!response || !response.suc) throw new Error(response && response.info); this.configuration = response.data; this.onebotHost = response.data.onebot.reverse_ws_host || ""; this.onebotToken = response.data.onebot.access_token || ""; const qq = response.data.qq; this.qqForm = { enabled: qq.enabled, bots: (qq.bots || []).map((bot) => ({ ...emptyBot(), ...bot, saved: true, use_websocket: Boolean(qq.bot_modes?.[bot.id]) })), webhook_mode: qq.webhook_mode || "external", public_base_url: qq.public_base_url || "", listen_host: qq.listen_host || "0.0.0.0", listen_port: qq.listen_port || 443, tls_certfile: qq.tls_certfile || "", tls_keyfile: qq.tls_keyfile || "" }; this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration") }
       catch (error) { if (sequence === this.configurationSequence) this.$message.error(apiErrorDetail(error, "机器人配置读取失败。")) } finally { if (sequence === this.configurationSequence) this.loading = false }
     },
     async loadStatus() {
@@ -235,7 +255,7 @@ export default {
         if (sequence === this.statusSequence) this.statusConfirmed = false
       } finally { if (sequence === this.statusSequence) this.statusLoading = false }
     },
-    protocolSnapshot() { return JSON.stringify({ onebotHost: this.onebotHost, onebotToken: this.onebotToken, clearOnebotToken: this.clearOnebotToken, qq: { ...this.qqForm, bots: this.qqForm.bots.map(({ probing, removing, probeResult, probeError, localKey, ...bot }) => bot) } }) },
+    protocolSnapshot() { return JSON.stringify({ onebotHost: this.onebotHost, onebotToken: this.onebotToken, qq: { ...this.qqForm, bots: this.qqForm.bots.map(({ probing, removing, probeResult, probeError, localKey, saved, ...bot }) => bot) } }) },
     updateDirtyState() { if (this.originalProtocol) setDirtyState("protocol-configuration", this.protocolSnapshot() !== this.originalProtocol) },
     clearRegistrationTimer() { if (this.registrationTimer) window.clearTimeout(this.registrationTimer); this.registrationTimer = null },
     async startRegistration() {
@@ -319,7 +339,7 @@ export default {
     openRegistrationUrl() { if (this.registration.qrUrl) window.open(this.registration.qrUrl, "_blank", "noopener,noreferrer") },
     addBot() { this.qqForm.bots.push(emptyBot()) },
     async removeBot(bot, index) {
-      if (!bot.id || !bot.has_secret) { this.qqForm.bots.splice(index, 1); return }
+      if (!bot.id || !bot.saved) { this.qqForm.bots.splice(index, 1); return }
       try { await this.$confirm("此操作只会从真寻本地配置中移除凭据，不会删除QQ开放平台中的机器人。", "移除机器人", { type: "warning", confirmButtonText: "确认移除" }) } catch (error) { return }
       bot.removing = true
       try {
@@ -332,7 +352,6 @@ export default {
         this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration")
         await handleApplyResult(this, response, {
           restartPrompt: "机器人已移除，需要重启后停止当前连接。",
-          restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/protocol",
         })
       } catch (error) { this.$message.error(apiErrorDetail(error, "机器人移除失败。")) }
@@ -342,8 +361,8 @@ export default {
       const index = this.qqForm.bots.indexOf(row.configured)
       if (index >= 0) return this.removeBot(row.configured, index)
     },
-    canProbeBot(bot) { return Boolean(bot.id && (bot.secret || bot.has_secret)) },
-    async probeBot(bot) { bot.probing = true; bot.probeResult = ""; bot.probeError = null; try { const response = await this.postRequest(`${this.$root.prefix}/protocol/qq/probe`, { id: bot.id, token: bot.token || null, secret: bot.secret || null }, { suppressErrorToast: true }); if (!response || !response.suc) throw new Error(response && response.info); bot.probeResult = response.data.username || response.data.bot_id || "凭据有效" } catch (error) { bot.probeError = apiErrorDiagnostic(error, "凭据验证失败。") } finally { bot.probing = false } },
+    canProbeBot(bot) { return Boolean(bot.id && bot.secret) },
+    async probeBot(bot) { bot.probing = true; bot.probeResult = ""; bot.probeError = null; try { const response = await this.postRequest(`${this.$root.prefix}/protocol/qq/probe`, { id: bot.id, secret: bot.secret || null }, { suppressErrorToast: true }); if (!response || !response.suc) throw new Error(response && response.info); bot.probeResult = response.data.username || response.data.bot_id || "凭据有效" } catch (error) { bot.probeError = apiErrorDiagnostic(error, "凭据验证失败。") } finally { bot.probing = false } },
     async saveConfiguration() {
       if (this.saving) return
       ++this.configurationSequence
@@ -354,10 +373,9 @@ export default {
         const response = await this.putRequest(`${this.$root.prefix}/protocol/configuration`, {
           expected_revision: this.configuration.revision,
           onebot_reverse_ws_host: this.onebotHost,
-          onebot_access_token: this.onebotToken || null,
-          clear_onebot_access_token: this.clearOnebotToken,
+          onebot_access_token: this.onebotToken,
           qq_enabled: this.qqForm.enabled,
-          qq_bots: this.qqForm.bots.map((bot) => ({ id: bot.id, token: bot.token || null, secret: bot.secret || null, use_websocket: bot.use_websocket, intent: bot.intent, shard: bot.shard })),
+          qq_bots: this.qqForm.bots.map((bot) => ({ id: bot.id, secret: bot.secret, use_websocket: bot.use_websocket, intent: bot.intent, shard: bot.shard })),
           qq_webhook_mode: this.qqForm.webhook_mode,
           qq_webhook_public_base_url: this.qqForm.public_base_url,
           qq_webhook_listen_host: this.qqForm.listen_host,
@@ -372,7 +390,6 @@ export default {
         this.updateDirtyState()
         await handleApplyResult(this, response, {
           restartPrompt: "协议配置已保存，需要重启后生效。",
-          restartRequest: () => this.postRequest(`${this.$root.prefix}/system/configuration/restart`, {}),
           returnRoute: "/protocol",
           recoveryMessage: "协议端将在新进程中使用更新后的配置。",
         })
@@ -408,7 +425,7 @@ export default {
 @media (max-width: 640px) { .candidate-row { align-items: stretch; flex-direction: column; } .copy-field { align-items: flex-start; } .copy-field > .el-button { flex-shrink: 0; } }
 .protocol-page { height: 100%; overflow-y: auto; padding: 4px 6px 84px; color: var(--text-color); }.page-heading, .section-heading, .bot-list-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }.page-heading { margin-bottom: 22px; }.page-heading h1 { margin: 4px 0 7px; font-size: 30px; }.page-heading p, .section-heading p, .bot-list-heading p { margin: 0; color: var(--text-color-secondary); line-height: 1.6; }.eyebrow { color: var(--primary-color) !important; font-size: 12px; font-weight: 700; letter-spacing: .14em; }
 .overall-status { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--border-color-light); border-radius: 20px; color: var(--text-color-secondary); }.overall-status span { width: 8px; height: 8px; border-radius: 50%; background: var(--text-color-placeholder); }.overall-status.online { color: var(--success-color); }.overall-status.online span { background: var(--success-color); }
-.platform-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }.platform-card { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 13px 15px; border: 1px solid var(--border-color-light); border-radius: 7px; color: var(--text-color); background: var(--bg-color-secondary); cursor: pointer; text-align: left; }.platform-card.active { border-color: var(--primary-color); box-shadow: 0 3px 12px rgba(255,107,149,.1); }.platform-card > span:nth-child(2) { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }.platform-card small { color: var(--text-color-secondary); }.platform-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 7px; color: #fff; font-weight: 700; background: #7564dd; }.platform-icon.qq_official { background: #0891b2; }
+.platform-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }.platform-card { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 13px 15px; border: 1px solid var(--border-color-light); border-radius: 7px; color: var(--text-color); background: var(--bg-color-secondary); cursor: pointer; text-align: left; }.platform-card.active { border-color: var(--primary-color); box-shadow: 0 3px 12px rgba(255,107,149,.1); }.platform-card > span:nth-child(2) { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }.platform-card small { color: var(--text-color-secondary); }.platform-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 7px; color: #fff; font-weight: 700; background: #7564dd; }.platform-icon.qq_official { background: #0891b2; }.platform-icon.telegram { background: #229ed9; }
 .configuration-section, .scan-panel, .connected-list, .manual-settings { padding: 22px; border: 1px solid var(--border-color-light); border-radius: 7px; background: var(--bg-color-secondary); }.scan-panel { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 20px; }.scan-icon { display: grid; width: 58px; height: 58px; place-items: center; border-radius: 7px; color: #087f96; background: rgba(8,145,178,.1); font-size: 28px; }.scan-copy h2 { margin: 8px 0 6px; }.scan-copy p { margin: 0; color: var(--text-color-secondary); line-height: 1.6; }.scan-copy ul { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 10px 0 0; padding-left: 18px; color: var(--text-color-secondary); font-size: 12px; }
 .connected-list { margin-top: 14px; }.connection-row { display: grid; grid-template-columns: auto minmax(140px, auto) 1fr auto auto; align-items: center; gap: 10px; padding: 13px 0; border-top: 1px solid var(--border-color-light); }.connection-identity { display: flex; min-width: 0; flex-direction: column; gap: 2px; }.connection-identity small, .connection-row > span:nth-child(3) { color: var(--text-color-secondary); }.connection-error { grid-column: 2 / -1; width: 100%; }
 .qq-mode-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--border-color-light); border-radius: 7px; background: var(--bg-color-secondary); }.adapter-controls { display: flex; align-items: center; gap: 10px; color: var(--text-color-secondary); font-size: 13px; }

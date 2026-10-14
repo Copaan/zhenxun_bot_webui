@@ -116,15 +116,6 @@ export default {
       }
       return map[this.type] || map.primary
     },
-    titleTextClass() {
-      const map = {
-        primary: "text-primary-color",
-        danger: "text-danger-color",
-        warning: "text-warning-color",
-        success: "text-success-color",
-      }
-      return map[this.type] || map.primary
-    },
     confirmBtnClass() {
       const map = {
         primary: "bg-primary-color hover:bg-primary-color-light",

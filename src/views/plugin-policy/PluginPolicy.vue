@@ -166,6 +166,7 @@
         <el-form-item label="策略名称"><el-input v-model="createForm.name" maxlength="80" /></el-form-item>
         <el-form-item label="说明"><el-input v-model="createForm.description" maxlength="255" /></el-form-item>
         <el-form-item><el-checkbox v-model="createForm.bindCurrent">创建后绑定当前账号</el-checkbox></el-form-item>
+        <p v-if="account" class="dialog-note">新策略以「{{ accountLabel(account) }}」已保存的禁用设置作为初始内容。</p>
       </el-form>
       <span slot="footer"><el-button @click="createDialogVisible = false">取消</el-button><el-button type="primary" :loading="dialogSaving" @click="createPolicy">创建策略</el-button></span>
     </el-dialog>
@@ -223,10 +224,10 @@
       <el-input v-model="transferText" type="textarea" :rows="12" :disabled="transferBusy" aria-label="策略 JSON" />
       <el-table :data="migrationPreview" max-height="280">
         <el-table-column prop="bot_id" label="Bot" />
-        <el-table-column prop="platform_scope" label="平台" />
+        <el-table-column prop="platform_scope" label="平台" :formatter="(row) => scopeName(row.platform_scope)" />
         <el-table-column prop="group_id" label="群 / 场景" />
         <el-table-column prop="channel_id" label="频道" />
-        <el-table-column prop="status" label="迁移状态" />
+        <el-table-column prop="status" label="迁移状态" :formatter="(row) => migrationStatusName(row.status)" />
         <el-table-column prop="reason" label="待核验原因" />
         <el-table-column label="操作"><template slot-scope="scope"><el-button v-if="scope.row.status === 'pending'" size="mini" :disabled="transferBusy" @click="migrateScope(scope.row)">保留旧规则并迁移</el-button></template></el-table-column>
       </el-table>
@@ -236,6 +237,7 @@
 </template>
 
 <script>
+import { apiErrorDetail } from "@/utils/api-error"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 
 const SOURCE = "plugin-policy"
@@ -275,6 +277,13 @@ export default {
   async mounted() { await this.loadAll() },
   beforeDestroy() { this.destroyed = true; this.selectionRequest++; this.listRequest++; this.impactRequest++; clearDirtyState(SOURCE) },
   methods: {
+    scopeName(scope) {
+      const names = { qq_client: "QQ 个人号", qq_api: "QQ 官方", telegram: "Telegram", private: "私聊" }
+      return names[scope] || scope
+    },
+    migrationStatusName(status) {
+      return { migrated: "已迁移", pending: "待迁移", needs_review: "需人工核验" }[status] || status
+    },
     async openTransfer() {
       if (this.dirty) return this.$message.warning("请先保存或放弃当前策略草稿。")
       this.transferVisible = true
@@ -299,22 +308,22 @@ export default {
         const document = JSON.parse(this.transferText)
         await this.$confirm("将按文档内的作用域提交策略，旧修订会被拒绝。确认导入？", "导入策略", { type: "warning" })
         this.transferBusy = true
-        const response = await this.postRequest(`${this.$root.prefix}/plugin-policy/import`, document)
+        const response = await this.postRequest(`${this.$root.prefix}/plugin-policy/import`, document, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info || "导入失败")
         this.$message.success("策略已提交。")
         await this.loadAll()
         await this.loadTransfer()
-      } catch (error) { if (error !== "cancel" && error !== "close") this.$message.error(error?.response?.status === 409 ? "策略已变化，导入草稿保留，请核对后重新读取。" : error.message || "导入失败") }
+      } catch (error) { if (error !== "cancel" && error !== "close") this.$message.error(error?.response?.status === 409 ? "策略已变化，导入草稿保留，请核对后重新读取。" : apiErrorDetail(error, "导入失败")) }
       finally { this.transferBusy = false }
     },
     async migrateScope(row) {
       this.transferBusy = true
       try {
-        const response = await this.postRequest(`${this.$root.prefix}/plugin-policy/migration/apply`, { ...row, expected_revision: row.revision })
+        const response = await this.postRequest(`${this.$root.prefix}/plugin-policy/migration/apply`, { ...row, expected_revision: row.revision }, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info || "迁移失败")
         await this.loadTransfer()
         await this.loadAll()
-      } catch (error) { this.$message.error(error?.response?.status === 409 ? "策略已变化，请重新读取迁移预览。" : error.message || "迁移失败") }
+      } catch (error) { this.$message.error(error?.response?.status === 409 ? "策略已变化，请重新读取迁移预览。" : apiErrorDetail(error, "迁移失败")) }
       finally { this.transferBusy = false }
     },
     navigate(query) {
@@ -325,7 +334,8 @@ export default {
     groupKey(group) { return JSON.stringify([group.platform_scope, group.group_id, group.channel_id || ""]) },
     groupUrl(group) { return `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/groups/${encodeURIComponent(group.group_id)}?platform_scope=${encodeURIComponent(group.platform_scope)}&channel_id=${encodeURIComponent(group.channel_id || "")}` },
     setDraft(record) { this.draft = { plugins: sorted(record.block_plugins), tasks: sorted(record.block_tasks) }; this.baseline = JSON.parse(JSON.stringify(this.draft)); this.selectedModules = []; this.detachPending = false; clearDirtyState(SOURCE) },
-    async confirmDiscard() { if (!this.dirty) return true; try { await this.$confirm("当前修改尚未保存，是否放弃？", "切换设置", { type: "warning" }); return true } catch (_) { return false } },
+    async confirmDiscard(title = "切换设置") { if (!this.dirty) return true; try { await this.$confirm("当前修改尚未保存，是否放弃？", title, { type: "warning" }); return true } catch (_) { return false } },
+    targetRevisions(botIds) { return Object.fromEntries(botIds.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])) },
     async selectScope(scope) {
       if (this.saving || scope === this.policyScope || !await this.confirmDiscard()) return
       this.selectionRequest++; this.policyScope = scope; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""; this.setDraft(this.account)
@@ -393,13 +403,12 @@ export default {
       if (!resp.suc) throw new Error(resp.info)
       this.selectedBotId = botId; this.account = resp.data; this.editingPolicy = null; this.detachPending = false
       this.policyScope = "account"; this.groups = []; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""
-      this.draft = { plugins: sorted(resp.data.block_plugins), tasks: sorted(resp.data.block_tasks) }
-      this.baseline = JSON.parse(JSON.stringify(this.draft)); this.selectedModules = []; clearDirtyState(SOURCE)
+      this.setDraft(resp.data)
       if (this.$route.query.bot_id !== botId) this.navigate({ bot_id: botId })
     },
     async selectAccount(botId) {
       if (this.saving || !botId || botId === this.account?.bot_id && !this.editingPolicy) return
-      if (this.dirty) { try { await this.$confirm("当前修改尚未保存，是否放弃？", "切换账号", { type: "warning" }) } catch (_) { return } }
+      if (!await this.confirmDiscard("切换账号")) return
       this.loading = true; try { await this.loadAccount(botId) } finally { this.loading = false }
     },
     accountLabel(item) { return `${item.nickname || item.runtime_bot_id} (${item.bot_id})` },
@@ -425,20 +434,20 @@ export default {
     },
     effectiveType(item) { if (!item.load_status || !item.global_status) return "info"; return ["可用", "当前启用"].includes(this.effectiveLabel(item)) ? "success" : "danger" },
     discardChanges() { if (this.saving) return; if (this.editingPolicy) { this.editingPolicy.name = this.editingPolicy.originalName; this.editingPolicy.description = this.editingPolicy.originalDescription } this.draft = JSON.parse(JSON.stringify(this.baseline)); this.detachPending = false },
-    async saveEditor() { if (this.saving || (this.policyScope === "group" && !this.groupAccount) || (this.policyScope === "private" && !this.privateAccount)) return; if (this.editingPolicy) return this.savePolicy(); this.saving = true; try { const target = this.groupAccount || this.privateAccount || this.account; const url = this.groupAccount ? this.groupUrl(target) : this.privateAccount ? `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/private` : `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`; const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true }); if (this.destroyed) return; if (resp.suc) { this.$message.success(resp.info); if (this.groupAccount) { this.groupAccount = resp.data; this.setDraft(resp.data) } else if (this.privateAccount) { this.privateAccount = resp.data; this.setDraft(resp.data) } else await this.loadAll() } } catch (error) { if (error?.response?.status === 409) this.$message.warning("配置已变化，草稿已保留，请重新加载后比较"); else this.$message.error("保存失败，草稿已保留") } finally { this.saving = false } },
-    openCreatePolicy() { if (!this.account) return; this.createForm = { name: "", description: "", bindCurrent: true }; this.createDialogVisible = true },
-    async createPolicy() { if (!this.createForm.name.trim()) return this.$message.warning("请输入策略名称"); this.dialogSaving = true; try { const bind = this.createForm.bindCurrent ? [this.account.bot_id] : []; const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/policies`, { name: this.createForm.name, description: this.createForm.description, source_bot_id: this.account.bot_id, source_revision: this.account.revision, block_plugins: [], block_tasks: [], bind_bot_ids: bind, expected_revisions: bind.length ? { [this.account.bot_id]: this.account.revision } : {} }); if (resp.suc) { this.$message.success(resp.info); this.createDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
-    async editPolicy(policy) { if (this.saving || !await this.confirmDiscard()) return; this.policyDialogVisible = false; this.editingPolicy = { ...policy, originalName: policy.name, originalDescription: policy.description }; this.draft = { plugins: sorted(policy.block_plugins), tasks: sorted(policy.block_tasks) }; this.baseline = JSON.parse(JSON.stringify(this.draft)); this.detachPending = false },
+    async saveEditor() { if (this.saving || (this.policyScope === "group" && !this.groupAccount) || (this.policyScope === "private" && !this.privateAccount)) return; if (this.editingPolicy) return this.savePolicy(); this.saving = true; try { const target = this.groupAccount || this.privateAccount || this.account; const url = this.groupAccount ? this.groupUrl(target) : this.privateAccount ? `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/private` : `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`; const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true }); if (this.destroyed) return; if (resp.suc) { this.$message.success(resp.info); if (this.groupAccount) { this.groupAccount = resp.data; this.setDraft(resp.data) } else if (this.privateAccount) { this.privateAccount = resp.data; this.setDraft(resp.data) } else await this.loadAll() } } catch (error) { if (error?.response?.status === 409) this.$message.warning("配置已变化，草稿已保留，请重新加载后比较"); else this.$message.error(apiErrorDetail(error, "保存失败，草稿已保留")) } finally { this.saving = false } },
+    async openCreatePolicy() { if (!this.account || this.saving || !await this.confirmDiscard()) return; this.createForm = { name: "", description: "", bindCurrent: true }; this.createDialogVisible = true },
+    async createPolicy() { if (!this.createForm.name.trim()) return this.$message.warning("请输入策略名称"); this.dialogSaving = true; try { const bind = this.createForm.bindCurrent ? [this.account.bot_id] : []; const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/policies`, { name: this.createForm.name, description: this.createForm.description, source_bot_id: this.account.bot_id, source_revision: this.account.revision, bind_bot_ids: bind, expected_revisions: bind.length ? { [this.account.bot_id]: this.account.revision } : {} }); if (resp.suc) { this.$message.success(resp.info); this.createDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
+    async editPolicy(policy) { if (this.saving || !await this.confirmDiscard()) return; this.policyDialogVisible = false; this.editingPolicy = { ...policy, originalName: policy.name, originalDescription: policy.description }; this.setDraft(policy) },
     async savePolicy() { this.saving = true; try { await this.$confirm(`此修改会同步影响 ${this.editingPolicy.bound_bot_ids.length} 个账号。`, "保存共享策略", { type: "warning" }); const resp = await this.putRequest(`${this.$root.prefix}/plugin-policy/policies/${this.editingPolicy.id}`, { expected_revision: this.editingPolicy.revision, name: this.editingPolicy.name, description: this.editingPolicy.description, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }); if (resp.suc) { this.$message.success(resp.info); await this.loadAll() } } catch (error) { if (error !== "cancel" && error?.response?.status === 409) this.$message.warning("共享策略已变化，草稿已保留") } finally { this.saving = false } },
-    async leavePolicyEditor() { if (this.dirty) { try { await this.$confirm("当前策略修改尚未保存，是否放弃？", "返回账号设置", { type: "warning" }) } catch (_) { return } } if (this.selectedBotId) await this.loadAccount(this.selectedBotId) },
+    async leavePolicyEditor() { if (await this.confirmDiscard("返回账号设置") && this.selectedBotId) await this.loadAccount(this.selectedBotId) },
     openBindDialog(policy) { this.bindingPolicy = policy; this.bindTargets = []; this.bindImpacts = []; this.policyDialogVisible = false; this.bindDialogVisible = true },
-    async bindPolicy() { this.dialogSaving = true; try { const revisions = Object.fromEntries(this.bindTargets.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])); const resp = await this.putRequest(`${this.$root.prefix}/plugin-policy/bindings`, { policy_id: this.bindingPolicy.id, bot_ids: this.bindTargets, expected_revisions: revisions }); if (resp.suc) { this.$message.success(resp.info); this.bindDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
+    async bindPolicy() { this.dialogSaving = true; try { const resp = await this.putRequest(`${this.$root.prefix}/plugin-policy/bindings`, { policy_id: this.bindingPolicy.id, bot_ids: this.bindTargets, expected_revisions: this.targetRevisions(this.bindTargets) }); if (resp.suc) { this.$message.success(resp.info); this.bindDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
     impactFor(target, source) { const plugins = new Set(target.block_plugins); const sourcePlugins = new Set(source.block_plugins); const tasks = new Set(target.block_tasks); const sourceTasks = new Set(source.block_tasks); return { bot_id: target.bot_id, name: target.nickname || target.runtime_bot_id || target.bot_id, pluginsDisabled: [...sourcePlugins].filter((x) => !plugins.has(x)).length, pluginsEnabled: [...plugins].filter((x) => !sourcePlugins.has(x)).length, tasksDisabled: [...sourceTasks].filter((x) => !tasks.has(x)).length, tasksEnabled: [...tasks].filter((x) => !sourceTasks.has(x)).length } },
     async loadImpacts(targets, source, field) { const request = ++this.impactRequest; try { const details = await Promise.all(targets.map(async (botId) => { const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(botId)}`); return resp.suc ? this.impactFor(resp.data, source) : null })); if (!this.destroyed && request === this.impactRequest) this[field] = details.filter(Boolean) } catch (_) { if (!this.destroyed && request === this.impactRequest) { this[field] = []; this.$message.error("覆盖差异读取失败，请重新选择目标账号。") } } },
     loadBindImpacts() { if (this.bindingPolicy) this.loadImpacts(this.bindTargets, this.bindingPolicy, "bindImpacts") },
     async openCopyDialog() { if (this.saving || this.policyScope !== "account" || !await this.confirmDiscard()) return; this.copyTargets = []; this.copyImpacts = []; this.copyDialogVisible = true },
     loadCopyImpacts() { if (this.account) this.loadImpacts(this.copyTargets, this.account, "copyImpacts") },
-    async copyAccount() { this.dialogSaving = true; try { const revisions = Object.fromEntries(this.copyTargets.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])); const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/copy`, { source_bot_id: this.account.bot_id, source_revision: this.account.revision, target_bot_ids: this.copyTargets, expected_revisions: revisions }); if (resp.suc) { this.$message.success(resp.info); this.copyDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
+    async copyAccount() { this.dialogSaving = true; try { const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/copy`, { source_bot_id: this.account.bot_id, source_revision: this.account.revision, target_bot_ids: this.copyTargets, expected_revisions: this.targetRevisions(this.copyTargets) }); if (resp.suc) { this.$message.success(resp.info); this.copyDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
     async deletePolicy(policy) {
       if (this.deletingPolicyId || this.deleteConfirming || this.saving || this.dialogSaving || policy.bound_bot_ids.length > 0) return
       this.deleteConfirming = true
@@ -453,10 +462,10 @@ export default {
       if (this.destroyed) return
       this.deletingPolicyId = policy.id
       try {
-        const resp = await this.deleteRequest(`${this.$root.prefix}/plugin-policy/policies/${policy.id}?expected_revision=${policy.revision}`)
+        const resp = await this.deleteRequest(`${this.$root.prefix}/plugin-policy/policies/${policy.id}?expected_revision=${policy.revision}`, {}, { suppressErrorToast: true })
         if (resp.suc) { this.$message.success(resp.info); if (!this.destroyed) await this.loadAll() }
       } catch (error) {
-        if (error !== "cancel") this.$message.error(error?.response?.status === 409 ? "策略已变化，请重新加载后再试" : "删除策略失败")
+        if (error !== "cancel") this.$message.error(error?.response?.status === 409 ? "策略已变化，请重新加载后再试" : apiErrorDetail(error, "删除策略失败"))
       } finally {
         this.deletingPolicyId = null
       }
@@ -488,4 +497,5 @@ export default {
 .policy-list { border-top: 1px solid var(--border-color-light); }.policy-list-row { min-height: 70px; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-color-light); }.policy-list-row > div { gap: 6px; flex: none; }.dialog-copy, .impact-line { color: var(--text-color-secondary); font-size: 13px; }.impact-line { margin-top: 14px; padding: 10px 12px; border-left: 3px solid var(--warning-color); background: var(--bg-color-hover); }.full-control { width: 100%; }.mobile-account-select { display: none; margin-bottom: 10px; }.mobile-account-select .el-select { width: 100%; }
 .impact-list { max-height: 190px; margin-top: 10px; overflow-y: auto; border-top: 1px solid var(--border-color-light); }.impact-list > div { display: flex; flex-direction: column; gap: 3px; padding: 8px 2px; border-bottom: 1px solid var(--border-color-light); font-size: 12px; }.impact-list span { color: var(--text-color-secondary); }
 @media (max-width: 820px) { .policy-page { padding: 12px; }.page-header { align-items: flex-start; flex-direction: column; }.header-actions { width: 100%; justify-content: flex-start; }.mobile-account-select { display: block; }.policy-workbench { min-height: 560px; grid-template-columns: 1fr; }.account-pane { display: none; }.editor-pane { padding: 16px 14px 74px; overflow-x: hidden; }.policy-meta-form { grid-template-columns: 1fr; }.feature-toolbar { align-items: stretch; flex-direction: column; }.feature-toolbar .el-input, .feature-toolbar .el-select { width: 100%; max-width: none; margin-left: 0; }.batch-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 8px 0; }.batch-toolbar span { width: calc(100% - 130px); }.feature-table { min-width: 0; }.feature-head { display: none; }.feature-row:not(.feature-head) { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px; padding: 10px 0; }.feature-row:not(.feature-head) > .el-checkbox { grid-row: 1 / 3; }.feature-row:not(.feature-head) > span:nth-child(3) { grid-column: 2; }.feature-row:not(.feature-head) > span:nth-child(4) { grid-column: 3; grid-row: 2; }.feature-row:not(.feature-head) > span:nth-child(5) { grid-column: 3; grid-row: 1; }.save-bar { margin-right: -14px; margin-left: -14px; padding-right: 14px; padding-left: 14px; }.save-bar span { display: none; }.policy-list-row { align-items: flex-start; flex-direction: column; padding: 12px 0; }.policy-list-row > div { flex-wrap: wrap; } }
+.dialog-note { margin: 0; color: var(--text-color-secondary); font-size: 12px; }
 </style>

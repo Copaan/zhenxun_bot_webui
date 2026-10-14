@@ -24,13 +24,13 @@ export async function handleApplyResult(vm, response, options = {}) {
     return true
   }
   if (mode === "restart_pending") {
-    if (!data.restart_available || !options.restartRequest) {
+    if (!data.restart_available) {
       vm.$message.warning(options.manualRestartMessage || "配置已保存，请手动重启真寻后生效。")
       return true
     }
     return confirmAndRestart(vm, {
       prompt: options.restartPrompt || "配置已保存，需要重启后生效。",
-      request: options.restartRequest,
+      request: options.restartRequest || (() => vm.postRequest(`${vm.$root.prefix}/system/configuration/restart`, {})),
       recovery: {
         policy: "preserve",
         returnRoute: options.returnRoute || vm.$route?.path || "/dashboard",

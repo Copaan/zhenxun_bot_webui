@@ -105,7 +105,7 @@
         <el-table-column prop="size" label="大小" min-width="120">
           <template slot-scope="scope">
             <span :style="{ color: 'var(--text-color)' }">{{
-              scope.row.is_file ? formatSize(scope.row.size) : "-"
+              scope.row.is_file ? formatBytes(scope.row.size) : "-"
             }}</span>
           </template>
         </el-table-column>
@@ -224,9 +224,9 @@
       :confirm-disabled="fileBusy"
     >
       <p>
-        确定要永久删除
+        确定要永久删除{{ itemToDelete.is_file ? "文件" : "文件夹" }}
         <span class="text-pink-600 font-bold">{{ itemToDelete.name }}</span>
-        吗？
+        吗？<template v-if="!itemToDelete.is_file">文件夹内的全部内容都会被删除。</template>
       </p>
     </NeonDialog>
 
@@ -256,6 +256,7 @@ import ImageView from "./ImageView.vue"
 import NeonDialog from "@/components/ui/NeonDialog.vue"
 import NeonInput from "@/components/ui/NeonInput.vue"
 import CuteButton from "@/components/ui/CuteButton.vue"
+import { formatBytes } from "@/utils/utils"
 export default {
   components: {
     SvgIcon,
@@ -317,6 +318,7 @@ export default {
     this.loadIcons()
   },
   methods: {
+    formatBytes,
     getTableHeight() {
       if (this.$isMobile()) {
         return "calc(100vh - 500px)"
@@ -324,32 +326,29 @@ export default {
         return "calc(100vh - 300px)"
       }
     },
-    async loadFiles(path = "") {
+    async loadFiles(path) {
       if (this.fileLoading) return
+      const target = path === undefined ? this.currentPath : path
       this.fileLoading = true
       const loading = this.getLoading(".file-table-container")
       try {
         const resp = await this.getRequest(
           `${this.$root.prefix}/system/get_dir_list`,
-          { path: path || this.currentPath }
+          { path: target }
         )
 
         if (resp.suc) {
           if (resp.warning) {
             this.$message.warning(resp.warning)
           } else {
-            this.$message.success(resp.info)
             this.fileList = resp.data.map((item) => ({
               ...item,
               full_path: item.parent
                 ? `${item.parent}/${item.name}`
                 : item.name,
             }))
-
-            if (path !== "") {
-              this.currentPath = path
-              this.updateBreadcrumb(path)
-            }
+            this.currentPath = target
+            this.updateBreadcrumb(target)
           }
         } else {
           this.$message.error(resp.info)
@@ -377,9 +376,7 @@ export default {
 
     clickPath(index) {
       if (index === 0) {
-        this.currentPath = ""
-        this.pathList = ["/"]
-        this.loadFiles()
+        this.loadFiles("")
       } else {
         const path = this.pathList.slice(1, index + 1).join("/")
         this.loadFiles(path)
@@ -441,7 +438,9 @@ export default {
           }
         )
 
-        if (resp.suc) {
+        if (resp.warning) {
+          this.$message.warning(resp.warning)
+        } else if (resp.suc) {
           this.$message.success(resp.info)
           this.loadFiles()
           this.showCreateDialog = false
@@ -456,9 +455,6 @@ export default {
       }
     },
 
-    cancelCreate() {
-      this.showCreateDialog = false
-    },
 
     showRenameDialog(item) {
       console.log("showRenameDialog", item)
@@ -490,7 +486,9 @@ export default {
           }
         )
 
-        if (resp.suc) {
+        if (resp.warning) {
+          this.$message.warning(resp.warning)
+        } else if (resp.suc) {
           this.$message.success(resp.info)
           this.loadFiles()
           this.showRenameDialogFlag = false
@@ -505,9 +503,6 @@ export default {
       }
     },
 
-    cancelRename() {
-      this.showRenameDialogFlag = false
-    },
 
     showDeleteDialog(item) {
       this.itemToDelete = item
@@ -528,7 +523,9 @@ export default {
           }
         )
 
-        if (resp.suc) {
+        if (resp.warning) {
+          this.$message.warning(resp.warning)
+        } else if (resp.suc) {
           this.$message.success(resp.info)
           this.loadFiles()
           this.showDeleteDialogFlag = false
@@ -543,9 +540,6 @@ export default {
       }
     },
 
-    cancelDelete() {
-      this.showDeleteDialogFlag = false
-    },
 
     loadIcons() {
       const req = require.context(
@@ -582,13 +576,6 @@ export default {
       return new Date(timestamp * 1000).toLocaleString()
     },
 
-    formatSize(bytes) {
-      if (bytes === 0) return "0 B"
-      const k = 1024
-      const sizes = ["B", "KB", "MB", "GB"]
-      const i = Math.floor(Math.log(bytes) / Math.log(k))
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
-    },
   },
 }
 </script>

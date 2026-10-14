@@ -1,10 +1,15 @@
 import { Message } from "element-ui"
-import { clearAuthToken, hasValidAuthToken } from "./auth-token"
+import { clearAuthToken, hasValidAuthToken, setAuthToken } from "./auth-token"
 
 let lastNotificationAt = 0
 let authenticationExpired = false
 window.addEventListener("zhenxun-auth-token-changed", () => { if (hasValidAuthToken()) authenticationExpired = false })
 export const isAuthenticationExpired = () => authenticationExpired
+
+export const establishSession = (token) => {
+  setAuthToken(token)
+  window.sessionStorage.setItem("isAuthenticated", true)
+}
 
 export const clearAuthenticationState = () => {
   clearAuthToken()

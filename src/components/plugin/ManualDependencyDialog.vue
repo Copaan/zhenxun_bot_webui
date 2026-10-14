@@ -32,6 +32,7 @@
 </template>
 
 <script>
+import { newOperationId, rememberPluginOperation } from '@/utils/plugin-operation'
 import { isBusinessNetworkFrozen, onBusinessNetworkChange } from '@/utils/restart-network'
 
 const storageKey = 'zhenxun_manual_dependency_operation'
@@ -96,10 +97,7 @@ export default {
     },
     async submit() {
       if (this.busy || this.pending || !this.preview || this.frozen || this.expired) return
-      if (!this.operationId) {
-        const bytes = new Uint8Array(16); window.crypto.getRandomValues(bytes)
-        this.operationId = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('')
-      }
+      if (!this.operationId) this.operationId = newOperationId()
       sessionStorage.setItem(storageKey, this.operationId)
       const epoch = ++this.epoch; this.busy = true; this.error = ''; this.operationMissing = false; this.result = { status: 'running', apply_mode: 'preparing' }
       try {
@@ -122,7 +120,7 @@ export default {
           finally { this.retryingPreview = false }
           return
         }
-        if (error?.info === 'dependency_operation_input_changed') { this.preview = null; this.error = '原操作已被接受，继续查询原任务；本次输入未重复提交。'; await this.refreshOperation(); return }
+        if (error?.info === 'plugin_operation_input_changed') { this.preview = null; this.error = '原操作已被接受，继续查询原任务；本次输入未重复提交。'; await this.refreshOperation(); return }
         if (error?.suc === false && ['dependency_preview_required', 'dependency_confirmation_required', 'environment_analysis_stale', 'dependency_transaction_pending', 'plugin_operation_in_progress', 'source_build_confirmation_required', 'dependency_repair_requires_launcher'].includes(error.info)) {
           this.result = { status: 'failed', apply_mode: 'failed' }; this.preview = null
           this.operationId = ''; sessionStorage.removeItem(storageKey); this.error = this.diagnostic(error); return
@@ -153,7 +151,7 @@ export default {
       if (this.frozen || this.expired || identity !== this.operationId) return
       const epoch = ++this.epoch; this.busy = true; this.error = ''
       try {
-        await this.request('delete', `/store/nonebot/transactions/pending/${identity}`)
+        await this.request('delete', `/store/transactions/pending/${identity}`)
         if (epoch !== this.epoch) return
         this.preview = null
         await this.refreshOperation()
@@ -161,7 +159,7 @@ export default {
       finally { if (epoch === this.epoch) this.busy = false }
     },
     showOperation() {
-      sessionStorage.setItem('zhenxun_plugin_operation', JSON.stringify({ operationId: this.operationId, action: this.action, pluginName: '手动依赖' }))
+      rememberPluginOperation(this.operationId, this.action, '手动依赖', 'nonebot')
       this.$store.commit('FINISH_PLUGIN_OPERATION', { status: 'pending', title: '依赖事务等待重启', message: '候选环境已准备，重启并通过启动验证后生效。', applyMode: 'restart_pending', restartAvailable: this.result.restart_available, accessUrls: this.result.access_urls || [], accessTargets: this.result.access_targets || [] })
     },
   },

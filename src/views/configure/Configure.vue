@@ -9,7 +9,7 @@
 <script>
 import SettingForm from "@/components/configure/SettingForm.vue"
 export default {
-  name: "MainCommand",
+  name: "SetupConfigure",
   components: { SettingForm },
 }
 </script>

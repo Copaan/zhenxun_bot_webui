@@ -233,7 +233,7 @@
                   class="shadow-lg overflow-hidden"
               >
                 <el-dropdown-item
-                  v-for="theme in themes"
+                  v-for="theme in appThemes"
                   :key="theme.value"
                   :command="theme.value"
                   class="flex items-center px-4 py-2 transition-all duration-200"
@@ -251,7 +251,7 @@
               </el-dropdown-menu>
             </el-dropdown>
 
-            <!-- 账号切换 -->
+            <!-- Bot 切换 -->
             <el-dropdown
               v-if="botState === 'ready'"
               placement="bottom-end"
@@ -260,7 +260,7 @@
               @command="selectBot"
             >
               <div class="bot-switch flex items-center cursor-pointer group">
-                <span class="mr-2" :style="{ color: 'var(--text-color)' }">切换账号</span>
+                <span class="mr-2" :style="{ color: 'var(--text-color)' }">切换 Bot</span>
                 <el-image
                   :src="botInfo.ava_url || logoUrl"
                   class="w-10 h-10 rounded-full object-cover border-2 shadow-sm"
@@ -287,7 +287,7 @@
                   </el-image>
                   <div class="bot-switch-copy">
                     <strong>{{ bot.nickname }}</strong>
-                    <span>{{ bot.runtime_bot_id }} · {{ bot.platform === "qq_official" ? "QQ_Official" : "OneBot V11" }}</span>
+                    <span>{{ bot.runtime_bot_id }} · {{ bot.platform === "qq_official" ? "QQ_Official" : bot.platform === "onebot_v11" ? "OneBot V11" : bot.adapter }}</span>
                   </div>
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -314,7 +314,7 @@
                 <span
                   class="font-medium mx-2 transition-all duration-300"
                   :style="{ color: 'var(--text-color)' }"
-                  >{{ botInfo.nickname || "用户" }}</span
+                  >管理员</span
                 >
                 <i
                   class="el-icon-arrow-down transition-transform duration-300"
@@ -376,7 +376,7 @@
               backgroundColor: 'var(--bg-color-secondary)',
               height: computedHeight + 'px',
             }"
-            :key="rvKey"
+            :key="routeRequiresBot ? botInfo.bot_key : undefined"
           />
         </main>
       </div>
@@ -446,10 +446,6 @@
           <div v-if="startupReport.load_plan.failed_plugins?.length" class="startup-failures">
             {{ startupReport.load_plan.failed_plugins.join("、") }}
           </div>
-          <div class="startup-report-row">
-            <span>扫描缓存命中 / 重新分析</span>
-            <strong>{{ startupReport.load_plan.cache_hits || 0 }} / {{ startupReport.load_plan.scanned_files || 0 }}</strong>
-          </div>
         </section>
         <section v-if="lifecycleStatus.component_count" class="startup-report-section">
           <h3>生命周期</h3>
@@ -466,10 +462,6 @@
             <strong>{{ lifecycleStatus.current_mutation.phase }}</strong>
           </div>
           <div class="startup-report-row">
-            <span>后台操作</span>
-            <strong>{{ lifecycleStatus.operation_registry?.active_count || 0 }}</strong>
-          </div>
-          <div class="startup-report-row">
             <span>插件代际</span>
             <strong>{{ lifecycleStatus.plugin_runtime?.generation || 0 }}</strong>
           </div>
@@ -483,71 +475,11 @@
           </p>
           <p v-for="reason in lifecycleStatus.plugin_runtime?.pending_restart_reasons || []" :key="reason" class="startup-failures">{{ runtimeReasonLabel(reason) }}</p>
           <NetworkStatus :status="lifecycleStatus.network || {}" />
-          <template v-if="lifecycleStatus.http_sidecar?.mode">
-            <div class="startup-report-row">
-              <span>HTTP兼容入口</span>
-              <strong>
-                {{ httpModeLabel(lifecycleStatus.http_sidecar.mode) }} /
-                {{ httpStateLabel(lifecycleStatus.http_sidecar.state) }}
-              </strong>
-            </div>
-            <div class="startup-report-row">
-              <span>边车 PID / 端口</span>
-              <strong>
-                {{ lifecycleStatus.http_sidecar.pid || "-" }} /
-                {{ lifecycleStatus.http_sidecar.port || "-" }}
-              </strong>
-            </div>
-            <div class="startup-report-row">
-              <span>边车连接 / 转发失败</span>
-              <strong>
-                {{ lifecycleStatus.http_sidecar.active_connections || 0 }} /
-                {{ lifecycleStatus.http_sidecar.proxy_failures || 0 }}
-              </strong>
-            </div>
-            <div class="startup-report-row">
-              <span>流式截断 / 排空耗时</span>
-              <strong>{{ lifecycleStatus.http_sidecar.stream_truncations || 0 }} / {{ lifecycleStatus.http_sidecar.drain_seconds ?? "-" }} s</strong>
-            </div>
-            <div v-if="lifecycleStatus.http_sidecar.drain_timed_out" class="startup-failures">HTTP边车排空超时</div>
-            <div v-if="lifecycleStatus.http_sidecar.last_error" class="startup-failures">
-              HTTP兼容入口：{{ httpErrorLabel(lifecycleStatus.http_sidecar.error_code || lifecycleStatus.http_sidecar.last_error) }}
-              ({{ lifecycleStatus.http_sidecar.stage || '-' }} / errno {{ lifecycleStatus.http_sidecar.errno ?? '-' }})
-            </div>
-            <div v-if="lifecycleStatus.http_sidecar.retry_in_seconds" class="startup-report-row">
-              <span>HTTP重试次数 / 间隔</span>
-              <strong>{{ lifecycleStatus.http_sidecar.retry_count || 0 }} / {{ lifecycleStatus.http_sidecar.retry_in_seconds }} s</strong>
-            </div>
-            <div v-if="lifecycleStatus.http_sidecar.first_error" class="startup-failures">
-              HTTP首次错误：{{ lifecycleStatus.http_sidecar.first_error }}；最近错误：{{ lifecycleStatus.http_sidecar.latest_error || '-' }}
-            </div>
-            <div v-if="lifecycleStatus.http_sidecar.total_retries" class="startup-report-row">
-              <span>HTTP累计重试</span>
-              <strong>{{ lifecycleStatus.http_sidecar.total_retries }}</strong>
-            </div>
-            <div v-if="lifecycleStatus.http_sidecar.mode === 'serve'" class="startup-failures">
-              HTTP兼容入口使用明文传输，请优先通过HTTPS管理真寻。
-            </div>
-          </template>
           <div v-if="lifecycleStatus.recovery_required?.length" class="startup-failures">
             需要恢复：{{ lifecycleStatus.recovery_required.join("、") }}
           </div>
           <div v-if="lifecycleUnhealthyComponents.length" class="startup-failures">
             {{ lifecycleUnhealthyComponents.join("、") }}
-          </div>
-        </section>
-        <section
-          v-if="lifecycleStatus.operation_registry?.operations?.length"
-          class="startup-report-section"
-        >
-          <h3>后台操作</h3>
-          <div
-            v-for="operation in lifecycleStatus.operation_registry.operations.slice(-8).reverse()"
-            :key="operation.operation_id"
-            class="startup-operation-row"
-          >
-            <span>{{ operation.kind }}</span>
-            <strong :class="`is-${operation.state}`">{{ operation.phase }}</strong>
           </div>
         </section>
         <section v-if="startupDegradedReasons.length" class="startup-report-section">
@@ -602,16 +534,15 @@
 <script>
 import AccountSecurityDialog from "@/components/account/AccountSecurityDialog"
 import NetworkStatus from "@/components/system/NetworkStatus"
-import { httpModeLabel, httpStateLabel, httpErrorLabel } from "@/utils/http-diagnostics"
 import BotRequiredState from "@/components/common/BotRequiredState"
 import PluginOperationDialog from "@/components/store/PluginOperationDialog"
 import logoUrl from "@/assets/image/logo.png"
 import EventBus from "@/utils/event-bus"
-import { clearCookie } from "@/utils/api"
+import { clearAuthenticationState } from "@/utils/auth-session"
 import { hasValidAuthToken } from "@/utils/auth-token"
 import { getHeaderHeight } from "@/utils/utils"
 import { hasDirtyState } from "@/utils/dirty-state"
-import { startRestartRecovery } from "@/utils/restart-recovery"
+import { requestRestartWithRecovery } from "@/utils/restart-flow"
 import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 import { pluginOperationResult } from "@/utils/plugin-operation"
 export default {
@@ -629,7 +560,6 @@ export default {
         component_count: 0,
         state_counts: {},
         components: [],
-        operation_registry: { operations: [], active_count: 0 },
       },
       startupDrawerVisible: false,
       startupReportLoading: false,
@@ -639,10 +569,8 @@ export default {
       isCollapsed: false,
       isMobile: false,
       collapsePreference: null,
-      rvKey: 0,
       menus: [],
       botList: [],
-      botInfo: {},
       botState: "loading",
       botInitialized: false,
       botRequestSequence: 0,
@@ -652,34 +580,7 @@ export default {
       restartStatusUnknown: false,
       restartRequestSequence: 0,
       pendingRestartReasons: [],
-      firstLoad: true,
       windowHeight: window.innerHeight,
-      themes: [
-        {
-          value: "pink",
-          label: "真寻可爱",
-          icon: "el-icon-present",
-          color: "#F59E0B",
-        },
-        {
-          value: "dark",
-          label: "暗黑模式",
-          icon: "el-icon-moon",
-          color: "#6B7280",
-        },
-        {
-          value: "light",
-          label: "亮色模式",
-          icon: "el-icon-sunny",
-          color: "#F59E0B",
-        },
-        {
-          value: "one-dark",
-          label: "One Dark",
-          icon: "el-icon-monitor",
-          color: "#7C3AED",
-        },
-      ],
     }
   },
   watch: {
@@ -698,6 +599,9 @@ export default {
   computed: {
     activeMenu() {
       return this.normalizeRoute(this.$route.path)
+    },
+    botInfo() {
+      return this.$store.state.botInfo || {}
     },
     routeRequiresBot() {
       return this.$route.matched.some((record) => record.meta.requiresBot)
@@ -827,14 +731,13 @@ export default {
     window.removeEventListener("zhenxun-restart-status-changed", this.loadRestartStatus)
     if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
   },
-  inject: ["setAppTheme"],
+  inject: ["setAppTheme", "appThemes"],
   methods: {
-    httpModeLabel, httpStateLabel, httpErrorLabel,
     runtimeApplyLabel(mode) {
       return { hot_reloaded: "插件已热重载", config_reloaded: "配置已应用", component_restarted: "组件已重建", webui_refresh: "页面资源已更新", restart_pending: "等待重启", restart_requested: "已请求重启", failed: "更新失败", rolled_back: "更新已回滚" }[mode] || "状态未确认"
     },
     runtimeReasonLabel(reason) {
-      const labels = { dependencies_changed: "依赖声明变化，需要重启", plugin_dependencies_changed: "插件依赖变化，需要重启", builtin_plugin: "内置插件变化，需要重启", library_plugin: "库插件变化，需要重启", orm_model_changed: "数据库模型变化，需要重启", orm_model_new_plugin: "新插件包含数据库模型，需要重启", external_patch: "插件修改了外部模块，需要重启", thread_or_process: "插件使用了线程或进程，需要重启", dependency_missing: "缺少第三方依赖，需要安装后重启", plugin_not_hot_reloadable: "此插件不能安全热重载", import_time_config_consumer_requires_restart: "配置消费者需要重启", component_not_restartable: "相关组件需要重启", plugin_classification_miss: "插件需在启动早期加载，重启后生效" }
+      const labels = { dependencies_changed: "依赖声明变化，需要重启", plugin_dependencies_changed: "插件依赖变化，需要重启", builtin_plugin: "内置插件变化，需要重启", library_plugin: "库插件变化，需要重启", orm_model_changed: "数据库模型变化，需要重启", orm_model_new_plugin: "新插件包含数据库模型，需要重启", external_patch: "插件修改了外部模块，需要重启", thread_or_process: "插件使用了线程或进程，需要重启", dependency_missing: "缺少第三方依赖，需要安装后重启", plugin_not_hot_reloadable: "此插件不能安全热重载", import_time_config_consumer_requires_restart: "配置消费者需要重启", component_rollback_failed: "组件重建失败，需要重启", plugin_classification_miss: "插件需在启动早期加载，重启后生效" }
       if (String(reason).startsWith("environment:")) return `环境配置 ${reason.slice(12)} 需要重启`
       return labels[reason] || `更新原因：${reason}`
     },
@@ -986,24 +889,25 @@ export default {
             return
           }
           this.$store.commit("START_PLUGIN_OPERATION", { ...context, title: "插件操作结果", message: "正在恢复上次操作结果。" })
-          this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult(entry, this.restartAvailable))
+          this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult(entry, this.restartAvailable, saved.store))
           return
         }
         const pendingResponse = await this.getRequest(`${this.$root.prefix}/store/transactions/pending`, {}, options)
         if (!current()) return
-        const transaction = [pendingResponse?.data?.zhenxun, pendingResponse?.data?.nonebot].find(item => item?.operations?.some(operation => operation.operation_id === saved.operationId))
+        const store = ['zhenxun', 'nonebot'].find(key => pendingResponse?.data?.[key]?.operations?.some(operation => operation.operation_id === saved.operationId))
+        const transaction = store && pendingResponse.data[store]
         if (transaction) {
           const mode = { pending_restart: 'restart_pending', migration_blocked: 'restart_pending', verification_pending: 'verifying', building: 'preparing', committed: 'applied', cleanup_pending: 'applied', recovery_required: 'recovery_required', failed: transaction.rollback_confirmed ? 'rolled_back' : 'failed' }[transaction.state]
           this.$store.commit("START_PLUGIN_OPERATION", { ...context, title: "插件事务等待重启", message: "插件修改已暂存，明确重启后统一应用。" })
           if (['verifying', 'preparing'].includes(mode)) this.schedulePluginOperation()
-          else this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({ status: transaction.state, result: { apply_mode: mode, transaction_state: transaction.state, cleanup_error: transaction.cleanup_error } }, this.restartAvailable))
+          else this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({ status: transaction.state, result: { apply_mode: mode, transaction_state: transaction.state, cleanup_error: transaction.cleanup_error } }, this.restartAvailable, store))
           return
         }
       } catch (error) {
         if (!current()) return
       }
       this.$store.commit("START_PLUGIN_OPERATION", context)
-      this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({}, this.restartAvailable))
+      this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({}, this.restartAvailable, saved.store))
       this.schedulePluginOperation()
     },
     handleSocketState(event) {
@@ -1040,17 +944,9 @@ export default {
       } catch (error) { return }
       this.restartLoading = true
       try {
-        const response = await this.postRequest(`${this.$root.prefix}/system/restart`, {})
-        if (!response || !response.suc) throw new Error(response && response.info)
-        startRestartRecovery({
-          bootId: response.data.boot_id,
-          launcherBootId: response.data.launcher_boot_id,
-          restartId: response.data.restart_id,
-          accessUrls: response.data.target_access_urls ?? response.data.access_urls,
-          accessTargets: response.data.target_access_targets ?? response.data.access_targets,
-          preferredUrl: response.data.preferred_url,
-          returnRoute: this.$route.fullPath,
-          message: "正在等待 launcher 启动新的真寻进程。",
+        await requestRestartWithRecovery(this, {
+          request: () => this.postRequest(`${this.$root.prefix}/system/restart`, {}),
+          recovery: { returnRoute: this.$route.fullPath, message: "正在等待 launcher 启动新的真寻进程。" },
         })
       } catch (error) {
         this.$message.error(error.response?.data?.detail || error.message || "重启请求失败。")
@@ -1113,8 +1009,7 @@ export default {
     },
     finishLogout(showMessage = false) {
       this.closeSockets()
-      clearCookie("tokenStr")
-      window.sessionStorage.removeItem("isAuthenticated")
+      clearAuthenticationState()
       window.sessionStorage.removeItem("zhenxunSetupToken")
       window.sessionStorage.removeItem("zhenxunSetupRestartReceipt")
       if (showMessage === true) {
@@ -1186,17 +1081,15 @@ export default {
       }
     },
     getMenus() {
-      this.getRequest(`${this.$root.prefix}/menu/get_menus`).then((resp) => {
+      this.getRequest(`${this.$root.prefix}/menu/get_menus`, {}, { suppressErrorToast: true }).then((resp) => {
         if (resp.suc) {
-          if (resp.warning) {
-            this.$message.warning(resp.warning)
-          } else {
-            this.menus = resp.data.menus
-            this.$store.commit("SET_BOT_TYPE", resp.data.bot_type)
-          }
+          this.menus = resp.data.menus
+          this.$store.commit("SET_BOT_TYPE", resp.data.bot_type)
         } else {
           this.$message.error(resp.info)
         }
+      }).catch(() => {
+        this.$message.error("菜单加载失败，请刷新页面重试")
       })
     },
     async getBotInfo(botKey) {
@@ -1212,7 +1105,6 @@ export default {
         if (resp.suc) {
           this.botList = resp.data || []
           if (!this.botList.length) {
-            this.botInfo = {}
             this.$store.commit("SET_BOT", null)
             this.botState = "empty"
           } else {
@@ -1227,18 +1119,10 @@ export default {
             this.botList.forEach((bot) => {
               this.$set(bot, "is_select", bot.bot_key === selected.bot_key)
             })
-            this.botInfo = selected
             this.$store.commit("SET_BOT", selected)
             this.botState = "ready"
           }
           this.$store.commit("CLEAR_CHAT")
-          if (["/command", "/manage"].includes(this.$route.path)) {
-            if (this.$route.path == "/command" && this.firstLoad) {
-              this.firstLoad = false
-            } else {
-              this.rvKey++
-            }
-          }
         } else {
           this.botState = this.botInfo.self_id ? "ready" : "error"
         }
@@ -1250,14 +1134,8 @@ export default {
       }
     },
     handleThemeChange(command) {
-      if (typeof this.setAppTheme === "function") {
-        this.setAppTheme(command)
-        EventBus.$emit("change-theme", {
-          timestamp: Date.now(),
-        })
-      } else {
-        console.error("setAppTheme function not provided/injected correctly.")
-      }
+      this.setAppTheme(command)
+      EventBus.$emit("change-theme", { timestamp: Date.now() })
     },
   },
 }

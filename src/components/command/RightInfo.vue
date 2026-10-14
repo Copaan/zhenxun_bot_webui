@@ -41,7 +41,7 @@
             class="text-base font-bold"
             :style="{ color: 'var(--primary-color)' }"
           >
-            {{ botInfo.connectTime }}
+            {{ connectTime }}
           </p>
         </div>
 
@@ -182,6 +182,7 @@ export default {
       activeGroupData: [],
       hotPluginData: [],
       botInfo: {},
+      connectTime: "",
       selectGroupType: "all",
       selectHotPluginType: "all",
       groupChart: null,
@@ -261,12 +262,8 @@ export default {
     },
     updateChartTheme() {
       if (this.destroyed || !this.groupChart || !this.hotPluginChart) return
-      const groupOption = getChartOption()
-      groupOption.series[0].data = this.activeGroupData
-      const pluginOption = getChartOption()
-      pluginOption.series[0].data = this.hotPluginData
-      this.groupChart.setOption(groupOption, true)
-      this.hotPluginChart.setOption(pluginOption, true)
+      this.groupChart.setOption(this.rankingOption("群组", this.activeGroupData), true)
+      this.hotPluginChart.setOption(this.rankingOption("插件", this.hotPluginData), true)
       this.groupChart?.resize()
       this.hotPluginChart?.resize()
     },
@@ -316,12 +313,13 @@ export default {
       // 数据刷新定时器
       this.groupCntInterval = setInterval(() => {
         this.getActiveGroupData(this.selectGroupType, true)
+        this.getHotPlugin(this.selectHotPluginType, true)
       }, 25000)
     },
 
     updateConnectTime() {
       const now = Math.floor(Date.now() / 1000)
-      this.botInfo.connectTime = this.formatSeconds(
+      this.connectTime = this.formatSeconds(
         now - this.botInfo.connect_time
       )
     },
@@ -344,97 +342,48 @@ export default {
       this.getActiveGroupData(type)
     },
 
-    getActiveGroupData(date_type, no_loading) {
-      if (!this.botInfo.self_id || this.destroyed) return
-      if (date_type == "all") {
-        date_type = null
-      }
-      if (!no_loading) {
-        var loading = this.getLoading(".active-group")
-      }
-
-      this.getRequest(`${this.$root.prefix}/main/get_active_group`, {
-        date_type: date_type,
-        bot_id: this.botInfo.self_id,
-      }).then((resp) => {
-        if (this.destroyed) {
-          loading?.close()
-          return
-        }
-        if (resp.suc) {
-          if (resp.warning) {
-            if (loading) {
-              this.$message.warning(resp.info)
-            }
-          } else {
-            const tmpOpt = getChartOption()
-            const group_list = []
-            const data = resp.data.map((e) => {
-              group_list.push(e.name)
-              return {
-                name: e.group_id,
-                value: e.chat_num,
-              }
-            })
-            tmpOpt.xAxis.name = "群组"
-            tmpOpt.xAxis.data = group_list
-            this.activeGroupData = data
-            tmpOpt.series[0].data = data
-            tmpOpt.series[0].series = "#a855f7"
-
-            this.groupChart?.setOption(tmpOpt, true)
-          }
-        } else {
-          if (loading) {
-            this.$message.error(resp.info)
-          }
-        }
-        if (loading) {
-          loading.close()
-        }
-      })
-    },
-
     clickHotPluginType(type) {
       this.selectHotPluginType = type
-      this.getHotPlugin(type === "all" ? null : type)
+      this.getHotPlugin(type)
     },
 
-    getHotPlugin(date_type) {
-      if (!this.botInfo.self_id || this.destroyed) return
-      const loading = this.getLoading(".hot-plugin")
-      this.getRequest(`${this.$root.prefix}/main/get_hot_plugin`, {
-        date_type: date_type,
-        bot_id: this.botInfo.self_id,
-      }).then((resp) => {
-        if (this.destroyed) {
-          loading.close()
-          return
-        }
-        if (resp.suc) {
-          if (resp.warning) {
-            this.$message.warning(resp.info)
-          } else {
-            const tmpOpt = getChartOption()
-            const hotPluginList = []
-            const data = resp.data.map((e) => {
-              hotPluginList.push(e.name)
-              return {
-                name: e.name,
-                value: e.count,
-              }
-            })
-            tmpOpt.xAxis.name = "插件"
-            tmpOpt.xAxis.data = hotPluginList
-            this.hotPluginData = data
-            tmpOpt.series[0].data = data
-            this.hotPluginChart?.setOption(tmpOpt, true)
-          }
-        } else {
-          this.$message.error(resp.info)
-        }
-        loading.close()
+    rankingOption(name, data) {
+      const option = getChartOption()
+      option.xAxis.name = name
+      option.xAxis.data = data.map((item) => item.name)
+      option.series[0].data = data
+      return option
+    },
+
+    loadRanking(url, dateType, selector, silent) {
+      if (!this.botInfo.self_id || this.destroyed) return Promise.resolve(null)
+      const loading = silent ? null : this.getLoading(selector)
+      return this.getRequest(`${this.$root.prefix}${url}`, {
+        date_type: dateType === "all" ? null : dateType,
+        bot_id: this.botInfo.storage_bot_id || this.botInfo.self_id,
       })
+        .then((resp) => {
+          if (this.destroyed) return null
+          if (resp.suc && !resp.warning) return resp.data
+          if (!silent) this.$message.warning(resp.warning || resp.info)
+          return null
+        })
+        .catch(() => null)
+        .finally(() => loading?.close())
+    },
+
+    async getActiveGroupData(dateType, silent) {
+      const data = await this.loadRanking("/main/get_active_group", dateType, ".active-group", silent)
+      if (!data) return
+      this.activeGroupData = data.map((e) => ({ name: e.name || e.group_id, value: e.chat_num }))
+      this.groupChart?.setOption(this.rankingOption("群组", this.activeGroupData), true)
+    },
+
+    async getHotPlugin(dateType, silent) {
+      const data = await this.loadRanking("/main/get_hot_plugin", dateType, ".hot-plugin", silent)
+      if (!data) return
+      this.hotPluginData = data.map((e) => ({ name: e.name, value: e.count }))
+      this.hotPluginChart?.setOption(this.rankingOption("插件", this.hotPluginData), true)
     },
   },
 }

@@ -104,3 +104,8 @@ export function validateField(value, schema = {}, root = schema, path = "", requ
   }
   return []
 }
+
+export function isSecretPath(path) {
+  const key = String(path || "").split(".").pop()
+  return /(password|passwd|secret|token|api_?keys?)$/i.test(key) || /^db_url$/i.test(key)
+}

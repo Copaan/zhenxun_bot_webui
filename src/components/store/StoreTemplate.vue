@@ -24,7 +24,7 @@
         <el-option label="默认排序" value="default" />
         <el-option label="名称" value="name" />
         <el-option label="作者" value="author" />
-        <el-option label="最近版本" value="version" />
+        <el-option label="版本号（从新到旧）" value="version" />
       </el-select>
       <el-select v-model="downloadSource" class="download-source" aria-label="下载源" :disabled="pluginOperation.active" @change="saveDownloadSource">
         <el-option label="自动：阿里优先，GitHub 后备" value="auto" />
@@ -75,8 +75,11 @@
             <template v-if="plugin.pending_action">
               <el-button type="text" @click="showDetails(plugin)">详情</el-button>
               <span class="action-spacer"></span>
-              <el-button size="small" icon="el-icon-time" disabled>等待重启</el-button>
-              <el-button size="small" type="text" class="danger-text" :loading="pendingActionKey === (plugin.store_key || plugin.id)" :disabled="Boolean(pendingActionKey) || pluginOperation.active" @click="cancelPending(plugin)">撤销</el-button>
+              <el-tooltip v-if="plugin.apply_mode === 'failed'" :content="(plugin.failure_reasons || []).map((item) => reasonText(item.code)).join('；') || '待重启事务已失败'" placement="top">
+                <el-button size="small" icon="el-icon-warning-outline" disabled>事务失败</el-button>
+              </el-tooltip>
+              <el-button v-else size="small" icon="el-icon-time" disabled>等待重启</el-button>
+              <el-button size="small" type="text" class="danger-text" :loading="pendingActionKey === (plugin.store_key || plugin.id)" :disabled="Boolean(pendingActionKey) || pluginOperation.active" @click="cancelPending(plugin)">{{ plugin.apply_mode === "failed" ? "清除记录" : "撤销" }}</el-button>
             </template>
             <template v-else>
               <el-button type="text" @click="showDetails(plugin)">详情</el-button>
@@ -125,6 +128,21 @@
 <script>
 import UpdateDialog from "@/components/plugin/UpdateDialog.vue"
 import { notifyRestartStatusChanged } from "@/utils/apply-result"
+import { newOperationId, reasonText, rememberPluginOperation, storeOperationResult } from "@/utils/plugin-operation"
+
+const compareVersion = (left, right) => {
+  const parts = (value) => String(value || "").split(/[.+-]/).map((item) => (/^\d+$/.test(item) ? Number(item) : item))
+  const a = parts(left)
+  const b = parts(right)
+  for (let index = 0; index < Math.max(a.length, b.length); index++) {
+    const x = a[index] ?? 0
+    const y = b[index] ?? 0
+    if (x === y) continue
+    if (typeof x === "number" && typeof y === "number") return x - y
+    return String(x).localeCompare(String(y))
+  }
+  return 0
+}
 
 export default {
   name: "StoreTemplate",
@@ -151,6 +169,7 @@ export default {
         return matchesSearch && matchesType && matchesStatus
       })
       if (this.sortBy === "default") return result
+      if (this.sortBy === "version") return [...result].sort((left, right) => compareVersion(right.version, left.version))
       return [...result].sort((left, right) => String(left[this.sortBy] || "").localeCompare(String(right[this.sortBy] || ""), "zh-CN"))
     },
     pagedPlugins() { const start = (this.page - 1) * this.pageSize; return this.filteredPlugins.slice(start, start + this.pageSize) },
@@ -159,6 +178,7 @@ export default {
   watch: { search() { this.page = 1 }, statusFilter() { this.page = 1 }, typeFilter() { this.page = 1 }, sortBy() { this.page = 1 } },
   mounted() { this.loadPlugins() },
   methods: {
+    reasonText,
     chatEnabled(plugin) {
       const normalize = value => String(value || "").split(":")[0].replace(/^zhenxun\.(?:builtin_plugins|plugins)\./, "")
       const identity = normalize(plugin.runtime_module || plugin.module)
@@ -189,11 +209,6 @@ export default {
       } finally { this.switchSaving = false }
     },
     saveDownloadSource() { try { localStorage.setItem("zhenxun_plugin_download_source", this.downloadSource) } catch (_) { /* Optional preference. */ } },
-    newOperationId() {
-      const bytes = new Uint8Array(16)
-      window.crypto.getRandomValues(bytes)
-      return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("")
-    },
     repositoryUrl(plugin) { return plugin.github_url || plugin.ali_url || "" },
     openRepository(plugin) { window.open(this.repositoryUrl(plugin), "_blank", "noopener,noreferrer") },
     showDetails(plugin) { this.selectedPlugin = plugin; this.drawerVisible = true },
@@ -218,28 +233,6 @@ export default {
         this.configModule = module
       } catch (error) {
         this.$message.error(error.message || "插件配置读取失败")
-      }
-    },
-    operationResult(response, fallback) {
-      const mode = response.data?.apply_mode
-      const reasons = response.data?.reason_codes || []
-      const restartReason = reasons.some((item) => String(item).includes("orm_model"))
-        ? "插件包含数据库模型，需要重启完成模型注册。"
-        : "插件文件操作已完成，需要重启后生效。"
-      const labels = {
-        hot_reloaded: "运行时已热加载，无需重启。",
-        restart_requested: "已请求受控重启，重启完成后生效。",
-        restart_pending: response.data?.restart_available ? restartReason : `${restartReason} 当前不是 launcher 托管模式，请手动重启。`,
-        failed: response.data?.rolled_back ? "运行时应用失败，插件文件已自动恢复。" : "运行时应用失败，请查看运行状态。",
-      }
-      const detail = labels[mode]
-      return {
-        status: mode === "failed" ? "error" : mode === "restart_pending" ? "pending" : "success",
-        message: [fallback, detail].filter(Boolean).join("\n"),
-        applyMode: mode,
-        restartAvailable: Boolean(response.data?.restart_available),
-        accessUrls: response.data?.access_urls || [],
-        accessTargets: response.data?.access_targets || [],
       }
     },
     async loadPlugins(refresh = false) {
@@ -269,10 +262,11 @@ export default {
       this.actionType = action
       const requestedSource = this.downloadSource
       const sourceLabel = { auto: "自动（阿里优先，GitHub 后备）", ali: "仅阿里", git: "仅 GitHub" }[requestedSource]
-      const confirmed = await this.$cuteConfirm({ title: `${labels[action]}插件`, message: `确认${labels[action]}“${plugin.name}”？${["install", "update"].includes(action) ? ` 下载源：${sourceLabel}` : ""}`, confirmButtonText: "确认", cancelButtonText: "取消", type: action === "remove" ? "warning" : "info" })
+      const overwrite = action === "update" && plugin.install_state === "locally_modified" ? " 本地修改将被覆盖。" : ""
+      const confirmed = await this.$confirmAction({ title: `${labels[action]}插件`, message: `确认${labels[action]}“${plugin.name}”？${["install", "update"].includes(action) ? ` 下载源：${sourceLabel}` : ""}${overwrite}`, confirmButtonText: "确认", cancelButtonText: "取消", type: action === "remove" || overwrite ? "warning" : "info" })
       if (!confirmed) { this.actionId = null; this.actionType = ""; return }
-      const operationId = this.newOperationId()
-      sessionStorage.setItem("zhenxun_plugin_operation", JSON.stringify({ operationId, action, pluginName: plugin.name }))
+      const operationId = newOperationId()
+      rememberPluginOperation(operationId, action, plugin.name, "zhenxun")
       const runningTitles = {
         install: "正在下载并安装插件",
         update: "正在下载并更新插件",
@@ -297,7 +291,7 @@ export default {
         if (["install", "update"].includes(action)) payload.download_source = requestedSource
         let response = await this.postRequest(`${this.$root.prefix}/store/${action}_plugin`, payload, { suppressErrorToast: true })
         if (!response.suc && ["install", "update"].includes(action) && String(response.info || "").includes("source_build_confirmation_required")) {
-          const sourceConfirmed = await this.$cuteConfirm({
+          const sourceConfirmed = await this.$confirmAction({
             title: "确认源码构建风险",
             message: "该插件缺少当前环境可用的 Wheel，依赖需要从源码构建。构建会在隔离依赖层中执行，并且必须重启验证；失败时会回滚。是否继续？",
             confirmButtonText: "接受风险并继续",
@@ -312,12 +306,13 @@ export default {
             })
             return
           }
-          payload.operation_id = this.newOperationId()
+          payload.operation_id = newOperationId()
+          rememberPluginOperation(payload.operation_id, action, plugin.name, "zhenxun")
           payload.confirm_source_build = true
           response = await this.postRequest(`${this.$root.prefix}/store/${action}_plugin`, payload, { suppressErrorToast: true })
         }
         if (!response.suc) throw new Error(response.info || `${labels[action]}失败`)
-        const operation = this.operationResult(response, response.info || `${labels[action]}已完成。`)
+        const operation = storeOperationResult(response, response.info || `${labels[action]}已完成。`, action)
         notifyRestartStatusChanged()
         this.$store.commit("FINISH_PLUGIN_OPERATION", {
           status: operation.status,
@@ -333,7 +328,7 @@ export default {
         this.$store.commit("FINISH_PLUGIN_OPERATION", {
           status: "error",
           title: `插件${labels[action]}失败`,
-          message: error.response?.data?.detail || error.message || `${labels[action]}失败`,
+          message: reasonText(error.response?.data?.info || error.response?.data?.detail || error.message || `${labels[action]}失败`),
         })
       }
       finally { this.actionId = null; this.actionType = "" }
@@ -343,15 +338,17 @@ export default {
       const actionKey = plugin.store_key || plugin.id
       if (this.pendingActionKey || this.actionId || this.pluginOperation.active) return
       this.pendingActionKey = actionKey
-      const confirmed = await this.$cuteConfirm({ title: "撤销待重启操作", message: `撤销“${plugin.name}”的待应用修改？`, confirmButtonText: "撤销", cancelButtonText: "保留", type: "warning" })
+      const failed = plugin.apply_mode === "failed"
+      const confirmed = await this.$confirmAction({ title: failed ? "清除失败事务" : "撤销待重启操作", message: failed ? `清除“${plugin.name}”所在的失败事务记录？清除后可以重新操作。` : `撤销“${plugin.name}”的待应用修改？`, confirmButtonText: failed ? "清除" : "撤销", cancelButtonText: "保留", type: "warning" })
       if (!confirmed) { this.pendingActionKey = ""; return }
       try {
         const response = await this.deleteRequest(`${this.$root.prefix}/store/transactions/pending/${encodeURIComponent(plugin.pending_operation_id)}`, {}, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info || "撤销失败")
+        this.$message.success(response.info || "待重启插件操作已撤销")
         notifyRestartStatusChanged()
         await this.loadPlugins(false)
       } catch (error) {
-        this.$message.error(error.response?.data?.detail || error.message || "撤销失败")
+        this.$message.error(reasonText(error.response?.data?.info || error.response?.data?.detail || error.message || "撤销失败"))
       } finally {
         this.pendingActionKey = ""
       }

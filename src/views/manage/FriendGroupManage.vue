@@ -1,6 +1,5 @@
 <template>
   <div
-    ref="main"
     class="friend-manager-container w-full flex flex-col"
     :style="{
       height: 'calc(100vh - 77px)',
@@ -9,7 +8,6 @@
   >
     <!-- 顶部导航栏 -->
     <div
-      ref="topHeader"
       class="header-bar h-14 flex-shrink-0 flex items-center justify-between px-4"
       :style="{
         background: 'var(--el-bg-color-overlay)',
@@ -155,7 +153,6 @@
 </template>
 
 <script>
-import { getHeaderHeight } from "@/utils/utils"
 import ChatWindow from "@/components/manage/ChatWindow.vue"
 import DataList from "@/components/manage/DataList.vue"
 import DetailInfo from "@/components/manage/DetailInfo.vue"
@@ -171,24 +168,13 @@ export default {
   },
   data() {
     return {
-      windowHeight: window.innerHeight,
       requestDialogVisible: false,
       showList: false,
       showDetail: false,
       requestCount: 0,
-      height: 0,
     }
   },
-  computed: {
-    computedHeight() {
-      if (!this.height) {
-        this.computeHeight()
-      }
-      return this.height
-    },
-  },
   mounted() {
-    window.addEventListener("resize", this.handleResize)
     if (this.$store.state.botInfo?.self_id) this.getRequestCount()
   },
   methods: {
@@ -207,25 +193,13 @@ export default {
         }
       )
     },
-    computeHeight() {
-      if (this.$refs.main) {
-        this.height =
-          this.$refs.main -
-          getHeaderHeight() -
-          this.$refs.topHeader.offsetHeight
-      } else {
-        this.height = window.innerHeight - getHeaderHeight() - 112
-      }
-    },
     openRequest() {
       this.requestDialogVisible = true
     },
     closeRequest() {
       this.requestDialogVisible = false
       this.$refs.dataList.refresh()
-    },
-    handleResize() {
-      this.windowHeight = window.innerHeight
+      this.getRequestCount()
     },
     startChat(data) {
       this.$refs.chatWindow.startChat(data)
@@ -249,9 +223,6 @@ export default {
       this.showDetail = !this.showDetail
       if (this.showDetail) this.showList = false
     },
-  },
-  beforeDestroy() {
-    window.removeEventListener("resize", this.handleResize)
   },
 }
 </script>

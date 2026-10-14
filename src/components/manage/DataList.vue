@@ -26,11 +26,7 @@
         }"
         @click="clickListType('private')"
       >
-        好友({{
-          botInfo.friend_count > 0
-            ? botInfo.friend_count - 1
-            : botInfo.friend_count
-        }})
+        好友({{ botInfo.friend_count }})
       </div>
       <div
         class="w-px mx-1 my-2"
@@ -143,7 +139,7 @@
         <!-- 更多操作菜单 -->
         <el-dropdown
           trigger="click"
-          @command="(c) => handleCommand(c, data.id)"
+          @command="(c) => handleCommand(c, data)"
           class="ml-2"
         >
           <div
@@ -176,7 +172,7 @@
               }"
             >
               <i class="el-icon-delete mr-2"></i>
-              {{ activeBtn == "private" ? "删除好友" : "退出群组" }}
+              {{ activeBtn == "private" ? "删除好友" : "退出群聊" }}
             </el-dropdown-item>
           </el-dropdown-menu>
         </el-dropdown>
@@ -196,7 +192,6 @@ export default {
       dataList: [],
       activeBtn: "private",
       botInfo: {},
-      requestCount: 0,
       detailId: null,
       listLoading: false,
       listSequence: 0,
@@ -261,17 +256,19 @@ export default {
         this.getGroupList()
       }
     },
-    handleCommand(command, id) {
+    handleCommand(command, data) {
       if (command == "delete") {
-        this.deleteHandle(id)
+        this.deleteHandle(data)
       }
     },
-    async deleteHandle(id) {
+    async deleteHandle(target) {
       if (this.deletingId) return
+      const id = target.id
+      const name = target.remark || target.nickname || target.group_name || id
       this.deletingId = id
       const listSequence = this.listSequence
       try {
-        await this.$confirm("确认删除/退出?", "提示", {
+        await this.$confirm(this.activeBtn == "private" ? `确认删除好友「${name}」（${id}）？` : `确认退出群聊「${name}」（${id}）？`, "提示", {
         confirmButtonText: "确认",
         cancelButtonText: "取消",
         showClose: true,
@@ -303,7 +300,7 @@ export default {
           this.$message.error(resp.info)
         }
       } catch (error) {
-        if (error !== "cancel") this.$message.error(error.response?.data?.detail || error.message || "删除或退出失败")
+        if (error !== "cancel") this.$message.error(error.response?.data?.detail || error.message || this.activeBtn == "private" ? "删除好友失败" : "退出群聊失败")
       } finally {
         this.deletingId = null
       }

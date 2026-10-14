@@ -9,16 +9,7 @@
           <el-radio-button label="postgres">PostgreSQL</el-radio-button>
         </el-radio-group>
       </el-form-item>
-      <el-form-item v-if="database.mode === 'sqlite'" label="数据库文件">
-        <el-input v-model.trim="database.path" />
-      </el-form-item>
-      <div v-else class="backup-fields">
-        <el-form-item label="主机"><el-input v-model.trim="database.host" /></el-form-item>
-        <el-form-item label="端口"><el-input-number v-model="database.port" :min="1" :max="65535" controls-position="right" /></el-form-item>
-        <el-form-item label="用户名"><el-input v-model="database.username" autocomplete="off" /></el-form-item>
-        <el-form-item label="密码"><el-input v-model="database.password" type="password" show-password autocomplete="new-password" /></el-form-item>
-        <el-form-item label="数据库名"><el-input v-model.trim="database.database" /></el-form-item>
-      </div>
+      <DatabaseFields v-model="database" />
     </el-form>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <p class="backup-warning">目标数据库必须为空。Bot 将重启，期间 WebUI 暂时无法访问。</p>
@@ -30,10 +21,13 @@
 </template>
 
 <script>
+import DatabaseFields from "@/components/system/DatabaseFields.vue"
+
 const initial = () => ({ mode: "sqlite", path: "data/db/zhenxun-new.db", host: "127.0.0.1", port: null, username: "", password: "", database: "" })
 
 export default {
   name: "BackupSwitchDialog",
+  components: { DatabaseFields },
   props: { visible: { type: Boolean, default: false } },
   data() { return { database: initial(), submitting: false, error: "" } },
   watch: {
@@ -61,7 +55,4 @@ export default {
 <style scoped>
 .backup-hint { color: #64717c; font-size: 13px; margin: 0 0 12px; line-height: 1.6; }
 .backup-warning { color: #a8662a; font-size: 13px; margin-top: 12px; }
-.backup-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
-.backup-fields .el-input-number { width: 100%; }
-@media (max-width: 600px) { .backup-fields { grid-template-columns: 1fr; } }
 </style>

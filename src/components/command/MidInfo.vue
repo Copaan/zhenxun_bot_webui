@@ -29,7 +29,7 @@
         :style="{ height: areaHeight - 80 + 'px' }"
       >
         <div
-          v-for="(item, key) in progressItems.chat"
+          v-for="(item, key) in progressItems"
           :key="key"
           class="flex flex-col p-1 justify-center"
         >
@@ -41,7 +41,7 @@
             >
               <el-progress
                 type="circle"
-                :percentage="getPercentageChat(key)"
+                :percentage="percentage(chCnt, key)"
                 :width="progressWidth"
                 :stroke-width="strokeWidth"
                 :color="item.color"
@@ -92,7 +92,7 @@
         :style="{ height: areaHeight - 80 + 'px' }"
       >
         <div
-          v-for="(item, key) in progressItems.chat"
+          v-for="(item, key) in progressItems"
           :key="key"
           class="flex flex-col p-1 justify-center"
         >
@@ -104,7 +104,7 @@
             >
               <el-progress
                 type="circle"
-                :percentage="getPercentageCall(key)"
+                :percentage="percentage(callCnt, key)"
                 :width="progressWidth"
                 :stroke-width="strokeWidth"
                 :color="item.color"
@@ -150,7 +150,40 @@
 <script>
 import EventBus from "@/utils/event-bus"
 import { getCssVar } from "@/utils/template"
-import { debounce, cloneDeep } from "lodash"
+import { debounce } from "lodash"
+
+const lineSeries = (name, data, yAxisIndex, color, areaFrom, areaTo) => ({
+  name,
+  type: "line",
+  smooth: true,
+  data,
+  yAxisIndex,
+  lineStyle: { width: 3, color: getCssVar(color) },
+  itemStyle: { color: getCssVar(color) },
+  areaStyle: {
+    color: {
+      type: "linear",
+      x: 0,
+      y: 0,
+      x2: 0,
+      y2: 1,
+      colorStops: [
+        { offset: 0, color: getCssVar(areaFrom) },
+        { offset: 1, color: getCssVar(areaTo) },
+      ],
+    },
+  },
+})
+
+const valueAxis = (name, position) => ({
+  type: "value",
+  name,
+  position,
+  axisLine: { lineStyle: { color: getCssVar("--border-color") } },
+  axisLabel: { color: getCssVar("--text-color-secondary"), fontSize: 12 },
+  splitLine: { lineStyle: { color: getCssVar("--border-color-light") } },
+})
+
 export default {
   name: "MidInfo",
   data() {
@@ -164,193 +197,18 @@ export default {
       chCnt: { num: 0, day: 0, week: 0, month: 0, year: 0 },
       callCnt: { num: 0, day: 0, week: 0, month: 0, year: 0 },
       progressItems: {
-        chat: {
-          num: { label: "总数", color: "#f97316" },
-          day: { label: "一日内", color: "#ec4899" },
-          week: { label: "一周内", color: "#a855f7" },
-          month: { label: "一月内", color: "#3b82f6" },
-          year: { label: "一年内", color: "#10b981" },
-        },
-        call: {
-          num: { label: "总数", color: "#f97316" },
-          day: { label: "一日内", color: "#ec4899" },
-          week: { label: "一周内", color: "#a855f7" },
-          month: { label: "一月内", color: "#3b82f6" },
-          year: { label: "一年内", color: "#10b981" },
-        },
+        num: { label: "总数", color: "#f97316" },
+        day: { label: "今日", color: "#ec4899" },
+        week: { label: "近7天", color: "#a855f7" },
+        month: { label: "近30天", color: "#3b82f6" },
+        year: { label: "近一年", color: "#10b981" },
       },
-      chatCntInterval: null,
-      callInterval: null,
+      countInterval: null,
       chart: null,
       destroyed: false,
       sidebarResizeHandler: null,
       themeChangeHandler: null,
       chatAndCallMonth: {},
-      chartOpt: {
-        title: {
-          text: "消息/调用统计",
-          textStyle: {
-            color: "var(--primary-color)",
-            fontSize: 16,
-          },
-        },
-        tooltip: {
-          trigger: "axis",
-          backgroundColor: "var(--el-bg-color-overlay)",
-          borderColor: "var(--border-color-light)",
-          borderWidth: 1,
-          textStyle: {
-            color: "var(--text-color)",
-            fontSize: 14,
-          },
-        },
-        legend: {
-          data: ["消息统计", "调用统计"],
-          textStyle: {
-            color: "var(--text-color)",
-            fontSize: 14,
-          },
-        },
-        grid: {
-          left: "3%",
-          right: "4%",
-          bottom: "3%",
-          containLabel: true,
-          backgroundColor: "var(--bg-color-secondary)",
-        },
-        toolbox: {
-          feature: {
-            saveAsImage: {
-              title: "保存图片",
-              pixelRatio: 2,
-            },
-          },
-          iconStyle: {
-            borderColor: "var(--primary-color-light)",
-          },
-        },
-        xAxis: {
-          type: "category",
-          boundaryGap: false,
-          data: [],
-          axisLine: {
-            lineStyle: {
-              color: "var(--border-color)",
-            },
-          },
-          axisLabel: {
-            color: "var(--text-color-secondary)",
-            fontSize: 12,
-          },
-        },
-        yAxis: [
-          {
-            type: "value",
-            name: "消息统计",
-            axisLine: {
-              lineStyle: {
-                color: "var(--border-color)",
-              },
-            },
-            axisLabel: {
-              color: "var(--text-color-secondary)",
-              fontSize: 12,
-            },
-            splitLine: {
-              lineStyle: {
-                color: "var(--border-color-light)",
-              },
-            },
-          },
-          {
-            type: "value",
-            name: "调用统计",
-            position: "right",
-            axisLine: {
-              lineStyle: {
-                color: "var(--border-color)",
-              },
-            },
-            axisLabel: {
-              color: "var(--text-color-secondary)",
-              fontSize: 12,
-            },
-            splitLine: {
-              lineStyle: {
-                color: "var(--border-color-light)",
-              },
-            },
-          },
-        ],
-        series: [
-          {
-            name: "消息统计",
-            type: "line",
-            smooth: true,
-            data: [],
-            yAxisIndex: 0,
-            lineStyle: {
-              width: 3,
-              color: "var(--primary-color)",
-            },
-            itemStyle: {
-              color: "var(--primary-color)",
-            },
-            areaStyle: {
-              color: {
-                type: "linear",
-                x: 0,
-                y: 0,
-                x2: 0,
-                y2: 1,
-                colorStops: [
-                  {
-                    offset: 0,
-                    color: "var(--primary-color-light)",
-                  },
-                  {
-                    offset: 1,
-                    color: "var(--el-fill-color-light)",
-                  },
-                ],
-              },
-            },
-          },
-          {
-            name: "调用统计",
-            type: "line",
-            smooth: true,
-            data: [],
-            yAxisIndex: 1,
-            lineStyle: {
-              width: 3,
-              color: "var(--primary-color-light)",
-            },
-            itemStyle: {
-              color: "var(--primary-color-light)",
-            },
-            areaStyle: {
-              color: {
-                type: "linear",
-                x: 0,
-                y: 0,
-                x2: 0,
-                y2: 1,
-                colorStops: [
-                  {
-                    offset: 0,
-                    color: "var(--el-fill-color)",
-                  },
-                  {
-                    offset: 1,
-                    color: "var(--el-fill-color-lighter)",
-                  },
-                ],
-              },
-            },
-          },
-        ],
-      },
     }
   },
   created() {
@@ -362,19 +220,14 @@ export default {
     const echarts = await this.$loadEcharts()
     if (this.destroyed || !this.$refs.chart) return
     this.chart = echarts.init(this.$refs.chart)
-    this.getChCount(this.botInfo.self_id)
-    this.getCallCount(this.botInfo.self_id)
-    this.getMonthChatAndCallCount(this.botInfo.self_id)
-    this.chatCntInterval = setInterval(() => {
-      this.getChCount(this.botInfo.self_id, true)
-    }, 30000)
-    this.callInterval = setInterval(() => {
-      this.getCallCount(this.botInfo.self_id, true)
-    }, 30000)
+    const statsBotId = this.botInfo.storage_bot_id || this.botInfo.self_id
+    this.loadCounts(statsBotId)
+    this.loadMonth(statsBotId)
+    this.countInterval = setInterval(() => this.loadCounts(statsBotId, true), 30000)
     this.handleResize()
-    this.updateChartTheme()
+    this.renderChart()
     this.sidebarResizeHandler = debounce(this.handleResize, 200)
-    this.themeChangeHandler = debounce(this.updateChartTheme, 200)
+    this.themeChangeHandler = debounce(this.renderChart, 200)
     EventBus.$on("sidebar-aside", this.sidebarResizeHandler)
     EventBus.$on("change-theme", this.themeChangeHandler)
   },
@@ -388,12 +241,7 @@ export default {
   },
   beforeDestroy() {
     this.destroyed = true
-    if (this.chatCntInterval) {
-      clearInterval(this.chatCntInterval)
-    }
-    if (this.callInterval) {
-      clearInterval(this.callInterval)
-    }
+    clearInterval(this.countInterval)
     window.removeEventListener("resize", this.handleResize)
     if (this.sidebarResizeHandler) {
       EventBus.$off("sidebar-aside", this.sidebarResizeHandler)
@@ -470,283 +318,74 @@ export default {
         this.chart.resize()
       })
     },
-    getPercentageChat(type) {
-      if (this.chCnt.num == 0) return 0
-      if (type == "num") return 100
-      if (this.chCnt[type] == this.chCnt.num) return 100
-      return (this.chCnt[type] / this.chCnt.num) * 100
+    percentage(counts, key) {
+      if (!counts.num) return 0
+      return Math.min(100, (counts[key] / counts.num) * 100)
     },
-    getPercentageCall(type) {
-      if (this.callCnt.num == 0) return 0
-      if (type == "num") return 100
-      if (this.callCnt[type] == this.callCnt.num) return 100
-      return (this.callCnt[type] / this.callCnt.num) * 100
-    },
-    getMonthChatAndCallCount(bot_id) {
-      if (!bot_id || this.destroyed) return
-      var loading = this.getLoading(".chart-area")
-      this.getRequest(
-        `${this.$root.prefix}/dashboard/get_chat_and_call_month`,
-        { bot_id: bot_id }
-      ).then((resp) => {
-        if (this.destroyed) {
-          loading.close()
-          return
+    async loadMonth(botId) {
+      const loading = this.getLoading(".chart-area")
+      try {
+        const resp = await this.getRequest(`${this.$root.prefix}/dashboard/get_chat_and_call_month`, { bot_id: botId }).catch(() => null)
+        if (this.destroyed || !resp) return
+        if (!resp.suc) this.$message.error(resp.info)
+        else if (resp.warning) this.$message.warning(resp.warning)
+        else {
+          this.chatAndCallMonth = resp.data
+          this.renderChart()
         }
-        if (resp.suc) {
-          if (resp.warning) {
-            this.$message.warning(resp.warning)
-          } else {
-            this.chatAndCallMonth = resp.data
-            const chartOpt = cloneDeep(this.chartOpt)
-            chartOpt.xAxis.data = this.chatAndCallMonth.date
-            chartOpt.series[0].data = this.chatAndCallMonth.chat
-            chartOpt.series[1].data = this.chatAndCallMonth.call
-            this.chart?.setOption(chartOpt)
-            this.chart?.resize()
-          }
-        } else {
-          this.$message.error(resp.info)
-        }
+      } finally {
         loading.close()
-      })
-    },
-    getChCount(bot_id, no_loading) {
-      if (bot_id) {
-        if (!no_loading) {
-          var loading = this.getLoading(".message-area")
-        }
-
-        this.getRequest(`${this.$root.prefix}/main/get_all_chat_count`, {
-          bot_id,
-        }).then((resp) => {
-          if (this.destroyed) {
-            loading?.close()
-            return
-          }
-          if (resp.suc) {
-            if (resp.warning) {
-              if (loading) {
-                this.$message.warning(resp.warning)
-              }
-            } else {
-              this.chCnt = resp.data
-            }
-          } else {
-            if (loading) {
-              this.$message.error(resp.info)
-            }
-          }
-          if (loading) {
-            loading.close()
-          }
-        })
       }
     },
-    getCallCount(bot_id, no_loading) {
-      if (bot_id) {
-        if (!no_loading) {
-          var loading = this.getLoading(".function-area")
+    async loadCounts(botId, silent = false) {
+      const loadings = silent ? [] : [this.getLoading(".message-area"), this.getLoading(".function-area")]
+      try {
+        const resp = await this.getRequest(`${this.$root.prefix}/main/get_chat_and_call_count`, { bot_id: botId }, { suppressErrorToast: silent }).catch(() => null)
+        if (this.destroyed || !resp) return
+        if (resp.suc && !resp.warning) {
+          this.chCnt = resp.data.chat
+          this.callCnt = resp.data.call
+        } else if (!silent) {
+          this.$message[resp.suc ? "warning" : "error"](resp.warning || resp.info)
         }
-
-        this.getRequest(`${this.$root.prefix}/main/get_all_call_count`, {
-          bot_id,
-        }).then((resp) => {
-          if (this.destroyed) {
-            loading?.close()
-            return
-          }
-          if (resp.suc) {
-            if (resp.warning) {
-              if (loading) {
-                this.$message.warning(resp.warning)
-              }
-            } else {
-              this.callCnt = resp.data
-            }
-          } else {
-            if (loading) {
-              this.$message.error(resp.info)
-            }
-          }
-          if (loading) {
-            loading.close()
-          }
-        })
+      } finally {
+        loadings.forEach((item) => item.close())
       }
     },
-    updateChartTheme() {
-      if (this.destroyed || !this.chart) return
-      const chartOpt = {
-        title: {
-          text: "消息/调用统计",
-          textStyle: {
-            color: getCssVar("--primary-color"),
-            fontSize: 16,
-          },
-        },
+    chartOption() {
+      const textStyle = { color: getCssVar("--text-color"), fontSize: 14 }
+      return {
+        title: { text: "消息/调用统计", textStyle: { color: getCssVar("--primary-color"), fontSize: 16 } },
         tooltip: {
           trigger: "axis",
           backgroundColor: getCssVar("--el-bg-color-overlay"),
           borderColor: getCssVar("--border-color-light"),
           borderWidth: 1,
-          textStyle: {
-            color: getCssVar("--text-color"),
-            fontSize: 14,
-          },
+          textStyle,
         },
-        legend: {
-          data: ["消息统计", "调用统计"],
-          textStyle: {
-            color: getCssVar("--text-color"),
-            fontSize: 14,
-          },
-        },
-        grid: {
-          left: "3%",
-          right: "4%",
-          bottom: "3%",
-          containLabel: true,
-          backgroundColor: getCssVar("--bg-color-secondary"),
-        },
+        legend: { data: ["消息统计", "调用统计"], textStyle },
+        grid: { left: "3%", right: "4%", bottom: "3%", containLabel: true, backgroundColor: getCssVar("--bg-color-secondary") },
         toolbox: {
-          feature: {
-            saveAsImage: {
-              title: "保存图片",
-              pixelRatio: 2,
-            },
-          },
-          iconStyle: {
-            borderColor: getCssVar("--primary-color-light"),
-          },
+          feature: { saveAsImage: { title: "保存图片", pixelRatio: 2 } },
+          iconStyle: { borderColor: getCssVar("--primary-color-light") },
         },
         xAxis: {
           type: "category",
           boundaryGap: false,
-          data: this.chartOpt?.xAxis?.data || [],
-          axisLine: {
-            lineStyle: {
-              color: getCssVar("--border-color"),
-            },
-          },
-          axisLabel: {
-            color: getCssVar("--text-color-secondary"),
-            fontSize: 12,
-          },
+          data: this.chatAndCallMonth.date || [],
+          axisLine: { lineStyle: { color: getCssVar("--border-color") } },
+          axisLabel: { color: getCssVar("--text-color-secondary"), fontSize: 12 },
         },
-        yAxis: [
-          {
-            type: "value",
-            name: "消息统计",
-            axisLine: {
-              lineStyle: {
-                color: getCssVar("--border-color"),
-              },
-            },
-            axisLabel: {
-              color: getCssVar("--text-color-secondary"),
-              fontSize: 12,
-            },
-            splitLine: {
-              lineStyle: {
-                color: getCssVar("--border-color-light"),
-              },
-            },
-          },
-          {
-            type: "value",
-            name: "调用统计",
-            position: "right",
-            axisLine: {
-              lineStyle: {
-                color: getCssVar("--border-color"),
-              },
-            },
-            axisLabel: {
-              color: getCssVar("--text-color-secondary"),
-              fontSize: 12,
-            },
-            splitLine: {
-              lineStyle: {
-                color: getCssVar("--border-color-light"),
-              },
-            },
-          },
-        ],
+        yAxis: [valueAxis("消息统计"), valueAxis("调用统计", "right")],
         series: [
-          {
-            name: "消息统计",
-            type: "line",
-            smooth: true,
-            data: this.chatAndCallMonth.chat,
-            yAxisIndex: 0,
-            lineStyle: {
-              width: 3,
-              color: getCssVar("--primary-color"),
-            },
-            itemStyle: {
-              color: getCssVar("--primary-color"),
-            },
-            areaStyle: {
-              color: {
-                type: "linear",
-                x: 0,
-                y: 0,
-                x2: 0,
-                y2: 1,
-                colorStops: [
-                  {
-                    offset: 0,
-                    color: getCssVar("--primary-color-light"),
-                  },
-                  {
-                    offset: 1,
-                    color: getCssVar("--el-fill-color-light"),
-                  },
-                ],
-              },
-            },
-          },
-          {
-            name: "调用统计",
-            type: "line",
-            smooth: true,
-            data: this.chatAndCallMonth.call,
-            yAxisIndex: 1,
-            lineStyle: {
-              width: 3,
-              color: getCssVar("--primary-color-light"),
-            },
-            itemStyle: {
-              color: getCssVar("--primary-color-light"),
-            },
-            areaStyle: {
-              color: {
-                type: "linear",
-                x: 0,
-                y: 0,
-                x2: 0,
-                y2: 1,
-                colorStops: [
-                  {
-                    offset: 0,
-                    color: getCssVar("--el-fill-color"),
-                  },
-                  {
-                    offset: 1,
-                    color: getCssVar("--el-fill-color-lighter"),
-                  },
-                ],
-              },
-            },
-          },
+          lineSeries("消息统计", this.chatAndCallMonth.chat || [], 0, "--primary-color", "--primary-color-light", "--el-fill-color-light"),
+          lineSeries("调用统计", this.chatAndCallMonth.call || [], 1, "--primary-color-light", "--el-fill-color", "--el-fill-color-lighter"),
         ],
       }
-
-      this.chartOpt = chartOpt
-      if (this.chart) {
-        this.chart.setOption(chartOpt, true)
-      }
+    },
+    renderChart() {
+      if (this.destroyed || !this.chart) return
+      this.chart.setOption(this.chartOption(), true)
       this.$nextTick(() => {
         if (!this.destroyed && this.chart) this.chart.resize()
       })

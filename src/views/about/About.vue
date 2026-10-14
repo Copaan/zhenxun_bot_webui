@@ -5,7 +5,7 @@
         <img :src="logoUrl" alt="真寻 Bot" />
         <div>
           <p class="eyebrow">ZHENXUN BOT</p>
-          <h1>关于与更新</h1>
+          <h1>更新与维护</h1>
           <p>查看运行版本，并从官方仓库检查本体、资源和 WebUI 更新。</p>
         </div>
       </div>
@@ -101,7 +101,7 @@
       </div>
     </section>
 
-    <BackupPanel />
+    <BackupPanel :launcher-managed="restartStatus.launcher_managed" />
 
 
     <section class="about-content">

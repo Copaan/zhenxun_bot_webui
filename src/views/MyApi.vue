@@ -154,7 +154,12 @@
             </div>
             <!-- 连接状态图标 -->
             <div class="flex items-center">
-              <div v-if="testing === 'loading'" class="w-5 h-5"></div>
+              <SvgIcon
+                v-if="testing === 'loading'"
+                icon-class="loading"
+                class="w-5 h-5 border-t-transparent animate-spin"
+                :style="{ color: 'var(--el-color-primary-light-3)' }"
+              />
               <SvgIcon
                 v-else-if="testing === true"
                 icon-class="success"
@@ -166,12 +171,6 @@
                 icon-class="error"
                 class="w-5 h-5"
                 :style="{ color: 'var(--el-color-danger)' }"
-              />
-              <SvgIcon
-                v-else
-                icon-class="loading"
-                class="w-5 h-5 border-t-transparent animate-spin"
-                :style="{ color: 'var(--el-color-primary-light-3)' }"
               />
             </div>
           </div>
@@ -227,12 +226,7 @@
                   >②</span
                 >
                 <span>
-                  如果生产环境部署的资源和真寻本体<ins
-                    class="no-underline font-bold"
-                    :style="{ color: 'var(--el-color-primary)' }"
-                    >不在</ins
-                  >
-                  同一个机器上，则输入你的服务器接口地址以及真寻的端口。最后记得修改防火墙设置哦
+                  保存后会清除当前登录状态并跳转到该地址的 WebUI；真寻不在本机时，请填写服务器地址和真寻端口，并放行防火墙端口
                 </span>
               </li>
             </ul>
@@ -288,7 +282,6 @@ export default {
       fromPage: "/",
       fromPageName: "",
       clickEffect: false,
-      clickEffectStyle: {},
       testing: null,
       lastTestTime: 0,
     }
@@ -322,7 +315,7 @@ export default {
         clearAuthenticationState()
         setBaseApiUrl(this.apiUrl)
         setPort(String(port))
-        this.$message.success("修改地址端口成功！")
+        this.$message.success("地址已保存，正在跳转")
         window.location.replace(`${this.apiUrl}:${port}/#/`)
       }, 600)
     },
@@ -374,13 +367,7 @@ export default {
 }
 </script>
 
-<style>
-/* 添加自定义字体 */
-
-.font-comic {
-  font-family: "Comic Neue", cursive;
-}
-
+<style scoped>
 /* 按钮点击动画 */
 button:active {
   transform: scale(0.98);

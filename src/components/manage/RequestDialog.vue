@@ -23,7 +23,7 @@
             type="danger"
             iconColor="var(--button-icon-color-primary)"
           >
-            清空好友
+            忽略全部好友请求
           </cute-button>
           <cute-button
             :loading="pendingAction === 'clear:GROUP'"
@@ -34,7 +34,7 @@
             type="danger"
             iconColor="var(--button-icon-color-primary)"
           >
-            清空群组
+            忽略全部群组请求
           </cute-button>
         </div>
       </div>
@@ -73,13 +73,12 @@
             <div class="user-info">
               <div class="avatar-wrapper">
                 <el-avatar :src="data.ava_url" class="moe-avatar"></el-avatar>
-                <div class="online-dot" v-if="data.isOnline"></div>
               </div>
               <div class="user-details">
-                <p class="username">{{ data.remark || data.nickname }}</p>
+                <p class="username">{{ data.nickname || data.id }}</p>
                 <p class="userid">ID: {{ data.id }}</p>
-                <p class="message" v-if="data.message">
-                  留言: {{ data.message }}
+                <p class="message" v-if="data.comment">
+                  留言: {{ data.comment }}
                 </p>
               </div>
             </div>
@@ -136,15 +135,15 @@
             <div class="user-info">
               <div class="avatar-wrapper">
                 <el-avatar :src="data.ava_url" class="moe-avatar"></el-avatar>
-                <div class="member-count">
-                  <i class="icon-user"></i> {{ data.memberCount }}
-                </div>
               </div>
               <div class="user-details">
-                <p class="username">{{ data.groupName }}</p>
-                <p class="userid">群ID: {{ data.id }}</p>
-                <p class="inviter" v-if="data.inviter">
-                  邀请人: {{ data.inviter }}
+                <p class="username">{{ data.group_name || `群聊 ${data.invite_group}` }}</p>
+                <p class="userid">群ID: {{ data.invite_group }}</p>
+                <p class="inviter">
+                  邀请人: {{ data.nickname ? `${data.nickname}（${data.id}）` : data.id }}
+                </p>
+                <p class="message" v-if="data.comment">
+                  附言: {{ data.comment }}
                 </p>
               </div>
             </div>
@@ -204,14 +203,10 @@ export default {
   data() {
     return {
       activeTab: "friend",
-      sizeMana: {
-        avatarSize: 50,
-      },
       dataObj: {
         friend: [],
         group: [],
       },
-      loading: { clearFriend: false, clearGroup: false },
       pendingAction: "",
       fetching: false,
       destroyed: false,
@@ -219,20 +214,8 @@ export default {
   },
   mounted() {
     this.fetchRequests()
-    window.addEventListener("resize", this.handleResize)
-    this.initFontSize()
   },
   methods: {
-    initFontSize() {
-      const isMobile = window.innerWidth < 768
-      this.sizeMana = {
-        titleText: isMobile ? 16 : 18,
-        nameText: isMobile ? 18 : 20,
-        tipText: isMobile ? 12 : 14,
-        imageSize: isMobile ? 36 : 40,
-      }
-    },
-
     actionKey(action, data) {
       return `${action}:${data.flag}`
     },
@@ -263,11 +246,11 @@ export default {
     async clearRequest(request_type) {
       if (this.pendingAction) return
       this.pendingAction = `confirm-clear:${request_type}`
-      const result = await this.$cuteConfirm({
-        title: "清空确认",
-        message: `确定要清空当前全部请求吗?`,
+      const result = await this.$confirmAction({
+        title: "全部忽略",
+        message: `确定要忽略全部未处理的${request_type === "FRIEND" ? "好友" : "群组"}请求吗？忽略后不会通知对方。`,
         cancelButtonText: "我再想想",
-        confirmButtonText: "全部清空",
+        confirmButtonText: "全部忽略",
       })
       if (result) {
         this.pendingAction = `clear:${request_type}`
@@ -284,7 +267,7 @@ export default {
               this.$message.error(resp.info)
             }
         } catch (error) {
-          this.$message.error(error.response?.data?.detail || error.message || "清空请求失败")
+          this.$message.error(error.response?.data?.detail || error.message || "忽略请求失败")
         } finally {
           loading.close()
           this.pendingAction = ""
@@ -292,7 +275,6 @@ export default {
         }
       } else {
         this.pendingAction = ""
-        console.log("取消清空")
       }
     },
     async handleRequestAction(action, data, endpoint, payload) {
@@ -335,7 +317,6 @@ export default {
 
   beforeDestroy() {
     this.destroyed = true
-    window.removeEventListener("resize", this.handleResize)
   },
 }
 </script>
@@ -539,29 +520,6 @@ export default {
   height: 50px;
   border: 2px solid var(--border-color);
   box-shadow: 0 3px 5px rgba(0, 0, 0, 0.05);
-}
-
-.online-dot {
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  width: 12px;
-  height: 12px;
-  background-color: var(--success-color);
-  border: 2px solid var(--el-color-white);
-  border-radius: 50%;
-}
-
-.member-count {
-  position: absolute;
-  bottom: -8px;
-  right: -8px;
-  background-color: var(--el-color-primary-light-5);
-  color: var(--el-color-white);
-  border-radius: 999px;
-  padding: 2px 4px;
-  font-size: 10px;
-  border: 2px solid var(--el-color-white);
 }
 
 .user-details {

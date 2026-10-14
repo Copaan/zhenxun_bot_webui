@@ -68,9 +68,9 @@
       </div>
       <div v-if="overview.bots.length" class="bot-list">
         <article v-for="bot in overview.bots" :key="bot.self_id" class="bot-row">
-          <span class="protocol-mark">{{ platformMark(bot.platform) }}</span>
-          <div><strong>{{ platformName(bot.platform) }}</strong><span>{{ bot.self_id }}</span></div>
-          <span class="bot-adapter">{{ bot.adapter }}</span>
+          <span class="protocol-mark">{{ platformMark(bot) }}</span>
+          <div><strong>{{ platformName(bot) }}</strong><span>{{ bot.self_id }}</span></div>
+          <span v-if="bot.adapter !== platformName(bot)" class="bot-adapter">{{ bot.adapter }}</span>
           <span class="muted">已连接 {{ formatDuration(bot.connect_seconds) }}</span>
         </article>
       </div>
@@ -246,10 +246,10 @@ export default {
     async loadMetrics() {
       try {
         const response = await this.getRequest(
-          `${this.$root.prefix}/dashboard/get_chat_and_call_count`, null,
+          `${this.$root.prefix}/main/get_chat_and_call_count`, null,
           { suppressErrorToast: true }
         )
-        if (response.suc && response.data) this.metrics = response.data
+        if (response.suc && response.data) this.metrics = { chat_day: response.data.chat.day, call_day: response.data.call.day }
       } catch (error) {
         console.debug("Dashboard metrics unavailable", error)
       }
@@ -270,13 +270,15 @@ export default {
     goTo(route) {
       if (this.$route.path !== route) this.$router.push(route)
     },
-    platformName(platform) {
-      if (platform === "onebot_v11") return "OneBot V11"
-      if (platform === "qq_official") return "QQ官方机器人"
-      return "其他协议"
+    platformName(bot) {
+      if (bot.platform === "onebot_v11") return "OneBot V11"
+      if (bot.platform === "qq_official") return "QQ官方机器人"
+      return bot.adapter || "其他协议"
     },
-    platformMark(platform) {
-      return platform === "qq_official" ? "官" : platform === "onebot_v11" ? "11" : "·"
+    platformMark(bot) {
+      if (bot.platform === "qq_official") return "官"
+      if (bot.platform === "onebot_v11") return "11"
+      return (bot.adapter || "·").charAt(0).toUpperCase()
     },
     formatDuration(seconds) {
       const value = Math.max(0, Number(seconds) || 0)

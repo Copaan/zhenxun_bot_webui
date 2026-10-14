@@ -22,37 +22,9 @@
 
       <!-- 编辑器工具栏 -->
       <div v-if="!readOnly" class="editor-toolbar">
-        <MyButton
-          text="保存"
-          type="primary"
-          :rounded="'lg'"
-          :shadow="'lg'"
-          :glow="true"
-          :width="100"
-          icon="save"
-          @click="handleSave"
-        />
-        <MyButton
-          text="清空"
-          type="danger"
-          :rounded="'lg'"
-          :shadow="'lg'"
-          :glow="true"
-          :width="100"
-          icon="clear4"
-          @click="handleClear"
-        />
-        <MyButton
-          v-if="language === 'json'"
-          text="格式化"
-          type="purple"
-          :rounded="'lg'"
-          :shadow="'lg'"
-          :glow="true"
-          :width="100"
-          icon="format"
-          @click="handleFormat"
-        />
+        <CuteButton type="primary" icon="save" @click="handleSave">保存</CuteButton>
+        <CuteButton type="danger" icon="clear4" @click="handleClear">清空</CuteButton>
+        <CuteButton v-if="language === 'json'" type="secondary" icon="format" @click="handleFormat">格式化</CuteButton>
       </div>
 
       <!-- 代码编辑器 -->
@@ -87,7 +59,7 @@
 <script>
 import CodeMirror from "./CodeMirror.vue"
 import SvgIcon from "../SvgIcon/SvgIcon.vue"
-import MyButton from "../ui/MyButton.vue"
+import CuteButton from "../ui/CuteButton.vue"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 import "codemirror/addon/scroll/simplescrollbars"
 import "codemirror/addon/scroll/simplescrollbars.css"
@@ -96,7 +68,7 @@ export default {
   name: "CodeEditor",
   components: {
     CodeMirror,
-    MyButton,
+    CuteButton,
     SvgIcon,
   },
   props: {
@@ -127,8 +99,6 @@ export default {
   },
   data() {
     return {
-      scrollbarStyle: "simple", // 使用简单滚动条
-      lineWrapping: true,
       editorContent: "",
       initialContent: "",
       dirtySource: `system-file-${this._uid}`,
@@ -210,19 +180,16 @@ export default {
         full_path: this.filePath,
         content: this.editorContent,
       }).then((resp) => {
-        if (resp.suc) {
+        if (resp.warning) {
+          this.$message.warning(resp.warning)
+        } else if (resp.suc) {
           this.initialContent = this.editorContent
           clearDirtyState(this.dirtySource)
-          if (resp.warning) {
-            this.$message.warning(resp.warning)
-          } else {
-            this.$message.success(resp.info)
-          }
+          this.$message.success(resp.info)
         } else {
           this.$message.error(resp.info)
         }
-        loading.close()
-      })
+      }).finally(() => loading.close())
     },
     loadFileContent() {
       const loading = this.getLoading(".kawaii-dialog")
@@ -278,7 +245,7 @@ export default {
     },
 
     async handleClear() {
-      const result = await this.$cuteConfirm({
+      const result = await this.$confirmAction({
         title: "清空确认",
         message: `确定要清空文件内容吗?`,
         cancelButtonText: "我再想想",

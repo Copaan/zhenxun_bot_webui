@@ -132,31 +132,7 @@
             </div>
 
             <el-form label-position="top" class="service-form">
-              <el-form-item v-if="database.mode === 'sqlite'" label="数据库文件">
-                <el-input v-model.trim="database.path" />
-                <p class="field-hint">路径必须位于真寻项目目录内。</p>
-              </el-form-item>
-              <div v-else-if="database.mode !== 'url'" class="field-grid database-fields">
-                <el-form-item label="地址">
-                  <el-input v-model.trim="database.host" />
-                </el-form-item>
-                <el-form-item label="端口">
-                  <el-input-number v-model="database.port" :min="1" :max="65535" controls-position="right" />
-                </el-form-item>
-                <el-form-item label="用户名">
-                  <el-input v-model="database.username" autocomplete="off" />
-                </el-form-item>
-                <el-form-item label="密码">
-                  <el-input v-model="database.password" type="password" show-password autocomplete="new-password" />
-                </el-form-item>
-                <el-form-item label="数据库名" class="database-name">
-                  <el-input v-model.trim="database.database" />
-                </el-form-item>
-              </div>
-              <el-form-item v-else label="高级连接 URL">
-                <el-input v-model="database.url" type="password" show-password autocomplete="off" />
-                <p class="field-hint">仅在已有完整 DSN 时使用，不会显示在检查结果中。</p>
-              </el-form-item>
+              <DatabaseFields v-model="database" path-hint="路径必须位于真寻项目目录内。" />
             </el-form>
             <probe-result :result="results.database" />
             <el-button
@@ -291,6 +267,7 @@ import { getAuthToken } from "@/utils/auth-token"
 import logoUrl from "@/assets/image/logo.png"
 import { buildRestartTargets } from "@/utils/restart-targets"
 import { confirmAndRestart } from "@/utils/restart-flow"
+import DatabaseFields from "@/components/system/DatabaseFields.vue"
 
 const RESTART_RECEIPT_KEY = "zhenxunSetupRestartReceipt"
 const RESTART_TARGETS_KEY = "zhenxunSetupRestartTargets"
@@ -321,7 +298,7 @@ const ProbeResult = {
 
 export default {
   name: "SettingForm",
-  components: { ProbeResult },
+  components: { DatabaseFields, ProbeResult },
   data() {
     return {
       logoUrl,
@@ -359,7 +336,7 @@ export default {
       ],
       networkOptions: [
         { value: "local", label: "仅本机", description: "只允许当前设备访问" },
-        { value: "lan", label: "局域网", description: "同一网络设备均可访问", recommended: true },
+        { value: "lan", label: "所有网络", description: "局域网与公网设备均可访问（公网需放通端口）", recommended: true },
         { value: "custom", label: "自定义", description: "绑定指定本机网卡地址" },
       ],
     }
@@ -646,8 +623,6 @@ h1 { font-family: "fzrzFont", sans-serif; font-size: 25px; letter-spacing: 0; }
 .step-intro { margin-bottom: 28px; }
 .field-grid { display: grid; gap: 0 18px; }
 .two-columns { grid-template-columns: 1fr 1fr; }
-.database-fields { grid-template-columns: 1.4fr 0.6fr; }
-.database-name { grid-column: 1 / -1; }
 .password-rules { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; padding: 0; list-style: none; color: #969aa4; font-size: 12px; }
 .password-rules li.met { color: #3b9d68; }
 .field-label { display: block; margin-bottom: 10px; font-weight: 700; }
@@ -703,8 +678,7 @@ h1 { font-family: "fzrzFont", sans-serif; font-size: 25px; letter-spacing: 0; }
   .mobile-progress span, .mobile-progress strong { display: block; margin-bottom: 7px; }
   .mobile-progress span { color: #a24a70; font-size: 11px; }
   .step-body { min-height: 0; padding: 24px 18px 16px; }
-  .two-columns, .database-fields, .redis-fields, .database-choices, .network-choices { grid-template-columns: 1fr; }
-  .database-name { grid-column: auto; }
+  .two-columns, .redis-fields, .database-choices, .network-choices { grid-template-columns: 1fr; }
   .choice-item { min-height: 70px; }
   .setup-actions { grid-template-columns: 1fr 1fr; padding: 12px 18px max(12px, env(safe-area-inset-bottom)); background: #fff; }
   .setup-actions span { display: none; }
