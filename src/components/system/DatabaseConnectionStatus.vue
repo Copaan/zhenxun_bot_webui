@@ -13,7 +13,6 @@
       <time v-if="entry.value.checked_at">{{ new Date(entry.value.checked_at * 1000).toLocaleTimeString() }}</time>
       <p v-if="entry.value.status === 'error'">{{ errorLabel(entry.value.code) }}</p>
     </div>
-    <p v-if="result && result.code" class="connection-error">{{ errorLabel(result.code) }}</p>
   </section>
 </template>
 
@@ -44,6 +43,5 @@ export default {
 .connection-target code { overflow-wrap: anywhere; }
 .connection-step { padding: 10px 0; border-top: 1px solid var(--border-color); }
 .connection-step p { flex-basis: 100%; margin: 2px 0; }
-.connection-error { color: var(--danger-color); }
 @media (max-width: 768px) { .connection-check { padding: 12px; } .connection-target { align-items: flex-start; flex-direction: column; } }
 </style>

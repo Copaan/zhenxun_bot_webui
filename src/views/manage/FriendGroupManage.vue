@@ -1,149 +1,46 @@
 <template>
   <div
-    class="friend-manager-container w-full flex flex-col"
-    :style="{
-      height: 'calc(100vh - 77px)',
-      background: 'var(--el-bg-color-page)',
-    }"
+    class="zx-page friend-manager-container w-full flex flex-col"
+    :class="`mobile-view-${mobileView}`"
   >
-    <!-- 顶部导航栏 -->
-    <div
-      class="header-bar h-14 flex-shrink-0 flex items-center justify-between px-4"
-      :style="{
-        background: 'var(--el-bg-color-overlay)',
-        borderBottom: '1px solid var(--el-border-color-light)',
-      }"
-    >
-      <!-- 标题 -->
-      <div class="flex items-center">
-        <h1
-          class="text-xl font-bold"
-          :style="{ color: 'var(--el-color-primary)' }"
-        >
-          好友与群组
-        </h1>
+    <header class="zx-page-header">
+      <div>
+        <h1>好友与群组</h1>
+        <p>查看好友与群组信息，处理加好友与入群请求，或直接以机器人身份发送消息。</p>
       </div>
-
-      <!-- 请求管理按钮 (桌面端) -->
-      <div class="hidden md:block">
-        <el-badge
-          :value="requestCount"
-          :hidden="requestCount <= 0"
-          class="request-badge"
-        >
-          <button
-            @click="openRequest"
-            class="request-button flex items-center px-4 py-2 transition-colors"
-            :style="{
-              background: 'var(--el-color-primary-light-9)',
-              color: 'var(--el-color-primary)',
-            }"
-          >
-            <svg-icon icon-class="request" class="w-5 h-5 mr-2" />
-            <span class="text-sm font-medium hidden md:block">请求管理</span>
-          </button>
+      <div class="zx-page-actions">
+        <el-badge :value="requestCount" :hidden="requestCount <= 0">
+          <el-button size="small" icon="el-icon-message" @click="openRequest">请求管理</el-button>
         </el-badge>
       </div>
-    </div>
+    </header>
 
     <!-- 主内容区 -->
-    <div class="flex-1 flex flex-col md:flex-row p-2 gap-2 min-h-0">
+    <div class="workspace flex-1 flex flex-col md:flex-row gap-3 min-h-0">
       <!-- 左侧好友列表 -->
-      <div
-        class="workspace-panel data-list-container w-full md:w-1/4 lg:w-1/5 transition-all duration-300 flex-shrink-0"
-        :style="{
-          background: 'var(--el-bg-color)',
-          border: '1px solid var(--el-border-color-light)',
-        }"
-        :class="{
-          'hidden md:block': !showList,
-          'absolute z-20 top-16 left-2 right-2 h-2/3 md:relative md:top-0 md:left-0 md:right-0 md:h-full':
-            showList,
-        }"
-      >
+      <div class="workspace-panel data-list-container w-full md:w-1/4 lg:w-1/5 flex-shrink-0">
         <DataList @getDetail="getDetail" class="h-full" ref="dataList" />
       </div>
 
       <!-- 中间聊天窗口 -->
-      <div
-        class="workspace-panel chat-container flex-1 flex-shrink-0"
-        :style="{
-          background: 'var(--el-bg-color)',
-          border: '1px solid var(--el-border-color-light)',
-        }"
-      >
-        <ChatWindow ref="chatWindow" class="h-full" />
+      <div class="workspace-panel chat-container flex-1 min-w-0">
+        <div class="mobile-bar">
+          <el-button type="text" icon="el-icon-arrow-left" @click="showMobileView('list')">返回列表</el-button>
+          <el-button size="mini" icon="el-icon-info" @click="showMobileView('detail')">详情</el-button>
+        </div>
+        <ChatWindow ref="chatWindow" class="panel-body" />
       </div>
 
       <!-- 右侧详情信息 -->
-      <div
-        class="workspace-panel detail-container w-full md:w-1/3 lg:w-1/4 transition-all duration-300 flex-shrink-0"
-        :style="{
-          background: 'var(--el-bg-color)',
-          border: '1px solid var(--el-border-color-light)',
-        }"
-        :class="{
-          'hidden md:block': !showDetail,
-          'absolute z-20 top-16 left-2 right-2 h-2/3 md:relative md:top-0 md:left-0 md:right-0 md:h-full':
-            showDetail,
-        }"
-      >
-        <DetailInfo ref="detailInfo" @startChat="startChat" class="h-full" />
+      <div class="workspace-panel detail-container w-full md:w-1/3 lg:w-1/4 flex-shrink-0">
+        <div class="mobile-bar">
+          <el-button type="text" icon="el-icon-arrow-left" @click="showMobileView('chat')">返回聊天</el-button>
+          <span class="mobile-bar-title">详细信息</span>
+        </div>
+        <DetailInfo ref="detailInfo" @startChat="startChat" class="panel-body" />
       </div>
     </div>
 
-    <!-- 移动端底部操作栏 -->
-    <div
-      class="md:hidden h-16 flex-shrink-0 flex items-center justify-around px-4"
-      :style="{
-        background: 'var(--el-bg-color-overlay)',
-        borderTop: '1px solid var(--el-border-color-light)',
-      }"
-    >
-      <!-- 列表切换按钮 -->
-      <button
-        @click="toggleList"
-        class="flex flex-col items-center justify-center p-2 rounded-lg transition-colors w-20"
-        :style="{
-          color: showList
-            ? 'var(--el-color-primary)'
-            : 'var(--el-text-color-secondary)',
-        }"
-      >
-        <span class="text-xs">好友列表</span>
-      </button>
-
-      <!-- 请求管理按钮 (移动端) -->
-      <div class="relative w-20">
-        <el-badge
-          :value="requestCount"
-          :hidden="requestCount <= 0"
-          class="absolute -top-4"
-          style="right: 25px"
-        >
-          <button
-            @click="openRequest"
-            class="flex flex-col items-center justify-center p-2 rounded-lg transition-colors w-full"
-            :style="{ color: 'var(--el-color-primary)' }"
-          >
-            <svg-icon icon-class="request" class="w-6 h-6 mb-1" />
-          </button>
-        </el-badge>
-      </div>
-
-      <!-- 详情切换按钮 -->
-      <button
-        @click="toggleDetail"
-        class="flex flex-col items-center justify-center p-2 rounded-lg transition-colors w-20"
-        :style="{
-          color: showDetail
-            ? 'var(--el-color-primary)'
-            : 'var(--el-text-color-secondary)',
-        }"
-      >
-        <span class="text-xs">详细信息</span>
-      </button>
-    </div>
     <RequestDialog
       v-if="requestDialogVisible"
       @close="closeRequest"
@@ -169,8 +66,7 @@ export default {
   data() {
     return {
       requestDialogVisible: false,
-      showList: false,
-      showDetail: false,
+      mobileView: "list",
       requestCount: 0,
     }
   },
@@ -203,8 +99,6 @@ export default {
     },
     startChat(data) {
       this.$refs.chatWindow.startChat(data)
-      this.showList = false
-      this.showDetail = false
     },
     getDetail(type, id) {
       if (type == "private") {
@@ -212,16 +106,18 @@ export default {
       } else {
         this.$refs.detailInfo.getGroup(id)
       }
-      this.showDetail = true
-      this.showList = false
+      this.showMobileView("chat")
     },
-    toggleList() {
-      this.showList = !this.showList
-      if (this.showList) this.showDetail = false
-    },
-    toggleDetail() {
-      this.showDetail = !this.showDetail
-      if (this.showDetail) this.showList = false
+    /**
+     * 切换移动端显示的面板，切换后刷新目标面板的滚动位置与图表尺寸
+     * @param {"list" | "chat" | "detail"} view 目标面板
+     */
+    showMobileView(view) {
+      this.mobileView = view
+      this.$nextTick(() => {
+        if (view == "chat") this.$refs.chatWindow.scrollToBottom()
+        if (view == "detail") this.$refs.detailInfo.resizeChart()
+      })
     },
   },
 }
@@ -230,97 +126,60 @@ export default {
 <style scoped>
 .friend-manager-container {
   position: relative;
-  background: var(--el-bg-color-page);
+  height: 100%;
+  overflow: hidden;
 }
 
-.workspace-panel,
-.request-button {
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
   border-radius: 8px;
+  background: var(--bg-color-secondary);
 }
 
-/* 滚动条美化 */
-.detail-container::-webkit-scrollbar {
-  width: 6px;
+.panel-body {
+  flex: 1;
+  min-height: 0;
 }
 
-.detail-container::-webkit-scrollbar-track {
-  background: var(--el-color-primary-light-9);
-  border-radius: 3px;
+.mobile-bar {
+  display: none;
 }
 
-.detail-container::-webkit-scrollbar-thumb {
-  background: var(--el-color-primary-light-5);
-  border-radius: 3px;
-}
-
-.detail-container::-webkit-scrollbar-thumb:hover {
-  background: var(--el-color-primary-light-3);
-}
-
-/* PC端样式 */
-@media (min-width: 769px) {
-  .friend-manager-container {
-    overflow: hidden;
-  }
-
-  .data-list-container,
-  .chat-container,
-  .detail-container {
-    overflow: hidden;
-  }
-
-  .data-list-container {
-    overflow-y: auto;
-  }
-
-  .chat-container {
-    overflow: hidden;
-  }
-
-  .detail-container {
-    overflow-y: auto;
-  }
-}
-
-/* 移动端样式优化 */
 @media (max-width: 768px) {
-  .friend-manager-container {
-    overflow: hidden;
+  .workspace-panel {
+    display: none;
+    flex: 1;
+    min-height: 0;
   }
 
-  .data-list-container,
-  .detail-container {
-    box-shadow: var(--el-box-shadow-light);
-    max-height: calc(100vh - 196px);
-    overflow-y: auto;
-  }
-
-  .chat-container {
-    height: calc(100vh - 196px);
-    overflow-y: auto;
+  .mobile-view-list .data-list-container,
+  .mobile-view-chat .chat-container,
+  .mobile-view-detail .detail-container {
     display: flex;
-    flex-direction: column;
-    position: absolute;
-    top: 70px;
-    left: 8px;
-    right: 8px;
-    bottom: 72px;
   }
 
-  .header-bar {
-    height: 56px;
-    padding: 0 16px;
+  .mobile-view-chat .zx-page-header,
+  .mobile-view-detail .zx-page-header {
+    display: none;
   }
 
-  /* 底部操作栏样式调整 */
-  .md\:hidden {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background-color: var(--el-bg-color-overlay);
-    backdrop-filter: blur(8px);
-    z-index: 40;
+  .mobile-bar {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .mobile-bar-title {
+    color: var(--text-color);
+    font-size: 15px;
+    font-weight: 600;
   }
 }
 </style>

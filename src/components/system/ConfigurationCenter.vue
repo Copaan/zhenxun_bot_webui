@@ -3,7 +3,7 @@
     <div class="configuration-toolbar">
       <div>
         <h2>运行配置</h2>
-        <p>多数配置保存后自动应用；每项的“生效方式”标明是否需要重启 Bot，监听、协议和未知自定义变量需要重启。</p>
+        <p>仅部分基础项（日志等级、昵称、超级用户、超时、代理等）保存后立即生效，其余需重启 Bot；每项的“生效方式”标明具体要求。</p>
       </div>
       <el-button icon="el-icon-refresh" :disabled="Boolean(saving)" @click="reloadSummary">重新加载</el-button>
     </div>
@@ -42,7 +42,7 @@
             <div v-else class="custom-env-empty">尚未配置自定义环境变量</div>
             <div v-if="customEnvError" class="inline-error">{{ customEnvError }}</div>
           </section>
-          <template #footer><div class="save-description"><strong>{{ envChangeCount ? envChangeCount + ' 项未保存修改' : '没有未保存的修改' }}</strong>{{ envSaveHint }}</div><el-button :disabled="!envChangeCount || Boolean(saving)" @click="resetEnvironment">撤销修改</el-button><el-button type="primary" :disabled="!envChangeCount || Boolean(customEnvError)" :loading="saving === 'env'" @click="saveEnv">保存环境配置</el-button></template>
+          <template #footer><div class="save-description"><strong>{{ envChangeCount ? envChangeCount + ' 项未保存修改' : '没有未保存的修改' }}</strong><span v-if="envSaveHint" class="save-hint">{{ envSaveHint }}</span></div><el-button :disabled="!envChangeCount || Boolean(saving)" @click="resetEnvironment">撤销修改</el-button><el-button type="primary" :disabled="!envChangeCount || Boolean(customEnvError)" :loading="saving === 'env'" @click="saveEnv">保存环境配置</el-button></template>
         </SettingsLayout>
       </el-tab-pane>
 
@@ -65,8 +65,6 @@
           <section v-if="currentGroup" class="current-config-group">
             <header class="group-heading"><div><h3>{{ currentGroup.name }}</h3><p>{{ currentGroup.module }} · {{ currentGroup.fields.length }} 个配置项</p></div><el-button size="small" @click="resetCurrentGroup">恢复本组默认值</el-button></header>
             <div class="config-form-scroll">
-              <el-alert v-if="currentGroup.readonly_reason" :title="currentGroup.readonly_reason" type="info" :closable="false" />
-              <pre v-if="currentGroup.readonly_reason">{{ JSON.stringify(currentGroup.raw_value, null, 2) }}</pre>
               <div v-for="field in currentManagedFields" :key="field.key">
                 <el-alert :title="field.help" type="info" :closable="false" />
                 <pre>{{ field.key }}: {{ JSON.stringify(field.file_value === undefined ? field.value : field.file_value, null, 2) }}</pre>
@@ -81,7 +79,7 @@
           </section>
           <section v-else-if="selectedOrphanGroup" class="current-config-group orphan-config-panel">
             <header class="group-heading"><div><h3>{{ selectedOrphanGroup.name }}</h3><p>{{ selectedOrphanGroup.module }} · 文件中保留的未注册配置</p></div><el-button size="small" icon="el-icon-document" @click="section = 'raw'">查看配置原文</el-button></header>
-            <el-alert title="该配置组当前没有对应的已加载插件。内容会保留，不会自动写入运行配置。" type="warning" :closable="false" show-icon />
+            <el-alert :title="selectedOrphanGroup.readonly_reason || '该配置组当前没有对应的已加载插件。内容会保留，不会自动写入运行配置。'" type="warning" :closable="false" show-icon />
             <pre class="orphan-preview">{{ JSON.stringify(selectedOrphanGroup.raw_value || Object.fromEntries(selectedOrphanGroup.fields.map(field => [field.key, field.value])), null, 2) }}</pre>
           </section>
           <section v-else class="current-config-empty"><i class="el-icon-setting"></i><p>选择一个配置组开始编辑</p></section>
@@ -153,8 +151,8 @@ export default {
         { key: "NICKNAME", label: "机器人昵称", placeholder: "[\"真寻\"]", help: "使用 dotenv 支持的列表格式。" },
         { key: "SELF_NICKNAME", label: "回复昵称", placeholder: "真寻", help: "回复消息中使用的自称。" },
         { key: "COMMAND_START", label: "命令前缀", placeholder: "[\"/\"]", help: "支持多个命令前缀。" },
-        { key: "COMMAND_SEP", label: "命令分隔符", placeholder: "[\".\"]", help: "修改后会重建受影响的命令注册。" },
-        { key: "ALCONNA_USE_COMMAND_START", label: "Alconna 使用命令前缀", type: "switch", help: "修改后会重载受影响的 Alconna 插件。" },
+        { key: "COMMAND_SEP", label: "命令分隔符", placeholder: "[\".\"]", help: "修改后需重启 Bot 生效。" },
+        { key: "ALCONNA_USE_COMMAND_START", label: "Alconna 使用命令前缀", type: "switch", help: "修改后需重启 Bot 生效。" },
         { key: "SUPERUSERS", label: "超级用户", placeholder: "[\"123456\"]", help: "平台用户 ID 列表。" },
         { key: "PLATFORM_SUPERUSERS", label: "平台超级用户", placeholder: "{\"qq\":[\"123456\"]}", help: "按平台分别配置超级用户。" },
         { key: "SESSION_EXPIRE_TIMEOUT", label: "会话超时", type: "number", unit: "秒", placeholder: "120", help: "交互会话的超时秒数。" },
@@ -179,9 +177,9 @@ export default {
     },
     envSaveHint() {
       const changedKeys = Object.keys(this.changedEnvFields())
-      const needsRestart = this.customOperations.length > 0 || changedKeys.some((key) => ["restart_required", "worker_restart"].includes(this.envDescriptors.find(field => field.key === key)?.apply_effect))
+      const needsRestart = this.customOperations.length > 0 || changedKeys.some((key) => this.envDescriptors.find(field => field.key === key)?.apply_effect !== "in_place")
       if (!changedKeys.length && !this.customOperations.length && !Object.keys(this.originalEnvFields).some(key => this.envFields[key] === undefined)) return ""
-      if (!needsRestart) return "保存后立即应用，必要时只重载相关插件或服务"
+      if (!needsRestart) return "保存后立即生效"
       return this.launcherManaged ? "包含启动期配置，保存后可确认重启" : "包含启动期配置，保存后需要手动重启"
     },
     rawReady() { return Boolean(this.rawLoaded[this.rawFile] && /^[a-f0-9]{64}$/.test(this.rawRevision)) },
@@ -216,7 +214,7 @@ export default {
     envFieldUi(field) { return { ...this.envMeta(field), description: this.envHelp(field) || (field.category === 'plugins' ? '插件未提供字段说明；请查看下方来源。' : '') } },
     envFieldSource(field) { return (field.source_labels || field.schema_sources || []).map(item => typeof item === 'string' ? item : item.source || item.model || item.module || '注册模型').join('、') || '本体配置' },
     envFieldChanged(key) { return JSON.stringify(this.envFields[key]) !== JSON.stringify(this.originalEnvFields[key]) },
-    envStateText(field) { return { restart_pending: '已保存，重启 Bot 后生效', applying: '正在应用', failed: '应用失败，请查看操作结果后重试', unknown: '运行状态未确认' }[field.apply_state] || '' },
+    envStateText(field) { return { restart_pending: '已保存，重启 Bot 后生效', applying: '正在应用', unknown: '运行状态未确认' }[field.apply_state] || '' },
     customMatches(item) { return !this.envSearch.trim() || `${item.key} 自定义变量`.toLowerCase().includes(this.envSearch.trim().toLowerCase()) },
     resetEnvironment() { this.envFields = JSON.parse(JSON.stringify(this.originalEnvFields)); this.customEnv = this.originalCustomEnv.map(item => ({ ...item })); this.envIssues = []; this.markEnvDirty() },
     focusEnvironmentIssue() { const issue = this.envIssues[0]; if (!issue) return; const group = this.envCategories.find(item => item.fields?.some(field => issue.path === field.key || String(issue.path).startsWith(field.key + '.'))); if (group) this.envCategory = group.key; this.envSearch = ''; this.focusIssue() },
@@ -252,12 +250,7 @@ export default {
     focusIssue() { this.$nextTick(() => { const error = this.$el.querySelector(".field-error"); if (error) error.scrollIntoView({ block: "center", behavior: "smooth" }) }) },
     effectMeta(effect) {
       return {
-        in_place: { label: "保存后自动应用", type: "success" },
-        worker_restart: { label: "保存后需重启 Bot", type: "warning" },
-        hot_reload: { label: "保存后自动应用", type: "success" },
-        plugin_reload: { label: "保存后自动重载相关插件", type: "success" },
-        service_reload: { label: "重建服务", type: "success" },
-        restart_required: { label: "保存后需重启 Bot", type: "warning" },
+        in_place: { label: "保存后立即生效", type: "success" },
       }[effect] || { label: "保存后需重启 Bot", type: "warning" }
     },
     normalizeCustomEnv(items) {
@@ -455,12 +448,12 @@ export default {
 .action-bar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color-secondary); }.config-action-bar { position: static; flex: none; margin-top: 8px; }.action-bar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.raw-switch { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 10px; }.raw-editor ::v-deep textarea { font-family: Consolas, "Courier New", monospace; font-size: 13px; line-height: 1.55; }.inline-error { margin-top: 8px; color: var(--el-color-danger); }
 .validation-issues { margin: 10px 0 0; padding: 10px 14px 10px 34px; border: 1px solid rgba(224,82,96,.35); border-radius: 6px; color: var(--danger-color); background: rgba(224,82,96,.06); }.validation-issues li { margin: 4px 0; line-height: 1.55; }.validation-issues code { margin-right: 8px; }
 .custom-env-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }.custom-env-list { display: flex; flex-direction: column; gap: 10px; padding-bottom: 16px; }.custom-env-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(220px, 1.4fr) auto auto auto; align-items: center; gap: 9px; }.custom-env-row.deleted { opacity: .58; }.custom-env-empty { padding: 8px 0 20px; color: var(--text-color-secondary); text-align: center; }
-@media (max-width: 760px) { .configuration-center { padding:12px; } .configuration-toolbar, .custom-env-heading { align-items: flex-start; flex-direction: column; }.custom-env-row { grid-template-columns: 1fr auto; }.custom-env-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }.plugin-config-workbench { grid-template-columns: 1fr; }.config-groups { display: grid; max-height: 240px; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--border-color); }.config-groups .el-input { grid-column: 1 / -1; }.current-config-group { padding: 14px; }.group-heading { align-items: flex-start; flex-direction: column; }.action-bar { flex-wrap: wrap; }.action-bar span { width: 100%; }.raw-switch { gap: 10px; } }
+@media (max-width: 760px) { .configuration-toolbar, .custom-env-heading { align-items: flex-start; flex-direction: column; }.custom-env-row { grid-template-columns: 1fr auto; }.custom-env-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }.plugin-config-workbench { grid-template-columns: 1fr; }.config-groups { display: grid; max-height: 240px; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--border-color); }.config-groups .el-input { grid-column: 1 / -1; }.current-config-group { padding: 14px; }.group-heading { align-items: flex-start; flex-direction: column; }.raw-switch { gap: 10px; } }
 </style>
 
 <style scoped>
 .network-action-bar { position: static; }
-@media (max-width: 760px) { .configuration-center { padding:12px; }
+@media (max-width: 760px) {
   .plugin-config-workbench { height: auto; }
   .config-form-scroll { max-height: 70vh; }
 }
@@ -506,4 +499,15 @@ export default {
 
 <style scoped>
 .setting-status-note.neutral { color:var(--text-color-secondary); }.environment-owner { font-size:13px; margin:20px 0 0; overflow-wrap:anywhere; color:var(--text-color-secondary); }
+@media (max-width: 767px) {
+  .configuration-center { padding:0; border-radius:0; background:transparent; }
+  .configuration-center ::v-deep .settings-workspace { padding:12px; }
+  .configuration-center ::v-deep .settings-content { padding:0 0 12px; }
+  .configuration-center ::v-deep .settings-save { flex-wrap:nowrap; gap:6px; margin-top:16px; padding:8px 10px; border-radius:10px; }
+  .configuration-center ::v-deep .settings-save .save-description { flex:1 1 auto; min-width:0; font-size:11px; line-height:1.4; }
+  .configuration-center ::v-deep .settings-save .save-description > * { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .configuration-center ::v-deep .settings-save .el-button, .action-bar .el-button { flex:none; margin-left:0; padding:8px 12px; font-size:12px; }
+  .action-bar { flex-wrap:nowrap; gap:6px; padding:8px 0; }
+  .action-bar span { min-width:0; flex:1 1 auto; font-size:11px; line-height:1.4; }
+}
 </style>

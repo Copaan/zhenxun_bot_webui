@@ -300,7 +300,7 @@ export default {
           this.$message.error(resp.info)
         }
       } catch (error) {
-        if (error !== "cancel") this.$message.error(error.response?.data?.detail || error.message || this.activeBtn == "private" ? "删除好友失败" : "退出群聊失败")
+        if (error !== "cancel") this.$message.error(error.response?.data?.detail || error.message || (this.activeBtn == "private" ? "删除好友失败" : "退出群聊失败"))
       } finally {
         this.deletingId = null
       }
@@ -400,10 +400,6 @@ export default {
 @media (max-width: 768px) {
   .fg-list {
     padding: 12px;
-  }
-
-  .data-list-container {
-    height: calc(100% - 70px);
   }
 }
 

@@ -47,6 +47,104 @@
         </div>
       </div>
 
+      <div v-else-if="!mode" class="mode-layout">
+        <div class="step-intro">
+          <span class="section-number">开始配置</span>
+          <h2>选择部署方式</h2>
+          <p>从备份恢复会沿用备份中的管理员账号、配置、插件与数据。</p>
+        </div>
+        <div class="choice-grid mode-choices">
+          <button type="button" class="choice-item" @click="mode = 'fresh'">
+            <strong>全新配置</strong>
+            <span>设置管理员、数据库、缓存与监听地址</span>
+          </button>
+          <button type="button" class="choice-item" @click="openRestore">
+            <strong>从备份恢复</strong>
+            <span>上传其他真寻导出的备份包，迁移到本机</span>
+          </button>
+        </div>
+      </div>
+
+      <template v-else-if="mode === 'restore'">
+        <div class="step-body">
+          <section class="step-section">
+            <div class="step-intro">
+              <span class="section-number">从备份恢复</span>
+              <h2>上传备份包</h2>
+              <p>备份包须包含配置分类，恢复后使用备份中的管理员账号登录。</p>
+            </div>
+            <el-alert v-if="lastRestoreError" :title="`上次恢复未完成，已回到首次配置：${lastRestoreError}`" type="error" :closable="false" show-icon class="last-restore" />
+            <div class="restore-upload">
+              <input ref="backupFile" type="file" accept=".zx" hidden @change="uploadBackup" />
+              <el-button :loading="uploading !== null" @click="$refs.backupFile.click()">
+                <i class="el-icon-upload2" /> {{ uploading !== null ? `上传中 ${uploading}%` : backupName ? "重新选择" : "选择备份包" }}
+              </el-button>
+              <code v-if="backupName">{{ backupName }}</code>
+            </div>
+            <template v-if="backupName && !backupSummary">
+              <el-form label-position="top" class="restore-password" @submit.native.prevent="inspectBackup">
+                <el-form-item label="备份密码（未加密可留空）">
+                  <el-input v-model="backupPassword" type="password" show-password autocomplete="off" />
+                </el-form-item>
+              </el-form>
+              <el-button :loading="inspecting" @click="inspectBackup">读取备份</el-button>
+            </template>
+            <p v-if="restoreError" class="inline-result error">
+              <i class="el-icon-circle-close" /> {{ restoreError }}
+            </p>
+            <template v-if="backupSummary">
+              <dl class="backup-summary">
+                <dt>导出时间</dt><dd>{{ new Date(backupSummary.created_at).toLocaleString() }}</dd>
+                <dt>来源版本</dt><dd>{{ backupSummary.bot_version || "未知" }} · Python {{ backupSummary.python }} · {{ backupSummary.platform }}</dd>
+                <dt>数据库</dt><dd>{{ backupSummary.database.dialect }} · {{ Object.keys(backupSummary.database.tables).length }} 张表</dd>
+                <dt>管理员</dt><dd>{{ restoredUsername || "备份中没有管理员账号" }}</dd>
+              </dl>
+              <el-alert v-for="text in backupSummary.warnings" :key="text" :title="text" type="warning" :closable="false" show-icon />
+              <label class="field-label">恢复的文件</label>
+              <el-checkbox-group v-model="restoreCategories" class="restore-categories">
+                <el-checkbox v-for="key in backupSummary.categories" :key="key" :label="key" :disabled="key === 'configuration'">{{ categoryLabels[key] || key }}</el-checkbox>
+              </el-checkbox-group>
+              <el-checkbox v-model="skipFailed">依赖无法安装时跳过对应插件继续恢复</el-checkbox>
+
+              <div class="section-divider" />
+              <p class="field-hint restore-database-hint">数据会导入到这里选择的数据库，须为空库；备份中的数据库地址不会沿用。</p>
+            <label class="field-label">数据库类型</label>
+            <div class="choice-grid database-choices">
+              <button
+                v-for="option in databaseOptions"
+                :key="option.value"
+                type="button"
+                class="choice-item"
+                :class="{ active: database.mode === option.value }"
+                @click="selectDatabaseMode(option.value)"
+              >
+                <strong>{{ option.label }}</strong>
+                <span>{{ option.description }}</span>
+                <em v-if="option.recommended">推荐</em>
+              </button>
+            </div>
+
+            <el-form label-position="top" class="service-form">
+              <DatabaseFields v-model="database" path-hint="路径必须位于真寻项目目录内。" />
+            </el-form>
+            <probe-result :result="results.database" />
+            <el-button
+              class="probe-button"
+              :loading="probing.database"
+              @click="probeDatabase"
+            >
+              <i class="el-icon-connection" /> 测试数据库
+            </el-button>
+            </template>
+          </section>
+        </div>
+        <footer class="setup-actions">
+          <el-button @click="mode = null">返回</el-button>
+          <span />
+          <el-button type="primary" :loading="restoring" :disabled="!canRestore" @click="startRestore">开始恢复</el-button>
+        </footer>
+      </template>
+
       <template v-else>
         <el-steps :active="step" finish-status="success" class="desktop-steps">
           <el-step title="管理员" />
@@ -175,7 +273,7 @@
             <div class="step-intro">
               <span class="section-number">03</span>
               <h2>监听地址</h2>
-              <p>选择哪些设备可以访问 WebUI，不影响协议端配置。</p>
+              <p>同时决定 WebUI 与协议端（反向 WS）能否从其他设备连接。</p>
             </div>
             <div class="choice-grid network-choices">
               <button
@@ -242,6 +340,7 @@
 
         <footer class="setup-actions">
           <el-button v-if="step > 0" @click="step -= 1">上一步</el-button>
+          <el-button v-else-if="serverState !== 'restart_pending'" @click="mode = null">返回</el-button>
           <span />
           <el-button v-if="step < 3" type="primary" @click="nextStep">下一步</el-button>
           <button
@@ -263,10 +362,12 @@
 
 <script>
 import { getAuthToken } from "@/utils/auth-token"
+import { reasonLabels } from "@/utils/plugin-operation"
 
 import logoUrl from "@/assets/image/logo.png"
 import { buildRestartTargets } from "@/utils/restart-targets"
 import { confirmAndRestart } from "@/utils/restart-flow"
+import { startRestartRecovery } from "@/utils/restart-recovery"
 import DatabaseFields from "@/components/system/DatabaseFields.vue"
 
 const RESTART_RECEIPT_KEY = "zhenxunSetupRestartReceipt"
@@ -306,6 +407,7 @@ export default {
       serverState: "unconfigured",
       claimed: false,
       accessError: "",
+      mode: null,
       step: 0,
       stepTitles: ["管理员", "数据服务", "监听地址", "检查并启动"],
       account: { username: "admin", password: "", confirmPassword: "", superusers: "" },
@@ -328,6 +430,17 @@ export default {
       applying: false,
       applyError: "",
       restartUrls: [],
+      uploading: null,
+      backupName: "",
+      backupPassword: "",
+      backupSummary: null,
+      restoreCategories: [],
+      skipFailed: false,
+      inspecting: false,
+      restoring: false,
+      restoreError: "",
+      lastRestoreError: "",
+      categoryLabels: { configuration: "配置", data: "插件数据", plugins: "插件代码", resources: "资源文件" },
       databaseOptions: [
         { value: "sqlite", label: "SQLite", description: "无需独立服务，适合单机", recommended: true },
         { value: "mysql", label: "MySQL", description: "连接已有 MySQL 服务" },
@@ -380,6 +493,13 @@ export default {
     hasWarnings() {
       return this.reviewItems.some((item) => item.status === "warning")
     },
+    restoredUsername() {
+      const access = this.backupSummary?.restored_access
+      return access?.password_set ? access.username || "" : ""
+    },
+    canRestore() {
+      return Boolean(this.restoredUsername && this.results.database && this.results.database.status !== "error" && !this.restoring)
+    },
     canApply() {
       const noErrors = this.reviewItems.every((item) => item.status !== "error")
       return noErrors && (!this.hasWarnings || this.acceptWarnings)
@@ -414,6 +534,7 @@ export default {
           if (this.setupToken && receipt) {
             try { this.restartUrls = JSON.parse(window.sessionStorage.getItem(RESTART_TARGETS_KEY) || "[]") } catch (error) { this.restartUrls = [] }
             this.claimed = true
+            this.mode = "fresh"
             this.step = 3
           }
           return
@@ -514,12 +635,13 @@ export default {
       return { ok: "正常", warning: "警告", error: "未通过" }[status]
     },
     async saveAndRestart() {
-      if (this.applying || !this.canApply) return
+      if (this.applying) return
       if (this.serverState === "restart_pending") {
         const receipt = window.sessionStorage.getItem(RESTART_RECEIPT_KEY)
         if (receipt) await this.restartSavedConfiguration(receipt, false)
         return
       }
+      if (!this.canApply) return
       this.applying = true
       const controller = new AbortController(); this.requestControllers.add(controller)
       this.applyError = ""
@@ -583,6 +705,96 @@ export default {
         prompt: "配置已经保存，确认现在重启真寻吗？",
       })
     },
+    async openRestore() {
+      this.mode = "restore"
+      this.lastRestoreError = ""
+      try {
+        const response = await this.getRequest(`${this.$root.prefix}/configure/backup/restore`, null, { ...this.setupHeaders, suppressErrorToast: true })
+        const status = response?.data || {}
+        if (!["failed", "rolled_back", "rollback_failed"].includes(status.state)) return
+        const label = reasonLabels[status.error_code]
+        this.lastRestoreError = status.rollback_error
+          || (label ? `依赖无法安装：${label}${status.error_detail ? `（${status.error_detail}）` : ""}` : status.error)
+          || "未知错误"
+      } catch (error) { this.lastRestoreError = "" }
+    },
+    async uploadBackup(event) {
+      const file = event.target.files[0]
+      event.target.value = ""
+      if (!file) return
+      const form = new FormData()
+      form.append("file", file)
+      Object.assign(this, { uploading: 0, restoreError: "", backupName: "", backupPassword: "", backupSummary: null })
+      try {
+        const response = await this.postRequest(`${this.$root.prefix}/configure/backup/upload`, form, {
+          ...this.setupHeaders,
+          timeout: 0,
+          suppressErrorToast: true,
+          onUploadProgress: (progress) => { this.uploading = progress.total ? Math.min(100, Math.round(progress.loaded / progress.total * 100)) : 0 },
+        })
+        if (!response?.suc) throw new Error(response?.info)
+        this.backupName = response.data
+      } catch (error) {
+        this.restoreError = this.requestError(error, "上传失败")
+        return
+      } finally { this.uploading = null }
+      await this.inspectBackup()
+    },
+    async inspectBackup() {
+      if (this.inspecting || !this.backupName) return
+      this.inspecting = true; this.restoreError = ""
+      try {
+        const response = await this.postRequest(
+          `${this.$root.prefix}/configure/backup/inspect`,
+          { name: this.backupName, password: this.backupPassword || null },
+          { ...this.setupHeaders, suppressErrorToast: true }
+        )
+        if (!response?.suc) throw new Error(response?.info)
+        if (!response.data.categories.includes("configuration")) throw new Error("备份中没有配置分类，无法用于首次部署")
+        this.backupSummary = response.data
+        this.restoreCategories = [...response.data.categories]
+        if (!this.restoredUsername) this.restoreError = "备份中没有 WebUI 管理员账号或密码，无法用于首次部署"
+      } catch (error) {
+        this.restoreError = this.requestError(error, "读取备份失败")
+      } finally { this.inspecting = false }
+    },
+    async startRestore() {
+      if (!this.canRestore) return
+      try {
+        await this.$confirm(`备份中的配置、插件与数据将恢复到本机，完成后使用管理员账号 ${this.restoredUsername} 登录。`, "确认恢复", { type: "warning", confirmButtonText: "开始恢复", cancelButtonText: "取消" })
+      } catch { return }
+      this.restoring = true; this.restoreError = ""
+      try {
+        const response = await this.postRequest(
+          `${this.$root.prefix}/configure/backup/restore`,
+          {
+            name: this.backupName,
+            password: this.backupPassword || null,
+            categories: this.restoreCategories,
+            skip_failed: this.skipFailed,
+            database: this.database,
+          },
+          { ...this.setupHeaders, timeout: 0, suppressErrorToast: true }
+        )
+        if (!response?.suc) throw new Error(response?.info)
+        const data = response.data
+        this.serverState = "restart_pending"
+        startRestartRecovery({
+          bootId: data.boot_id,
+          accessUrls: data.access_urls,
+          accessTargets: data.access_targets,
+          preferredUrl: data.preferred_url,
+          returnRoute: "/",
+          message: `正在从备份恢复，完成后请使用备份中的管理员账号 ${this.restoredUsername} 登录，并在 更新与维护 → 备份与恢复 中查看恢复结果。`,
+          setup: true,
+        })
+      } catch (error) {
+        this.restoreError = this.requestError(error, "恢复失败")
+      } finally { this.restoring = false }
+    },
+    requestError(error, fallback) {
+      return error.response?.data?.detail || error.message || fallback
+    },
     buildRestartUrls(urls) {
       return buildRestartTargets({
         mode: this.network.mode,
@@ -627,6 +839,18 @@ h1 { font-family: "fzrzFont", sans-serif; font-size: 25px; letter-spacing: 0; }
 .password-rules li.met { color: #3b9d68; }
 .field-label { display: block; margin-bottom: 10px; font-weight: 700; }
 .choice-grid { display: grid; gap: 10px; margin-bottom: 22px; }
+.mode-layout { min-height: 0; flex: 1 1 auto; width: 100%; max-width: 780px; margin: 0 auto; padding: 56px 56px 24px; overflow-y: auto; }
+.mode-choices { grid-template-columns: 1fr 1fr; }
+.restore-upload { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+.restore-upload code { padding: 4px 7px; border-radius: 3px; background: #eef1f5; overflow-wrap: anywhere; }
+.restore-password { max-width: 360px; }
+.backup-summary { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 8px 12px; margin: 8px 0 14px; font-size: 13px; }
+.backup-summary dt { color: #7b7f89; }
+.backup-summary dd { margin: 0; overflow-wrap: anywhere; }
+.restore-categories { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
+.restore-categories .el-checkbox { margin-right: 0; }
+.restore-database-hint { margin-bottom: 14px; }
+.last-restore { margin-bottom: 16px; }
 .database-choices { grid-template-columns: repeat(4, 1fr); }
 .network-choices { grid-template-columns: repeat(3, 1fr); }
 .choice-item { position: relative; min-height: 82px; padding: 14px; border: 1px solid #dfe2e8; border-radius: 6px; color: #343740; background: #fff; text-align: left; cursor: pointer; }
@@ -678,7 +902,8 @@ h1 { font-family: "fzrzFont", sans-serif; font-size: 25px; letter-spacing: 0; }
   .mobile-progress span, .mobile-progress strong { display: block; margin-bottom: 7px; }
   .mobile-progress span { color: #a24a70; font-size: 11px; }
   .step-body { min-height: 0; padding: 24px 18px 16px; }
-  .two-columns, .redis-fields, .database-choices, .network-choices { grid-template-columns: 1fr; }
+  .two-columns, .redis-fields, .database-choices, .network-choices, .mode-choices { grid-template-columns: 1fr; }
+  .mode-layout { padding: 32px 18px 16px; }
   .choice-item { min-height: 70px; }
   .setup-actions { grid-template-columns: 1fr 1fr; padding: 12px 18px max(12px, env(safe-area-inset-bottom)); background: #fff; }
   .setup-actions span { display: none; }

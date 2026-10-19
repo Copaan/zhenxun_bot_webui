@@ -40,5 +40,5 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           branch: dist
-          repository: Copaan/zhenxun_bot_webui
+          repository: ${{ github.repository }}
           force: true

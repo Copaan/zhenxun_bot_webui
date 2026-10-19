@@ -1,283 +1,92 @@
 <template>
-  <div
-    ref="pluginManager"
-    class="plugin-manager p-4 md:p-6 rounded-2xl"
-    :style="{ backgroundColor: 'var(--bg-color)' }"
-  >
-    <!-- 顶部插件类型选择 -->
-    <div class="type-selector-container flex flex-wrap gap-3 justify-between items-center mb-6">
-      <div
-        class="type-selector rounded-xl shadow-md p-1 inline-flex"
-        :style="{
-          backgroundColor: 'var(--bg-color-secondary)',
-          border: '1px solid var(--border-color-light)',
-        }"
-        ref="typeSelectorRef"
-      >
-        <button
-          v-for="type in pluginTypes"
-          :key="type.value"
-          @click="clickPluginType(type.value)"
-          class="px-4 py-2 text-sm font-medium transition-all duration-300"
-          :class="{
-            'text-white shadow-inner': activeBtn === type.value,
-            'hover:bg-opacity-10': activeBtn !== type.value,
-            'rounded-l-lg': type.first,
-            'rounded-r-lg': type.last,
-          }"
-          :style="{
-            backgroundColor:
-              activeBtn === type.value ? 'var(--primary-color)' : 'transparent',
-            color:
-              activeBtn === type.value
-                ? 'var(--bg-color)'
-                : 'var(--primary-color)',
-            '&:hover': {
-              backgroundColor:
-                activeBtn !== type.value
-                  ? 'var(--bg-color-hover)'
-                  : 'var(--primary-color)',
-            },
-          }"
-        >
-          {{ type.label }}({{ pluginCount[type.countKey] }})
-        </button>
+  <div class="zx-page plugin-page" :class="{ 'has-selection': selectedPluginModules.length > 0 }">
+    <header class="zx-page-header">
+      <div>
+        <h1>插件列表</h1>
+        <p>管理已加载插件的开关、配置、使用帮助与菜单分类。</p>
       </div>
-
-      <div class="plugin-action-pair">
-        <CuteButton @click="showInstallDependencyDialog = true" type="primary" icon="download" :iconColor="'var(--button-icon-color-info)'" class="plugin-action" size="sm">依赖管理</CuteButton>
+      <div class="zx-page-actions">
+        <el-button size="small" icon="el-icon-download" @click="showInstallDependencyDialog = true">依赖管理</el-button>
       </div>
-    </div>
+    </header>
 
-    <!-- 过滤标签区域 -->
-    <div
-      class="filter-area rounded-xl shadow-md p-4 mb-6"
-      :style="{
-        backgroundColor: 'var(--bg-color-secondary)',
-        border: '1px solid var(--border-color-light)',
-      }"
-      ref="filterAreaRef"
-    >
-      <div class="filter-row">
-        <span
-          v-for="tag in sortedMenuTypeList"
-          :key="tag"
-          @click="selectMenuType(tag)"
-          class="px-3 py-1 text-xs rounded-full transition-all duration-200 cursor-pointer"
-          :style="{
-            backgroundColor:
-              searchMenuType === tag
-                ? 'var(--primary-color)'
-                : 'var(--bg-color-hover)',
-            color:
-              searchMenuType === tag
-                ? 'var(--bg-color)'
-                : 'var(--primary-color)',
-          }"
-        >
-          {{ tag }}
-        </span>
+    <section class="zx-panel plugin-toolbar">
+      <el-radio-group v-model="activeBtn" size="small" class="type-tabs" @change="clickPluginType">
+        <el-radio-button v-for="type in pluginTypes" :key="type.value" :label="type.value">
+          {{ type.label }}<span class="type-count">{{ pluginCount[type.countKey] }}</span>
+        </el-radio-button>
+      </el-radio-group>
 
-        <div class="plugin-action-pair">
-          <CuteButton @click="showAddDialogFlag = true" type="primary" icon="add" :iconColor="'var(--button-icon-color-info)'" class="plugin-action" size="sm">新增类型</CuteButton>
-          <CuteButton @click="manageTypesDialogVisible = true" type="primary" icon="setting1" :iconColor="'var(--button-icon-color-info)'" class="plugin-action" size="sm">管理类型</CuteButton>
+      <div class="menu-row">
+        <span class="menu-label">菜单分类</span>
+        <div class="menu-chips">
+          <span class="zx-chip" :class="{ 'is-active': !searchMenuType }" @click="selectMenuType('')">全部</span>
+          <span
+            v-for="tag in sortedMenuTypeList"
+            :key="tag"
+            class="zx-chip"
+            :class="{ 'is-active': searchMenuType === tag }"
+            @click="selectMenuType(tag)"
+          >{{ tag }}</span>
+        </div>
+        <div class="menu-actions">
+          <el-button size="mini" icon="el-icon-plus" @click="showAddDialogFlag = true">新增分类</el-button>
+          <el-button size="mini" icon="el-icon-setting" @click="manageTypesDialogVisible = true">管理分类</el-button>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- 批量操作栏 -->
-    <div
-      v-if="selectedPluginModules.length > 0"
-      class="bulk-actions rounded-xl shadow-md p-3 mb-6 border-2 animate-pulse"
-      :style="{
-        backgroundColor: 'var(--bg-color-secondary)',
-        borderColor: 'var(--primary-color)',
-      }"
-    >
-      <div class="flex flex-wrap items-center gap-3">
-        <span
-          class="text-sm font-medium"
-          :style="{ color: 'var(--primary-color)' }"
-        >
-          <i class="fas fa-check-circle mr-1"></i>已选择
-          {{ selectedPluginModules.length }} 个插件
-        </span>
+    <transition name="el-fade-in-linear">
+      <section v-if="selectedPluginModules.length > 0" class="zx-panel bulk-actions">
+        <span class="bulk-count"><i class="el-icon-circle-check"></i>已选择 {{ selectedPluginModules.length }} 个插件</span>
+        <el-button size="mini" type="success" plain icon="el-icon-open" @click="bulkToggleSwitch(true)">启用</el-button>
+        <el-button size="mini" type="danger" plain icon="el-icon-turn-off" @click="bulkToggleSwitch(false)">禁用</el-button>
+        <el-select v-model="targetMenuTypeBulk" size="mini" placeholder="选择菜单分类" class="bulk-select" clearable>
+          <el-option v-for="item in sortedMenuTypeList" :key="item" :label="item" :value="item" />
+        </el-select>
+        <el-button size="mini" type="primary" :disabled="!targetMenuTypeBulk" @click="bulkUpdateMenuType">应用分类</el-button>
+        <el-button size="mini" class="bulk-cancel" @click="cancelSelection">取消选择</el-button>
+      </section>
+    </transition>
 
-        <button
-          @click="bulkToggleSwitch(true)"
-          class="px-3 py-1 text-xs rounded-full transition-colors duration-200 flex items-center"
-          :style="{
-            backgroundColor: 'var(--success-color-light)',
-            color: 'var(--success-color)',
-          }"
-        >
-          <i class="fas fa-power-off mr-1"></i>启用
-        </button>
-
-        <button
-          @click="bulkToggleSwitch(false)"
-          class="px-3 py-1 text-xs rounded-full transition-colors duration-200 flex items-center"
-          :style="{
-            backgroundColor: 'var(--danger-color-light)',
-            color: 'var(--danger-color)',
-          }"
-        >
-          <i class="fas fa-ban mr-1"></i>禁用
-        </button>
-
-        <select
-          v-model="targetMenuTypeBulk"
-          class="px-3 py-1 text-xs rounded-full transition-all duration-200"
-          :style="{
-            backgroundColor: 'var(--bg-color)',
-            border: '1px solid var(--border-color-light)',
-            color: 'var(--text-color)',
-          }"
-        >
-          <option value="" disabled selected>选择新菜单类型</option>
-          <option v-for="item in sortedMenuTypeList" :key="item" :value="item">
-            {{ item }}
-          </option>
-        </select>
-
-        <button
-          @click="bulkUpdateMenuType"
-          class="px-3 py-1 text-xs rounded-full transition-colors duration-200 flex items-center"
-          :disabled="!targetMenuTypeBulk"
-          :style="{
-            backgroundColor: 'var(--primary-color)',
-            color: 'var(--bg-color)',
-          }"
-        >
-          <i class="fas fa-check mr-1"></i>应用类型
-        </button>
-
-        <button
-          @click="cancelSelection"
-          class="ml-auto px-3 py-1 text-xs rounded-full transition-colors duration-200 flex items-center"
-          :style="{
-            backgroundColor: 'var(--bg-color-hover)',
-            color: 'var(--text-color-secondary)',
-          }"
-        >
-          <i class="fas fa-times mr-1"></i>取消选择
-        </button>
-      </div>
-    </div>
-
-    <!-- 插件列表 -->
-    <div
-      class="plugin-list-container rounded-xl shadow-md p-4"
-      :style="{
-        backgroundColor: 'var(--bg-color-secondary)',
-        border: '1px solid var(--border-color-light)',
-      }"
-    >
+    <section class="zx-panel plugin-list-panel">
       <PluginListTemplate
         ref="pluginListRef"
         :pluginType="activeBtn"
         :menuType="searchMenuType"
         :key="pltKey"
         @update:selection="handleSelectionUpdate"
-        :style="{ height: pluginListHeight + 'px' }"
       />
-    </div>
+    </section>
 
-    <!-- 管理菜单类型对话框 -->
-    <div
-      v-if="manageTypesDialogVisible"
-      class="fixed inset-0 flex items-center justify-center z-50"
-      :style="{ backgroundColor: 'var(--mask-color)' }"
-    >
-      <div
-        class="rounded-xl shadow-xl w-full max-w-md p-6 animate-bounce-in"
-        :style="{ backgroundColor: 'var(--bg-color-secondary)' }"
-      >
-        <div class="flex justify-between items-center mb-4">
-          <h3
-            class="text-lg font-bold"
-            :style="{ color: 'var(--primary-color)' }"
-          >
-            <i class="fas fa-list-ul mr-2"></i>管理菜单类型
-          </h3>
-          <button
-            @click="manageTypesDialogVisible = false"
-            :style="{ color: 'var(--primary-color-light)' }"
-          >
-            <i class="fas fa-times"></i>
-          </button>
-        </div>
+    <el-dialog title="管理菜单分类" :visible.sync="manageTypesDialogVisible" width="420px" append-to-body custom-class="plugin-type-dialog">
+      <el-empty v-if="sortedMenuTypeList.length === 0" description="暂无菜单分类" :image-size="80" />
+      <ul v-else class="type-list">
+        <li v-for="type in sortedMenuTypeList" :key="type">
+          <span>{{ type }}</span>
+          <el-button type="text" size="mini" icon="el-icon-edit" @click="startRenameType(type)">重命名</el-button>
+        </li>
+      </ul>
+      <span slot="footer"><el-button size="small" @click="manageTypesDialogVisible = false">关闭</el-button></span>
+    </el-dialog>
 
-        <div class="max-h-96 overflow-y-auto">
-          <div
-            v-if="sortedMenuTypeList.length === 0"
-            class="text-center py-4"
-            :style="{ color: 'var(--text-color-secondary)' }"
-          >
-            <i class="fas fa-inbox text-3xl mb-2"></i>
-            <p>暂无菜单类型</p>
-          </div>
+    <el-dialog title="新增菜单分类" :visible.sync="showAddDialogFlag" width="420px" append-to-body custom-class="plugin-type-dialog">
+      <el-input v-model="newMenuTypeName" placeholder="请输入新的菜单分类名称" maxlength="20" show-word-limit @keyup.enter.native="addNewMenuType" />
+      <p class="dialog-hint">新分类需要通过批量“应用分类”分配给插件后才会保存。</p>
+      <span slot="footer">
+        <el-button size="small" @click="showAddDialogFlag = false">取消</el-button>
+        <el-button size="small" type="primary" @click="addNewMenuType">添加</el-button>
+      </span>
+    </el-dialog>
 
-          <div
-            v-for="type in sortedMenuTypeList"
-            :key="type"
-            class="flex justify-between items-center py-2"
-            :style="{ borderBottom: '1px solid var(--border-color-light)' }"
-          >
-            <span :style="{ color: 'var(--primary-color)' }">{{ type }}</span>
-            <button
-              @click="startRenameType(type)"
-              class="px-2 py-1 text-xs rounded-full transition-colors duration-200"
-              :style="{
-                backgroundColor: 'var(--bg-color-hover)',
-                color: 'var(--primary-color)',
-              }"
-            >
-              <i class="fas fa-edit mr-1"></i>重命名
-            </button>
-          </div>
-        </div>
+    <el-dialog title="重命名菜单分类" :visible.sync="showRenameDialogFlag" width="420px" append-to-body custom-class="plugin-type-dialog rename-type-dialog">
+      <el-input v-model="renameMenuTypeName" placeholder="请输入新的菜单分类名称" maxlength="20" show-word-limit @keyup.enter.native="triggerRenameType" />
+      <span slot="footer">
+        <el-button size="small" @click="showRenameDialogFlag = false">取消</el-button>
+        <el-button size="small" type="primary" @click="triggerRenameType">确定</el-button>
+      </span>
+    </el-dialog>
 
-        <div class="mt-6 flex justify-end">
-          <button
-            @click="manageTypesDialogVisible = false"
-            class="px-4 py-2 rounded-full transition-colors duration-200"
-            :style="{
-              backgroundColor: 'var(--primary-color)',
-              color: 'var(--bg-color)',
-            }"
-          >
-            关闭
-          </button>
-        </div>
-      </div>
-    </div>
-    <NeonDialog
-      :visible.sync="showAddDialogFlag"
-      title="新增菜单类型"
-      icon-class="add-menu"
-      @confirm="addNewMenuType"
-    >
-      <NeonInput
-        v-model="newMenuTypeName"
-        class="fm-input"
-        placeholder="请输入新的菜单类型名称..."
-      />
-    </NeonDialog>
-    <NeonDialog
-      :visible.sync="showRenameDialogFlag"
-      title="重命名菜单类型"
-      icon-class="rename1"
-      @confirm="triggerRenameType"
-    >
-      <NeonInput
-        v-model="renameMenuTypeName"
-        class="fm-input"
-        placeholder="请输入新的菜单类型名称..."
-      />
-    </NeonDialog>
-
-    <!-- 安装依赖对话框 -->
     <ManualDependencyDialog :visible.sync="showInstallDependencyDialog" />
   </div>
 </template>
@@ -285,31 +94,24 @@
 <script>
 import PluginListTemplate from "@/components/plugin/PluginListTemplate.vue"
 import ManualDependencyDialog from "@/components/plugin/ManualDependencyDialog.vue"
-import CuteButton from "@/components/ui/CuteButton.vue"
-import NeonDialog from "@/components/ui/NeonDialog.vue"
-import NeonInput from "@/components/ui/NeonInput.vue"
 
 export default {
   name: "PluginList",
   components: {
     PluginListTemplate,
     ManualDependencyDialog,
-    NeonDialog,
-    NeonInput,
-    CuteButton,
   },
   data() {
     return {
       pluginTypes: [
-        { value: "NORMAL", label: "普通插件", countKey: "normal", first: true },
+        { value: "NORMAL", label: "普通插件", countKey: "normal" },
         { value: "ADMIN", label: "管理员插件", countKey: "admin" },
         { value: "SUPERUSER", label: "超级用户插件", countKey: "superuser" },
-        { value: "HIDDEN", label: "其他插件", countKey: "other", last: true },
+        { value: "HIDDEN", label: "其他插件", countKey: "other" },
       ],
       pluginCount: { normal: 0, admin: 0, superuser: 0, other: 0 },
       activeBtn: "NORMAL",
       pltKey: 0,
-      pluginListHeight: 0,
       menuTypeList: [],
       searchMenuType: null,
       selectedPluginModules: [],
@@ -329,26 +131,10 @@ export default {
     },
   },
   mounted() {
-    window.addEventListener("resize", this.handleResize)
     this.getPluginCount()
     this.getPluginMenuType()
-    this.handleResize()
-  },
-  beforeDestroy() {
-    window.removeEventListener("resize", this.handleResize)
   },
   methods: {
-    handleResize() {
-      if (this.$isMobile()) {
-        this.pluginListHeight =
-          this.$refs.pluginManager.offsetHeight -
-          this.$refs.typeSelectorRef.offsetHeight -
-          this.$refs.filterAreaRef.offsetHeight -
-          160
-      } else {
-        this.pluginListHeight = this.$refs.pluginManager.offsetHeight - 235
-      }
-    },
     clickPluginType(pluginType) {
       this.activeBtn = pluginType
       this.searchMenuType = null
@@ -399,13 +185,8 @@ export default {
         })
     },
     selectMenuType(menuType) {
-      if (this.searchMenuType !== menuType) {
-        this.searchMenuType = menuType
-        this.pltKey++
-      } else {
-        this.searchMenuType = ""
-        this.pltKey++
-      }
+      this.searchMenuType = this.searchMenuType === menuType ? "" : menuType
+      this.pltKey++
     },
     handleSelectionUpdate(selectedModules) {
       this.selectedPluginModules = selectedModules || []
@@ -478,10 +259,9 @@ export default {
       } else {
         this.menuTypeList.push(newType)
         this.$message.success(
-          `菜单类型 "${newType}" 已临时添加，通过批量“应用类型”分配给插件后才会保存`
+          `菜单类型 "${newType}" 已临时添加，通过批量“应用分类”分配给插件后才会保存`
         )
         this.newMenuTypeName = ""
-        this.handleResize()
       }
       this.showAddDialogFlag = false
     },
@@ -511,7 +291,7 @@ export default {
         return
       }
 
-      const loading = this.getLoading(".animate-pop-in")
+      const loading = this.getLoading(".rename-type-dialog")
       this.putRequest(`${this.$root.prefix}/plugin/menu_type/rename`, {
         old_name: this.oldRenameMenuTypeName,
         new_name: newName,
@@ -551,170 +331,212 @@ export default {
 </script>
 
 <style scoped>
-/* 二次元可爱风格动画 */
-@keyframes bounce-in {
-  0% {
-    transform: scale(0.9);
-    opacity: 0;
-  }
-  50% {
-    transform: scale(1.05);
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
+.plugin-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
-.animate-bounce-in {
-  animation: bounce-in 0.3s ease-out;
+.plugin-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-/* 插件卡片悬停效果 */
-.plugin-list-container {
-  transition: all 0.3s ease;
+.type-tabs {
+  display: flex;
+  flex-wrap: wrap;
 }
 
-.plugin-list-container:hover {
-  box-shadow: var(--primary-shadow);
+.type-count {
+  margin-left: 6px;
+  opacity: 0.7;
+  font-size: 12px;
 }
 
-/* 响应式调整 */
-@media (max-width: 640px) {
-  .type-selector {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
+.menu-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.menu-label {
+  flex-shrink: 0;
+  line-height: 28px;
+  color: var(--text-color-secondary);
+  font-size: 13px;
+}
+
+.menu-chips {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.menu-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.menu-actions .el-button + .el-button,
+.bulk-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-color: var(--primary-color-light-5);
+  background: var(--primary-color-light-9);
+}
+
+.bulk-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+  color: var(--primary-color);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bulk-select {
+  width: 160px;
+}
+
+.bulk-actions .bulk-cancel {
+  margin-left: auto;
+}
+
+.plugin-list-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 420px;
+  margin-bottom: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.type-list {
+  max-height: 360px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.type-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--border-color-light);
+  color: var(--text-color);
+}
+
+.type-list li:last-child {
+  border-bottom: none;
+}
+
+.dialog-hint {
+  margin: 10px 0 0;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .plugin-page {
+    display: block;
+    padding: 14px 12px 24px;
   }
 
-  .type-selector button {
-    border-radius: 8px !important;
+  .plugin-page.has-selection {
+    padding-bottom: 150px;
+  }
+
+  .plugin-toolbar {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .type-tabs {
+    flex-wrap: nowrap;
+    margin: 0 -12px;
+    padding: 0 12px 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .type-tabs ::v-deep .el-radio-button__inner {
+    padding: 8px 12px;
+    white-space: nowrap;
+  }
+
+  .menu-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .menu-label {
+    line-height: 20px;
+  }
+
+  .menu-chips {
+    flex-basis: 100%;
+    flex-wrap: nowrap;
+    order: 3;
+    margin: 0 -12px;
+    padding: 0 12px 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .menu-chips .zx-chip {
+    flex-shrink: 0;
+  }
+
+  .menu-actions {
+    margin-left: auto;
+  }
+
+  .type-tabs::-webkit-scrollbar,
+  .menu-chips::-webkit-scrollbar {
+    display: none;
   }
 
   .bulk-actions {
-    padding: 8px;
+    position: fixed;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    z-index: 30;
+    margin: 0;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
   }
 
-  .bulk-actions select {
-    width: 100%;
+  .bulk-count {
+    flex-basis: 100%;
   }
 
-  .type-selector-container {
-    flex-direction: column;
-    gap: 10px;
-    align-items: flex-start;
+  .bulk-select {
+    flex: 1;
+    width: auto;
   }
 
-  .type-selector-container .type-selector {
-    width: 100%;
-  }
-}
-
-/* 滚动条样式 */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--bg-color-hover);
-  border-radius: 10px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--primary-color-light);
-  border-radius: 10px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--primary-color);
-}
-
-/* 依赖安装对话框 */
-.dependency-dialog {
-  ::v-deep .el-dialog {
-    width: 90% !important;
-    max-width: 600px !important;
+  .bulk-actions .bulk-cancel {
+    margin-left: 0;
   }
 
-  .result-container {
-    height: 200px;
-    font-family: monospace;
-    transition: all 0.3s ease;
-  }
-
-  .operation-selector {
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    transition: all 0.3s ease;
-
-    button {
-      position: relative;
-      overflow: hidden;
-
-      &::before {
-        content: "";
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 0;
-        height: 0;
-        background-color: rgba(255, 255, 255, 0.2);
-        border-radius: 50%;
-        transform: translate(-50%, -50%);
-        transition: width 0.4s ease, height 0.4s ease;
-      }
-
-      &:hover::before {
-        width: 150%;
-        height: 150%;
-      }
-    }
-  }
-
-  .tip-container {
-    transition: all 0.3s ease;
-
-    code {
-      transition: all 0.3s ease;
-
-      &:hover {
-        background-color: rgba(255, 255, 255, 0.5);
-      }
-    }
+  .plugin-list-panel {
+    min-height: 0;
+    overflow: visible;
   }
 }
-
-@media (max-width: 640px) {
-  .dependency-dialog {
-    ::v-deep .el-dialog {
-      width: 95% !important;
-    }
-
-    .result-container {
-      height: 150px;
-    }
-
-    .operation-selector {
-      width: 100%;
-
-      button {
-        flex: 1;
-      }
-    }
-
-    .flex.items-center.gap-4 {
-      flex-direction: column;
-      align-items: stretch;
-    }
-  }
-}
-</style>
-
-<style scoped>
-.type-selector-container { padding-inline: 17px; }
-.filter-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
-.plugin-action-pair { display:grid; grid-template-columns:144px 116px; gap:8px; margin-left:auto; flex-shrink:0; }
-.plugin-action-pair .plugin-action { border-radius:999px; height:36px; padding:6px 12px; white-space:nowrap; }
-@media(max-width:760px) { .type-selector-container { padding-inline:0; } .plugin-action-pair { max-width:100%; } .type-selector-container .plugin-action-pair { margin-right:17px; } }
-@media(max-width:420px) { .type-selector-container { padding-inline:0; } .plugin-action-pair { width:100%; grid-template-columns:minmax(0,1fr) minmax(0,1fr); } .type-selector-container .plugin-action-pair { width:calc(100% - 34px); margin-inline:17px; } .plugin-action-pair .plugin-action { font-size:12px; padding-inline:6px; } }
 </style>

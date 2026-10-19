@@ -36,6 +36,16 @@ function scheduleReconnect(context) {
   }, 3000)
 }
 
+/**
+ * 当前时间文本，格式与后端推送消息的时间一致
+ * @returns {string} YYYY-MM-DD HH:mm:ss
+ */
+function currentTimeText() {
+  const now = new Date()
+  const pad = (value) => String(value).padStart(2, "0")
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
+}
+
 async function chatWebsocketOnmessage(event) {
   if (isBusinessNetworkFrozen()) return
   const data = JSON.parse(event.data)
@@ -87,9 +97,10 @@ const chatWebSocket = {
         chatId: groupId || userId,
         obj: {
           user_id: botInfo.self_id,
-          message: [{ type: "text", msg: msg }],
+          message: [{ type: "text", msg: msg, time: currentTimeText() }],
           name: botInfo.nickname,
           ava_url: botInfo.ava_url,
+          isSelf: true,
         },
       })
       vue.$nextTick(() => {

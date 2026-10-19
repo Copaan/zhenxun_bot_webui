@@ -68,14 +68,11 @@ export default {
       ]
     },
     trendRows() {
-      const start = Math.max(0, this.trend.date.length - 14)
-      const chat = this.trend.chat.slice(start)
-      const call = this.trend.call.slice(start)
-      const dates = this.trend.date.slice(start)
+      const { chat, call, date: dates } = this.trend
       const maximum = Math.max(1, ...chat, ...call)
       return dates.map((date, index) => ({
         date,
-        label: index % 2 === 0 ? date : "",
+        label: index % 5 === 0 || index === dates.length - 1 ? date : "",
         chatHeight: Math.max(2, Math.round(((chat[index] || 0) / maximum) * 100)),
         callHeight: Math.max(2, Math.round(((call[index] || 0) / maximum) * 100)),
       }))
@@ -90,10 +87,11 @@ export default {
       this.error = ""
       try {
         const quiet = { suppressErrorToast: true }
+        const monthly = { date_type: "month" }
         const [trend, groups, plugins] = await Promise.all([
           this.getRequest(`${this.$root.prefix}/dashboard/get_chat_and_call_month`, null, quiet),
-          this.getRequest(`${this.$root.prefix}/main/get_active_group`, null, quiet),
-          this.getRequest(`${this.$root.prefix}/main/get_hot_plugin`, null, quiet),
+          this.getRequest(`${this.$root.prefix}/main/get_active_group`, monthly, quiet),
+          this.getRequest(`${this.$root.prefix}/main/get_hot_plugin`, monthly, quiet),
         ])
         if (!trend.suc || !groups.suc || !plugins.suc) {
           throw new Error(trend.info || groups.info || plugins.info || "统计数据加载失败")
@@ -120,11 +118,11 @@ export default {
 .legend { display: inline-block; width: 8px; height: 8px; margin: 0 5px 0 12px; }
 .legend.chat, .bar.chat { background: var(--primary-color); }
 .legend.call, .bar.call { background: var(--el-color-info); }
-.trend-bars { display: grid; height: 190px; grid-template-columns: repeat(14, minmax(10px, 1fr)); gap: 8px; align-items: end; }
+.trend-bars { display: grid; height: 190px; grid-template-columns: repeat(30, minmax(6px, 1fr)); gap: 4px; align-items: end; }
 .trend-day { display: flex; height: 100%; min-width: 0; flex-direction: column; justify-content: flex-end; text-align: center; }
 .bar-stack { display: flex; height: 150px; align-items: flex-end; justify-content: center; gap: 2px; border-bottom: 1px solid var(--border-color); }
 .bar { display: block; width: 35%; min-height: 2px; }
-.trend-day small { height: 20px; margin-top: 6px; color: var(--text-color-secondary); font-size: 10px; }
+.trend-day small { height: 20px; overflow: visible; white-space: nowrap; margin-top: 6px; color: var(--text-color-secondary); font-size: 10px; }
 .ranking-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 .ranking-list { display: flex; flex-direction: column; gap: 11px; }
 .ranking-row { display: grid; grid-template-columns: minmax(80px, 1fr) 2fr 42px; gap: 10px; align-items: center; font-size: 13px; }
@@ -134,5 +132,5 @@ export default {
 .ranking-row strong { text-align: right; }
 .feedback { display: flex; min-height: 150px; align-items: center; justify-content: center; gap: 10px; color: var(--text-color-secondary); }
 .feedback.is-error { min-height: 100px; color: var(--el-color-danger); }
-@media (max-width: 800px) { .ranking-grid { grid-template-columns: 1fr; } .trend-bars { gap: 3px; } }
+@media (max-width: 800px) { .ranking-grid { grid-template-columns: 1fr; } .trend-bars { gap: 1px; } }
 </style>

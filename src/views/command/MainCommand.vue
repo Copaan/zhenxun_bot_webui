@@ -90,13 +90,25 @@ export default {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
+  .command-page {
+    padding: 12px;
+  }
+
   .el-row {
     @apply flex-col;
   }
 
   .command-panel {
-    @apply px-2;
+    margin-bottom: 12px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    overflow: visible;
+  }
+
+  .el-col:last-child .command-panel {
+    margin-bottom: 0;
   }
 }
 </style>

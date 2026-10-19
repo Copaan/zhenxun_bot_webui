@@ -2,13 +2,13 @@
   <div v-if="visible" class="restart-recovery" role="status" aria-live="polite">
     <i v-if="!timedOut && !manualRequired" class="el-icon-loading"></i>
     <i v-else class="el-icon-warning-outline warning"></i>
-    <h2>{{ expired ? "恢复会话已过期" : manualRequired ? "请手动打开目标入口" : timedOut ? "自动连接等待超时" : "正在重启真寻" }}</h2>
-    <p>{{ timedOut ? "服务可能仍在启动，可以重新检测或手动打开下列地址。" : state.message }}</p>
+    <h2>{{ expired ? "登录已失效" : manualRequired ? "请手动打开目标入口" : timedOut ? "自动连接等待超时" : "正在重启真寻" }}</h2>
+    <p>{{ expired ? expiredMessage : timedOut ? "服务可能仍在启动，可以重新检测或手动打开下列地址。" : state.message }}</p>
     <p v-if="insecureTargets">当前 HTTPS 页面无法安全探测 HTTP 入口，请手动打开目标地址并重新登录。</p>
     <div v-if="insecureTargets" class="restart-actions">
       <el-button v-for="url in httpTargets" :key="url" type="warning" icon="el-icon-link" @click="finish(url, true)">打开 {{ url }} 并重新登录</el-button>
     </div>
-    <div v-if="timedOut && !manualRequired" class="restart-actions">
+    <div v-if="expired || (timedOut && !manualRequired)" class="restart-actions">
       <el-button v-if="!expired" type="primary" @click="retry">重新检测</el-button>
       <el-button @click="dismiss">关闭等待页</el-button>
     </div>
@@ -49,6 +49,11 @@ export default {
     insecureTargets() { return window.location.protocol === "https:" && this.state.accessUrls.some(url => new URL(url).protocol === "http:") },
     httpTargets() { return this.state.accessUrls.filter(url => new URL(url).protocol === "http:") },
     manualRequired() { return !recoveryProbeTargets(this.state).length },
+    expiredMessage() {
+      return this.state.accessUrls.length
+        ? "登录已失效或重启等待已被其他页面接管，无法继续自动检测。请打开下列地址重新登录后查看重启结果。"
+        : "登录已失效或重启等待已被其他页面接管，无法继续自动检测。请关闭等待页，重新登录后查看重启结果。"
+    },
   },
   beforeDestroy() {
     window.removeEventListener(RESTART_RECOVERY_EVENT, this.handleStart)

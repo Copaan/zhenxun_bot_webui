@@ -10,6 +10,8 @@
 
     <div class="store-toolbar">
       <el-input v-model.trim="search" clearable prefix-icon="el-icon-search" placeholder="搜索名称、包名、模块或作者" />
+      <el-button class="filter-toggle" :class="{ 'is-open': filtersOpen }" icon="el-icon-s-operation" :aria-expanded="String(filtersOpen)" @click="filtersOpen = !filtersOpen">筛选<span v-if="activeFilterCount" class="filter-count">{{ activeFilterCount }}</span></el-button>
+      <div class="store-filters" :class="{ 'is-open': filtersOpen }">
       <el-select v-model="statusFilter" aria-label="安装状态">
         <el-option label="全部状态" value="all" />
         <el-option label="未安装" value="not_installed" />
@@ -29,7 +31,8 @@
         <el-option label="全部适配器" value="all" />
         <el-option v-for="adapter in enabledAdapters" :key="adapter" :label="adapterName(adapter)" :value="adapter" />
       </el-select>
-      <el-checkbox v-model="includeIncompatible">显示不可安装项</el-checkbox>
+      <el-checkbox v-model="includeIncompatible" class="incompatible-toggle">显示不可安装项</el-checkbox>
+      </div>
     </div>
 
     <div v-if="registryMeta.fetched_at" class="catalog-note">
@@ -101,7 +104,19 @@
       <el-button type="text" @click="loadPlugins(false)">重新加载</el-button>
     </div>
 
-    <div v-loading="loading" class="plugin-list">
+    <div v-loading="loading && plugins.length > 0" class="plugin-list">
+      <template v-if="loading && !plugins.length">
+        <div v-for="index in 5" :key="'skeleton-' + index" class="plugin-row is-skeleton" aria-hidden="true">
+          <div class="plugin-main">
+            <span class="zx-skeleton skeleton-title"></span>
+            <span class="zx-skeleton skeleton-module"></span>
+          </div>
+          <div class="skeleton-body">
+            <span class="zx-skeleton"></span>
+            <span class="zx-skeleton is-short"></span>
+          </div>
+        </div>
+      </template>
       <article v-for="plugin in plugins" :key="plugin.store_key" class="plugin-row">
         <div class="plugin-main">
           <div class="plugin-title-line">
@@ -111,6 +126,9 @@
             <el-tag :type="stateTag(plugin).type" size="mini" effect="plain">{{ stateTag(plugin).label }}</el-tag>
             <el-tag v-if="plugin.compatibility_override_stale" size="mini" type="danger" effect="plain">兼容状态已变化</el-tag>
             <el-tag v-else-if="plugin.compatibility_unverified" size="mini" type="warning" effect="plain">兼容试运行</el-tag>
+            <el-tooltip v-for="warning in plugin.warnings || []" :key="warning.code" :content="reasonLabel(warning) + (plugin.install_state === 'not_installed' ? '仍可尝试安装，安装时会检查依赖并实际加载验证。' : '')" placement="top">
+              <el-tag size="mini" type="info" effect="plain">{{ warningTag(warning) }}</el-tag>
+            </el-tooltip>
           </div>
           <div class="module-line">{{ plugin.project_link }} · {{ plugin.module_name }}</div>
           <p>{{ plugin.description || "暂无简介" }}</p>
@@ -122,7 +140,6 @@
           <div v-if="plugin.blocked_reasons.length" class="blocked-reason">
             {{ reasonLabel(plugin.blocked_reasons[0]) }}
           </div>
-          <p v-for="warning in plugin.warnings || []" :key="warning.code">{{ reasonLabel(warning) }}<template v-if="plugin.install_state !== 'blocked'">仍可尝试安装，安装时会检查依赖并实际加载验证。</template></p>
           <p v-if="plugin.catalog_source === 'local'">远端目录无此条目，按本地托管记录管理。</p>
           <div v-if="plugin.failure_reasons && plugin.failure_reasons.length" class="blocked-reason">
             {{ reasonLabel(plugin.failure_reasons[0]) }}
@@ -169,7 +186,7 @@
             :disabled="analysisVisible || Boolean(transactionAction) || applying || readsPaused || authExpired"
             @click="startAnalysis('update', plugin)"
           >更新插件</el-button>
-          <el-tooltip v-else-if="plugin.install_state === 'external'" content="该分发包由 WebUI 外部安装，不能自动接管或卸载" placement="top">
+          <el-tooltip v-else-if="plugin.install_state === 'external'" content="该分发包在 WebUI 之外安装，不能自动接管或卸载" placement="top">
             <span><el-button size="small" disabled>外部安装</el-button></span>
           </el-tooltip>
           <el-tooltip v-else-if="plugin.install_state === 'blocked'" :content="reasonLabel(plugin.blocked_reasons[0])" placement="top">
@@ -293,7 +310,8 @@
               </el-alert>
 
               <el-alert v-if="analysis.plan.hot_apply_expected" title="预计可热加载" type="success" :closable="false" show-icon>
-                <p>插件与依赖均为纯 Python 且不改动已加载的包，将直接在运行中生效；加载失败会回滚依赖层并恢复原插件。若构建后发现原生扩展或不可热加载的代码，则改为等待重启。</p>
+                <p v-if="analysis.action === 'uninstall'">插件支持热卸载且不涉及其他依赖变化，将直接在运行中卸载生效；卸载失败会恢复原插件。若发现无法热卸载，则改为等待重启。</p>
+                <p v-else>插件与依赖均为纯 Python 且不改动已加载的包，将直接在运行中生效；加载失败会回滚依赖层并恢复原插件。若构建后发现原生扩展或不可热加载的代码，则改为等待重启。</p>
               </el-alert>
               <el-alert v-else title="需要重启生效" type="info" :closable="false" show-icon>
                 <p>依赖层将先准备好，由你点击重启并通过启动验证后生效。</p>
@@ -352,7 +370,7 @@ export default {
   data() {
     return {
       plugins: [], total: 0, page: 1, pageSize: 30, loading: false, error: "",
-      search: this.initialSearch, statusFilter: "all", typeFilter: "all", adapterFilter: "all", includeIncompatible: false,
+      search: this.initialSearch, statusFilter: "all", typeFilter: "all", adapterFilter: "all", includeIncompatible: false, filtersOpen: false,
       enabledAdapters: [],
       registryMeta: {}, searchTimer: null, analysisVisible: false, analysisLoading: false,
       analysis: null, analysisPlugin: null, analysisTimer: null, applying: false,
@@ -371,6 +389,11 @@ export default {
       return this.coreSummary.issues || []
     },
     drawerSize() { return window.innerWidth <= 680 ? "94%" : "600px" },
+    /**
+     * 统计偏离默认值的筛选项数量
+     * @returns {number} 已启用的筛选项数量
+     */
+    activeFilterCount() { return [this.statusFilter !== "all", this.typeFilter !== "all", this.adapterFilter !== "all", this.includeIncompatible].filter(Boolean).length },
     analysisStatusLabel() {
       const labels = { queued: "等待分析", analyzing: "分析中", ready: "可应用", blocked: "已阻止", failed: "分析失败" }
       return labels[this.analysis?.status] || "准备中"
@@ -413,7 +436,7 @@ export default {
     analysisVisible(value) { if (!value) { this.analysisEpoch++; clearTimeout(this.analysisTimer); this.analysisLoading = false } },
     detailVisible(value) { if (!value) { this.detailEpoch++; this.detailLoading = false } },
     repairVisible(value) { if (!value && !this.repairSubmitting) { this.repairEpoch++; this.repairing = false } },
-    search() { clearTimeout(this.searchTimer); this.searchTimer = setTimeout(() => { this.page = 1; this.loadPlugins(false) }, 350) },
+    search() { clearTimeout(this.searchTimer); this.searchTimer = setTimeout(() => { this.searchTimer = null; this.page = 1; this.loadPlugins(false) }, 350) },
     statusFilter() { this.page = 1; this.loadPlugins(false) },
     typeFilter() { this.page = 1; this.loadPlugins(false) },
     adapterFilter() { this.page = 1; this.loadPlugins(false) },
@@ -443,15 +466,20 @@ export default {
       finally { this.repairing = false }
     },
     pauseReads() {
+      // 记录暂停时是否有未完成的读取，恢复时据此决定是否需要重新加载
+      if (!this.readsPaused) this.pausedAt = Date.now()
+      this.readsInterrupted = this.readsInterrupted || Boolean(this.readControllers?.size || this.pluginLoadInFlight || this.queuedPluginLoad || this.searchTimer)
       this.readsPaused = true; this.readEpoch++; this.analysisEpoch++; this.detailEpoch++; this.repairEpoch++
       if (!this.repairSubmitting) this.repairing = false
-      this.queuedPluginLoad = null; clearTimeout(this.searchTimer); clearTimeout(this.analysisTimer)
+      this.queuedPluginLoad = null; clearTimeout(this.searchTimer); this.searchTimer = null; clearTimeout(this.analysisTimer)
       for (const controller of this.readControllers || []) controller.abort()
       this.readControllers?.clear(); this.loading = false; this.pluginLoadInFlight = false; this.analysisLoading = false; this.detailLoading = false
     },
     resumeReads() {
       if (this.componentDestroyed || this.authExpired || document.hidden || isBusinessNetworkFrozen()) return
-      this.readsPaused = false; this.loadEnvironment(); this.loadPlugins(false)
+      const stale = !this.pluginsLoaded || this.readsInterrupted || Date.now() - (this.pausedAt || 0) > 5 * 60 * 1000
+      this.readsPaused = false; this.readsInterrupted = false
+      if (stale) { this.loadEnvironment(); this.loadPlugins(false, this.pluginsLoaded) }
       if (this.analysisVisible && this.analysis?.analysis_id) this.pollAnalysis(this.analysis.analysis_id)
       else this.restoreAnalysis()
     },
@@ -510,6 +538,7 @@ export default {
       return states[plugin.install_state] || { label: plugin.install_state, type: "info" }
     },
     reasonLabel(reason) { return reasonLabels[reason?.code] || reason?.message || reason?.code || "当前环境不兼容" },
+    warningTag(warning) { return { registry_plugin_invalid: "未通过官方测试", registry_plugin_untested: "官方未测试", adapter_incompatible: "适配器不匹配" }[warning?.code] || "提示" },
     reasonDetail(reason) { const label = reasonLabels[reason?.code]; return label && reason?.message && reason.message !== label ? reason.message : "" },
     driftDescription(item) {
       if (item.requirement) return `${item.owner || '本体'} 要求 ${item.requirement} · 实际 ${item.actual || '未安装'} · ${item.layer === 'active_generation' ? '活动依赖层' : '基础环境'}`
@@ -526,7 +555,7 @@ export default {
         if (epoch === this.readEpoch && response?.suc) this.environment = response.data
       } catch (_) { if (epoch === this.readEpoch) this.environment = { status: "failed", repairable: false } }
     },
-    async loadPlugins(refresh = false) {
+    async loadPlugins(refresh = false, silent = false) {
       if (this.readsPaused || this.componentDestroyed) return
       const epoch = this.readEpoch
       const previous = this.queuedPluginLoad
@@ -540,7 +569,7 @@ export default {
       }
       if (this.pluginLoadInFlight) return
       this.pluginLoadInFlight = true
-      this.loading = true; this.error = ""
+      this.loading = !silent; this.error = ""
       try {
         while (this.queuedPluginLoad && !this.componentDestroyed) {
           const request = this.queuedPluginLoad
@@ -555,6 +584,7 @@ export default {
             if (!response.suc) throw new Error(response.info || "NoneBot Registry 加载失败")
             this.plugins = response.data.items || []; this.total = Number(response.data.total || 0); this.registryMeta = response.data.registry || {}
             this.enabledAdapters = response.data.enabled_adapters || []
+            this.pluginsLoaded = true
             this.consumeRouteAction()
           } catch (error) {
             if (this.componentDestroyed || epoch !== this.readEpoch) return
@@ -708,7 +738,7 @@ export default {
       const actionKey = plugin.store_key || plugin.id
       if (this.transactionAction || this.applying || this.readsPaused || this.authExpired) return
       this.transactionAction = actionKey
-      const confirmed = await this.$confirmAction({ title: "清除失败记录", message: `${plugin.name} 本次操作未完成。清除记录后可以重新分析或安装。`, confirmButtonText: "清除记录", cancelButtonText: "保留", type: "warning" })
+      const confirmed = await this.$confirmAction({ title: "清除失败记录", message: `${plugin.name} 本次操作未完成。将清除整个待处理事务中的全部操作记录（包括同一事务中的其他插件或依赖操作），清除后可以重新分析或安装。`, confirmButtonText: "清除记录", cancelButtonText: "保留", type: "warning" })
       if (!confirmed) { this.transactionAction = ""; return }
       try {
         const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/transactions/cancel`, {})
@@ -762,6 +792,7 @@ export default {
 .environment-status { display: flex; align-items: flex-start; gap: 12px; margin: 12px 0; padding: 13px 14px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color-secondary); }.environment-status > i { margin-top: 2px; color: var(--success-color); font-size: 21px; }.environment-status > div { min-width: 0; flex: 1; }.environment-status strong { display: block; color: var(--text-color); }.environment-status p { margin: 4px 0 0; color: var(--text-color-secondary); font-size: 12px; line-height: 1.5; }.environment-status.is-warning { border-color: rgba(230,162,60,.45); }.environment-status.is-warning > i { color: var(--warning-color); }.environment-status.is-danger { border-color: rgba(245,108,108,.45); }.environment-status.is-danger > i { color: var(--danger-color); }
 .plugin-list { min-height: 320px; border-top: 1px solid var(--border-color); }
 .plugin-row { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(0, 2fr); gap: 18px; padding: 17px 4px; border-bottom: 1px solid var(--border-color); }
+.plugin-row.is-skeleton .plugin-main, .skeleton-body { display: flex; flex-direction: column; gap: 10px; }.skeleton-title { width: 55%; height: 18px; }.skeleton-module { width: 75%; }.skeleton-body .zx-skeleton { width: 90%; }.skeleton-body .zx-skeleton.is-short { width: 55%; }
 .plugin-main { min-width: 0; }.plugin-title-line { display: flex; min-width: 0; align-items: center; gap: 7px; }.plugin-title-line h2 { margin: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
 .module-line { margin-top: 4px; color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .plugin-main > p { margin: 9px 0; color: var(--text-color-secondary); line-height: 1.55; }.meta-line { display: flex; flex-wrap: wrap; gap: 14px; color: var(--text-color-secondary); font-size: 12px; }.meta-line i { margin-right: 4px; }
@@ -774,7 +805,17 @@ export default {
 .dependency-change { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(0, 2fr); gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border-color); }.dependency-change code { overflow-wrap: break-word; word-break: normal; } .dependency-change span { min-width: 0; overflow-wrap: anywhere; }.dependency-change span { color: var(--text-color-secondary); }.dependency-note, .muted { color: var(--text-color-secondary); font-size: 12px; }.confirmations { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; }
 .reason-item { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; overflow-wrap: anywhere; }.drawer-actions { position: absolute; right: 0; bottom: 0; left: 0; display: flex; justify-content: flex-end; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--border-color); background: var(--bg-color); }.detail-drawer h3 { margin: 20px 0 7px; font-size: 14px; }.detail-drawer p { color: var(--text-color-secondary); line-height: 1.65; }
 @media (max-width: 900px) { .store-toolbar { grid-template-columns: 1fr 1fr; }.plugin-row { grid-template-columns: 1fr; }.plugin-actions { justify-content: flex-end; } }
-@media (max-width: 680px) { .nonebot-store { padding: 14px; }.store-header { align-items: flex-start; }.store-header h1 { font-size: 20px; }.store-toolbar { grid-template-columns: 1fr; }.environment-status { flex-wrap: wrap; }.environment-status .el-button { width: 100%; }.plugin-title-line { flex-wrap: wrap; }.plugin-actions, .pending-actions { flex-wrap: wrap; justify-content: flex-start; }.dependency-change { grid-template-columns: 1fr; gap: 3px; }.analysis-drawer, .detail-drawer { padding-right: 16px; padding-left: 16px; } }
+.store-filters { display: contents; }.filter-toggle { display: none; }
+.filter-count { display: inline-block; min-width: 18px; height: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; color: #fff; background: var(--primary-color); font-size: 11px; line-height: 18px; text-align: center; box-sizing: border-box; }
+@media (max-width: 767px) {
+  .store-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+  .filter-toggle { display: inline-block; margin-left: 0; }
+  .filter-toggle.is-open { border-color: var(--primary-color); color: var(--primary-color); }
+  .store-filters { display: none; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 10px; }
+  .store-filters.is-open { display: grid; }
+  .store-filters .incompatible-toggle { grid-column: 1 / -1; }
+}
+@media (max-width: 680px) { .nonebot-store { padding: 14px; }.store-header { align-items: flex-start; }.store-header h1 { font-size: 20px; }.environment-status { flex-wrap: wrap; }.environment-status .el-button { width: 100%; }.plugin-title-line { flex-wrap: wrap; }.plugin-actions, .pending-actions { flex-wrap: wrap; justify-content: flex-start; }.dependency-change { grid-template-columns: 1fr; gap: 3px; }.analysis-drawer, .detail-drawer { padding-right: 16px; padding-left: 16px; } }
 .environment-details { margin: 12px 0 20px; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; }
 .environment-details summary, .repair-group summary { cursor: pointer; }
 .repair-group { padding: 16px 0; border-bottom: 1px solid var(--border-color); }

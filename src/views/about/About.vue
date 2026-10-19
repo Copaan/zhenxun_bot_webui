@@ -44,14 +44,15 @@
             <div class="advanced-options">
               <label>更新方式</label>
               <el-radio-group v-model="options.method" size="mini">
-                <el-radio-button label="download">下载包</el-radio-button>
+                <el-radio-button label="download" :disabled="options.source === 'aliyun'">下载包</el-radio-button>
                 <el-radio-button label="git">Git</el-radio-button>
               </el-radio-group>
               <label>更新源</label>
-              <el-radio-group v-model="options.source" size="mini">
+              <el-radio-group v-model="options.source" size="mini" @change="changeSource">
                 <el-radio-button label="github">GitHub</el-radio-button>
                 <el-radio-button label="aliyun">阿里云</el-radio-button>
               </el-radio-group>
+              <p v-if="options.source === 'aliyun'">阿里云源只支持 Git 方式；需要下载包时请切换到 GitHub。</p>
               <el-checkbox v-model="options.force">强制覆盖本地源码改动</el-checkbox>
               <p>强制模式仍会先创建备份，但可能覆盖未提交代码。</p>
             </div>
@@ -66,9 +67,7 @@
           <div class="version-card-title">
             <span class="component-icon" :class="component.key"><i :class="component.icon"></i></span>
             <div><h3>{{ component.name }}</h3><span>{{ component.source }}</span></div>
-            <el-tag size="mini" :type="component.blocked ? 'danger' : component.updateAvailable ? 'warning' : 'success'">
-              {{ component.blocked ? "已屏蔽" : component.updateAvailable ? "可更新" : "已是最新" }}
-            </el-tag>
+            <el-tag size="mini" :type="versionTagType(component)">{{ versionTagLabel(component) }}</el-tag>
           </div>
           <dl>
             <div><dt>当前版本</dt><dd :title="component.currentVersion">{{ component.currentVersion }}</dd></div>
@@ -80,7 +79,7 @@
             <span>{{ jobSourceLabel(jobFor(component.key)) }}</span>
           </div>
           <div v-if="component.key === 'webui' && !component.manifestAvailable" class="compatibility-note">
-            远端尚无版本清单，只显示 dist 提交摘要，暂不允许静默降级。
+            {{ officialSourceUnavailable ? "无法读取远端版本清单，暂不允许更新 WebUI。" : "远端尚无版本清单，只显示 dist 提交摘要，暂不允许更新 WebUI。" }}
           </div>
           <div v-else-if="component.key === 'webui' && !component.compatible" class="compatibility-note">
             远端 WebUI 与当前本体 API 版本不兼容，已阻止更新。
@@ -90,9 +89,12 @@
           </div>
           <div class="version-actions">
             <span>{{ component.ref ? `来源 ${component.ref}` : "官方仓库" }}</span>
-            <el-button v-if="isPendingUpdate(component.key)" type="primary" size="small" icon="el-icon-refresh-right" :loading="applyingJobId === jobFor(component.key).job_id" :disabled="Boolean(applyingJobId && applyingJobId !== jobFor(component.key).job_id)" @click="applyUpdate(jobFor(component.key))">
-              重启后应用
-            </el-button>
+            <span v-if="isPendingUpdate(component.key)" class="pending-actions">
+              <el-button size="small" :loading="cancellingJobId === jobFor(component.key).job_id" :disabled="Boolean(applyingJobId || cancellingJobId)" @click="cancelUpdate(jobFor(component.key))">取消</el-button>
+              <el-button type="primary" size="small" icon="el-icon-refresh-right" :loading="applyingJobId === jobFor(component.key).job_id" :disabled="Boolean(cancellingJobId || (applyingJobId && applyingJobId !== jobFor(component.key).job_id))" @click="applyUpdate(jobFor(component.key))">
+                重启后应用
+              </el-button>
+            </span>
             <el-button v-else type="primary" size="small" :loading="isUpdating(component.key)" :disabled="!canUpdate(component)" @click="startUpdate(component)">
               {{ updateButtonLabel(component) }}
             </el-button>
@@ -131,6 +133,7 @@
 <script>
 import logoUrl from "@/assets/image/logo.png"
 import { hasDirtyState } from "@/utils/dirty-state"
+import { reasonText } from "@/utils/plugin-operation"
 import { requestRestartWithRecovery } from "@/utils/restart-flow"
 import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 import BackupPanel from "./BackupPanel.vue"
@@ -141,6 +144,110 @@ const COMPONENT_META = {
   webui: { name: "WebUI", icon: "el-icon-monitor" },
 }
 
+/**
+ * 版本显示文本，读取不到的版本统一显示为“未知”
+ * @param {string} value 后端返回的版本
+ * @returns {string}
+ */
+function versionText(value) {
+  return !value || value === "unknown" ? "未知" : value
+}
+
+const RESTART_REASON_LABELS = {
+  plugin_change_requires_restart: "插件变更",
+  plugin_restart_required: "插件变更",
+  dependent_requires_restart: "依赖插件变更",
+  import_time_config_consumer_requires_restart: "插件启动期配置",
+  manual_dependencies_changed: "手动依赖变更",
+  ai_runtime_restart_required: "AI 运行配置",
+}
+
+const ENVIRONMENT_KEY_LABELS = { DB_URL: "数据库连接", HOST: "监听地址", PORT: "监听端口", DRIVER: "驱动", EXT_PATH: "扩展插件目录" }
+
+const FALLBACK_REASON_LABELS = {
+  resource_file_locked: "资源文件被占用，热更新未完成",
+  resource_render_drain_timeout: "资源仍在渲染中，热更新未完成",
+}
+
+const UPDATE_ERROR_LABELS = {
+  working_tree_dirty: "本地源码有未提交的改动。如确认覆盖，请在「高级设置」中勾选「强制覆盖本地源码改动」后重试",
+  health_check_failed_rolled_back: "新版本启动后健康检查未通过，已自动回滚到更新前的版本",
+  health_check_failed_rollback_failed: "新版本启动后健康检查未通过，且自动回滚失败，请从 data/update/backups 中的备份手动恢复",
+  update_interrupted: "更新任务被中断（进程已重启或退出），请重新发起更新",
+  update_in_progress: "已有更新任务正在进行",
+  pending_update_exists: "已有等待重启应用的更新，请先重启应用",
+  update_not_pending: "没有等待应用的更新",
+  release_not_found: "未找到对应的正式版发布",
+  release_blocked: "该正式版不比当前版本新或无法比较版本号，已禁止更新",
+  git_transport_failed: "连接 Git 仓库失败，请检查网络或切换更新源",
+  official_git_clone_failed: "拉取官方仓库失败",
+  archive_path_escape: "更新包包含非法路径，已拒绝",
+  archive_root_invalid: "更新包目录结构无效",
+  staged_package_incomplete: "更新包内容不完整",
+  webui_manifest_invalid: "WebUI 版本清单无效",
+  webui_api_incompatible: "WebUI 与当前本体 API 版本不兼容",
+  webui_assets_incomplete: "WebUI 文件不完整",
+  dependency_tool_unavailable: "找不到 uv，无法同步依赖",
+  dependency_sync_failed: "依赖同步失败",
+  project_root_mismatch: "更新包与当前项目目录不一致",
+  staged_path_invalid: "待应用的更新包路径无效",
+  pending_component_invalid: "待应用的更新组件无效",
+  backup_path_invalid: "更新备份路径无效",
+  invalid_job_id: "更新任务编号无效",
+  job_not_found: "未找到更新任务",
+  job_unreadable: "更新任务记录无法读取",
+  resource_install_state_invalid: "资源安装记录损坏",
+  resource_git_baseline_unavailable: "无法读取资源目录的 Git 基线",
+  resource_link_forbidden: "资源包包含符号链接，已拒绝",
+  resource_entry_limit: "资源包文件数量超出限制",
+  resource_special_file_forbidden: "资源包包含特殊文件，已拒绝",
+  resource_path_conflict: "资源路径冲突",
+  resource_font_missing: "资源包缺少字体文件",
+  resource_theme_missing: "资源包缺少主题文件",
+  resource_version_incompatible: "资源版本与当前本体不兼容",
+  resource_metadata_invalid: "资源元数据无效",
+  resource_overwrite_confirmation_required: "本地资源有改动，需要确认覆盖",
+  resource_target_changed: "资源文件在更新期间被修改",
+  resource_candidate_changed: "待安装的资源文件在更新期间被修改",
+  resource_rollback_blocked: "资源回滚被阻止",
+  resource_archive_limit: "资源包大小超出限制",
+  resource_archive_path_invalid: "资源包包含非法路径",
+  resource_archive_root_invalid: "资源包目录结构无效",
+}
+
+/**
+ * 待重启原因的显示文本，任务编号等内部标识不直接显示
+ * @param {string} reason 后端返回的待重启原因
+ * @returns {string}
+ */
+function restartReasonLabel(reason) {
+  const value = String(reason || "")
+  if (value.startsWith("update:")) return "版本更新"
+  if (value.startsWith("environment:")) {
+    const key = value.slice("environment:".length)
+    return ENVIRONMENT_KEY_LABELS[key] || `环境配置 ${key}`
+  }
+  if (RESTART_REASON_LABELS[value]) return RESTART_REASON_LABELS[value]
+  const text = reasonText(value)
+  return text !== value ? text.replace(/。$/, "") : "其他待重启修改"
+}
+
+/**
+ * 更新失败原因的显示文本，未收录的错误码原样显示
+ * @param {string} error 后端返回的错误码，可能带“:”或“: ”分隔的详情
+ * @returns {string}
+ */
+function updateErrorText(error) {
+  if (!error) return "未知错误"
+  const value = String(error)
+  const index = value.indexOf(":")
+  const code = index >= 0 ? value.slice(0, index) : value
+  const detail = index >= 0 ? value.slice(index + 1).trim() : ""
+  const label = UPDATE_ERROR_LABELS[code]
+  if (!label) return value
+  return detail ? `${label}（${detail}）` : label
+}
+
 export default {
   name: "AboutPage",
   components: { BackupPanel },
@@ -148,7 +255,7 @@ export default {
     return {
       logoUrl, checking: false, updateInfo: null, updateError: "",
       options: { channel: "main", method: "git", source: "aliyun", force: false },
-      jobs: {}, pollTimer: null, pollSequence: 0, restarting: false, applyingJobId: "", destroyed: false, statusStale: false, unsubscribeNetwork: null,
+      jobs: {}, pollTimer: null, pollSequence: 0, restarting: false, applyingJobId: "", cancellingJobId: "", destroyed: false, statusStale: false, unsubscribeNetwork: null,
       restartStatus: { launcher_managed: false, pending_restart: false, pending_count: 0, pending_reasons: [], pending_items: [] },
     }
   },
@@ -161,15 +268,13 @@ export default {
       const components = (this.updateInfo && this.updateInfo.components) || {}
       return ["bot", "resource", "webui"].map((key) => {
         const item = components[key] || {}
-        return { key, ...COMPONENT_META[key], currentVersion: item.current_version || "未知", latestVersion: item.latest_version || "未知", updateAvailable: Boolean(item.update_available), blocked: Boolean(item.blocked), blockReason: item.block_reason || "", manifestAvailable: item.manifest_available !== false, compatible: item.compatible !== false, ref: item.ref, source: "官方仓库" }
+        return { key, ...COMPONENT_META[key], currentVersion: versionText(item.current_version), latestVersion: versionText(item.latest_version), comparable: item.comparable !== false, updateAvailable: Boolean(item.update_available), blocked: Boolean(item.blocked), blockReason: item.block_reason || "", manifestAvailable: item.manifest_available !== false, compatible: item.compatible !== false, ref: item.ref, source: "官方仓库" }
       })
     },
+    officialSourceUnavailable() { return Boolean(this.updateInfo?.errors?.includes("official_source_unavailable")) },
     pendingReasonText() {
-      const labels = { DB_URL: "数据库连接", HOST: "监听地址", PORT: "监听端口", DRIVER: "驱动", EXT_PATH: "扩展插件目录" }
-      return (this.restartStatus.pending_reasons || []).map((reason) => {
-        const key = String(reason).split(":").pop()
-        return labels[key] || key
-      }).join("、") || "启动期配置已经保存"
+      const labels = [...new Set((this.restartStatus.pending_reasons || []).map(restartReasonLabel))]
+      return labels.join("、") || "启动期配置已经保存"
     },
   },
   mounted() {
@@ -218,6 +323,7 @@ export default {
       const actions = { install: "安装插件", update: "更新插件", uninstall: "卸载插件" }
       return actions[item.action] || "待应用修改"
     },
+    changeSource(source) { if (source === "aliyun") this.options.method = "git" },
     async checkUpdates(refresh) {
       this.checking = true; this.updateError = ""
       try {
@@ -233,13 +339,23 @@ export default {
       finally { this.checking = false }
     },
     jobFor(component) { return this.jobs[component] },
+    versionTagType(component) {
+      if (component.blocked) return "danger"
+      if (component.updateAvailable) return "warning"
+      return component.comparable ? "success" : "info"
+    },
+    versionTagLabel(component) {
+      if (component.blocked) return "已屏蔽"
+      if (component.updateAvailable) return "可更新"
+      return component.comparable ? "已是最新" : "版本未知"
+    },
     isPendingUpdate(component) { return this.jobFor(component)?.state === "pending_restart" },
-    isUpdating(component) { const job = this.jobFor(component); return Boolean(job && !["completed", "failed"].includes(job.state)) },
+    isUpdating(component) { const job = this.jobFor(component); return Boolean(job && !["completed", "failed", "cancelled"].includes(job.state)) },
     updateButtonLabel(component) { if (!component.updateAvailable) return "重新安装"; return component.key === "resource" ? "更新资源" : component.key === "webui" ? "更新并刷新" : "下载更新" },
     canUpdate(component) { if (component.blocked || this.isUpdating(component.key) || component.latestVersion === "未知") return false; return component.key !== "webui" || (component.manifestAvailable && component.compatible) },
     jobProgressStatus(job) { if (job.state === "failed") return "exception"; if (job.state === "completed") return "success"; return undefined },
     jobStateLabel(job) {
-      const labels = { queued: "等待执行", preparing: "正在下载并校验", staged: "更新包已就绪", pending_restart: job.fallback_reason ? "热更新受文件占用影响，等待重启应用" : job.restart_available ? "已下载，等待确认重启应用" : "已下载，等待手动重启应用", restart_requested: "正在重启并应用", applying: job.component === "resource" ? "正在热更新资源" : "正在应用更新", completed: job.apply_mode === "hot_reloaded" ? "资源已热更新" : "更新完成", failed: `更新失败：${job.error || "未知错误"}` }
+      const labels = { queued: "等待执行", preparing: "正在下载并校验", staged: "更新包已就绪", pending_restart: job.fallback_reason ? `${FALLBACK_REASON_LABELS[job.fallback_reason] || "资源热更新未完成"}，等待重启应用` : job.restart_available ? "已下载，等待确认重启应用" : "已下载，等待手动重启应用", restart_requested: "正在重启并应用", applying: job.component === "resource" ? "正在热更新资源" : "正在应用更新", verifying: "正在验证新版本", completed: job.apply_mode === "hot_reloaded" ? "资源已热更新" : "更新完成", cancelled: "已取消，暂存的更新文件已删除", failed: `更新失败：${updateErrorText(job.error)}` }
       return labels[job.state] || job.state
     },
     jobSourceLabel(job) {
@@ -295,6 +411,27 @@ export default {
         if (this.applyingJobId === job.job_id) this.applyingJobId = ""
       }
     },
+    /**
+     * 取消等待重启应用的更新，删除暂存文件并撤销待重启标记
+     * @param {object} job 更新任务
+     */
+    async cancelUpdate(job) {
+      if (!job?.job_id || this.cancellingJobId || this.applyingJobId) return
+      try { await this.$confirm("将删除已下载的更新文件，之后重启不会再应用这次更新。", "取消更新", { type: "warning", confirmButtonText: "取消更新", cancelButtonText: "保留" }) } catch (error) { return }
+      this.cancellingJobId = job.job_id
+      try {
+        const response = await this.postRequest(`${this.$root.prefix}/system/update/jobs/${job.job_id}/cancel`, {})
+        if (!response || !response.suc) throw new Error(response && response.info)
+        this.pollSequence += 1
+        if (this.pollTimer) window.clearTimeout(this.pollTimer)
+        this.pollTimer = null
+        this.$set(this.jobs, response.data.component, response.data)
+        sessionStorage.removeItem("zhenxun_update_job_id")
+        this.$message.success(response.info || "已取消待应用的更新。")
+        window.dispatchEvent(new Event("zhenxun-restart-status-changed"))
+      } catch (error) { this.$message.error(error.response?.data?.detail || error.message || "取消更新失败。") }
+      finally { this.cancellingJobId = "" }
+    },
     pollJob(jobId, immediate = false, retryCount = 0) {
       if (this.destroyed || document.hidden || isBusinessNetworkFrozen()) return
       if (this.pollTimer) window.clearTimeout(this.pollTimer)
@@ -305,7 +442,7 @@ export default {
           const response = await this.getRequest(`${this.$root.prefix}/system/update/jobs/${jobId}`, {}, { suppressErrorToast: true })
           if (!response || !response.suc) throw new Error(response && response.info)
           const job = response.data; this.$set(this.jobs, job.component, job)
-          if (!["completed", "failed", "pending_restart"].includes(job.state)) this.pollJob(jobId, false, 0)
+          if (!["completed", "failed", "pending_restart", "cancelled"].includes(job.state)) this.pollJob(jobId, false, 0)
           else if (job.state === "completed") { sessionStorage.removeItem("zhenxun_update_job_id"); this.$message.success(job.apply_mode === "hot_reloaded" ? "资源已热更新，无需重启。" : `${COMPONENT_META[job.component].name}更新完成。`); await this.checkUpdates(true); await this.loadRestartStatus() }
           else if (job.state === "failed") { sessionStorage.removeItem("zhenxun_update_job_id"); this.$message.error(this.jobStateLabel(job)) }
         } catch (error) {
@@ -338,7 +475,7 @@ export default {
 dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; } dl div { min-width: 0; } dt { color: var(--text-color-secondary); font-size: 12px; } dd { overflow: hidden; margin: 5px 0 0; font-family: Consolas, monospace; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .job-progress { margin: 0 0 14px; }.job-progress > span, .compatibility-note { display: block; margin-top: 6px; color: var(--text-color-secondary); font-size: 12px; line-height: 1.5; }.compatibility-note { margin: 0 0 14px; color: #b7791f; }
 .blocked-note { color: var(--danger-color, #e05260); }
-.version-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border-color-light); }.version-actions span { overflow: hidden; color: var(--text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.version-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border-color-light); }.pending-actions { display: flex; flex: none; gap: 8px; }.version-actions > span:not(.pending-actions) { overflow: hidden; color: var(--text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .about-content { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 28px; padding: 30px 0; }.about-content article { min-width: 0; }.about-content p { color: var(--text-color-secondary); line-height: 1.75; }.about-content a { color: var(--primary-color); text-decoration: none; }.link-row { display: flex; flex-wrap: wrap; gap: 16px; }
 footer { padding-top: 18px; border-top: 1px solid var(--border-color-light); color: var(--text-color-secondary); text-align: center; font-size: 13px; }
 @media (max-width: 1050px) { .version-grid { grid-template-columns: 1fr 1fr; }.about-content { grid-template-columns: 1fr 1fr; } }

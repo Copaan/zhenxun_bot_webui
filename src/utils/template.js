@@ -8,6 +8,19 @@ export function getCssVar(name) {
   return value || "#000000" // 如果获取不到值，返回黑色作为默认值
 }
 
+/**
+ * 缩写图表坐标轴数值，千以上用 k、万以上用 w 表示
+ *
+ * @param {number} value 原始数值
+ * @returns {string|number} 缩写后的数值
+ */
+export function abbreviateNumber(value) {
+  const abs = Math.abs(value)
+  if (abs >= 10000) return `${+(value / 10000).toFixed(1)}w`
+  if (abs >= 1000) return `${+(value / 1000).toFixed(1)}k`
+  return value
+}
+
 // 获取当前主题下的颜色配置
 function getThemeColors() {
   return {

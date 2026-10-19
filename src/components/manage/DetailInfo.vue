@@ -211,12 +211,15 @@
               multiple
               class="w-full"
               popper-class="theme-select"
+              @remove-tag="restoreSuperBlock"
             >
               <el-option
                 v-for="n in tmpAllPluginList"
                 :label="n.plugin_name"
                 :value="n.module"
                 :key="n.module"
+                :disabled="n.superBlock"
+                :title="n.superBlock ? '仅超级用户可解除' : ''"
               >
               </el-option>
             </el-select>
@@ -269,6 +272,7 @@ export default {
       detailType: null,
       allPluginList: [],
       tmpAllPluginList: [],
+      superBlockList: [],
       likePluginChart: null,
       destroyed: false,
     }
@@ -352,6 +356,15 @@ export default {
         }
       }).finally(() => loading.close())
     },
+    /**
+     * 阻止移除超级用户禁用的插件标签
+     * @param {string} module 被移除的插件模块名
+     */
+    restoreSuperBlock(module) {
+      if (!this.superBlockList.includes(module)) return
+      this.data.plugin_status.push(module)
+      this.$message.warning("该插件由超级用户禁用，仅超级用户可解除")
+    },
     processFriendData(data) {
       data.name = data.remark || data.nickname
       this.data = data
@@ -365,9 +378,13 @@ export default {
       const sbList = data.close_plugins
         .filter((e) => e.is_super_block)
         .map((e) => e.module)
+      this.superBlockList = sbList
       this.tmpAllPluginList = this.allPluginList.map((e) => ({
         ...e,
-        plugin_name: sbList.includes(e.module) ? `${e.plugin_name}(超级用户禁用)` : e.plugin_name,
+        superBlock: sbList.includes(e.module),
+        plugin_name: sbList.includes(e.module)
+          ? `${e.plugin_name}(超级用户禁用，仅超级用户可解除)`
+          : e.plugin_name,
       }))
 
       this.data = data

@@ -268,7 +268,8 @@ export default {
       this.analyticsObserver.observe(this.$refs.analyticsAnchor)
     },
     goTo(route) {
-      if (this.$route.path !== route) this.$router.push(route)
+      if (this.$route.path === route) this.loadOverview(true)
+      else this.$router.push(route)
     },
     platformName(bot) {
       if (bot.platform === "onebot_v11") return "OneBot V11"

@@ -122,8 +122,6 @@ export const restartRecoveryState = () => {
 
 export const startRestartRecovery = ({
   bootId,
-  launcherBootId = "",
-  restartId = "",
   accessUrls = [],
   accessTargets = [],
   preferredUrl = "",
@@ -158,8 +156,6 @@ export const startRestartRecovery = ({
   )
   const state = {
     bootId,
-    launcherBootId,
-    restartId,
     sessionId: window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     sourceOrigin,
     preferredKind,
@@ -193,9 +189,7 @@ export const recoverySessionIsCurrent = (state) => {
 export const recoveryStatusMatches = (state, payload) => {
   const data = payload?.data
   return Boolean(payload?.suc !== false && data?.boot_id && data.boot_id !== state.bootId &&
-    !data.transaction_verification_pending &&
-    (!state.launcherBootId || data.launcher_boot_id === state.launcherBootId) &&
-    (!state.restartId || data.restart_id === state.restartId))
+    !data.transaction_verification_pending)
 }
 
 export const recoveryProbeTargets = (state, sourceOrigin = window.location.origin) => {

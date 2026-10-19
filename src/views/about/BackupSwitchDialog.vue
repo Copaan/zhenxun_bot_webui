@@ -1,6 +1,6 @@
 <template>
   <el-dialog title="切换数据库" :visible="visible" custom-class="backup-dialog" top="5vh" width="min(560px, 94vw)" :close-on-click-modal="false" @close="$emit('close')">
-    <p class="backup-hint">把当前数据库的全部数据复制到一个新的空数据库，然后让 Bot 改用新数据库。原数据库保持不变，导入失败时自动切回。</p>
+    <p class="backup-hint">把当前数据库中已加载插件的全部数据表复制到一个新的空数据库（未加载插件的表不包含在内），然后让 Bot 改用新数据库。原数据库保持不变，导入失败时自动切回。</p>
     <el-form label-position="top" size="small" @submit.native.prevent>
       <el-form-item label="数据库类型">
         <el-radio-group v-model="database.mode" @change="changeMode">

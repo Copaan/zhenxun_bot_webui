@@ -28,7 +28,11 @@
       <el-button type="primary" icon="el-icon-refresh" @click="loadConfiguration">重新加载</el-button>
     </section>
 
-    <el-tabs v-else v-model="activeSection" class="ai-tabs">
+    <template v-else>
+    <el-select v-model="activeSection" class="mobile-section-select" aria-label="配置分区">
+      <el-option v-for="item in sectionOptions" :key="item.name" :label="item.label" :value="item.name" />
+    </el-select>
+    <el-tabs v-model="activeSection" class="ai-tabs">
       <el-tab-pane label="服务商与模型" name="providers">
         <div class="provider-workbench">
           <aside class="provider-sidebar">
@@ -67,6 +71,8 @@
                 <el-input v-model="slot.value" autocomplete="new-password" placeholder="输入 API Key" show-password @input="markProviderDirty" />
                 <el-button type="text" icon="el-icon-delete" class="danger-text" @click="removeKey(index)">删除</el-button>
               </div>
+              <div v-if="operationError('api_key')" class="field-error" role="alert">{{ operationError("api_key") }}</div>
+              <p v-else-if="!providerHasKey" class="secret-hint"><i class="el-icon-info"></i> 未填写 API Key 也可以保存服务商和模型，但调用需要鉴权的服务时会失败。</p>
             </section>
 
             <el-collapse class="advanced-collapse">
@@ -82,7 +88,6 @@
               <el-tooltip :disabled="providerDraftStatus.code === 'ready'" :content="providerDraftStatus.reason" placement="top">
                 <span><el-button icon="el-icon-connection" :loading="discovering" :disabled="providerDraftStatus.code !== 'ready'" @click="discoverModels">测试连接并发现模型</el-button></span>
               </el-tooltip>
-              <el-button type="primary" icon="el-icon-check" :loading="saving === 'provider'" :disabled="!providerDirty" @click="saveProvider">保存服务商</el-button>
             </div>
             <el-alert
               v-if="selectedProbeResult"
@@ -94,7 +99,7 @@
             />
 
             <section class="models-section">
-              <div class="subheading"><div><h3>模型</h3><p>模型列表与服务商连接参数独立保存。</p></div><el-button size="small" icon="el-icon-plus" @click="openModelEditor()">手动添加</el-button></div>
+              <div class="subheading"><div><h3>模型</h3><p>增删或编辑模型后，与服务商参数一起保存。</p></div><el-button size="small" icon="el-icon-plus" @click="openModelEditor()">手动添加</el-button></div>
               <el-input v-model="modelSearch" clearable prefix-icon="el-icon-search" placeholder="搜索模型" class="model-search" />
               <div class="model-list">
                 <div v-for="model in filteredModels" :key="model.model_name" class="model-row">
@@ -103,20 +108,16 @@
                 </div>
                 <div v-if="!filteredModels.length" class="empty-copy">没有匹配的模型</div>
               </div>
-              <div class="models-save">
-                <span v-if="modelsDirty">模型列表有未保存修改</span>
-                <span v-if="providerDraft.isNew">模型将随服务商一并保存</span>
-                <el-button v-else type="primary" icon="el-icon-check" :loading="saving === 'models'" :disabled="!modelsDirty" @click="saveModels">保存模型列表</el-button>
-              </div>
             </section>
+            <SectionAction :dirty="providerDirty || modelsDirty" :saving="saving === 'provider'" :invalid="!providerDraft.name.trim()" :effect="providerSaveEffect" reset-label="撤销修改" @reset="resetProvider" @save="saveProvider" />
           </main>
           <main v-else class="provider-empty"><i class="el-icon-connection"></i><p>选择或添加一个 AI 服务商</p></main>
         </div>
       </el-tab-pane>
 
       <el-tab-pane label="默认模型" name="default_models">
-        <section class="settings-section"><div class="section-title"><div><h2>默认任务模型</h2><p>只显示适合对应任务的已配置模型和路由组。</p></div></div>
-          <el-form label-position="top" class="default-grid"><el-form-item v-for="task in defaultTasks" :key="task.key" :label="task.label" :error="operationError(`default_models.${task.key}`)"><el-select v-model="sectionDrafts.default_models[task.key]" clearable filterable placeholder="未配置" class="full-control" @change="markSectionDirty('default_models')"><el-option label="未配置" :value="''" /><el-option-group label="模型"><el-option v-for="model in modelsForTask(task.key)" :key="model.fullName" :label="model.fullName" :value="model.fullName" /></el-option-group><el-option-group label="路由组"><el-option v-for="group in groupNames" :key="group" :label="group" :value="group" /></el-option-group></el-select><el-button type="text" :disabled="!sectionDrafts.default_models[task.key]" @click="$set(sectionDrafts.default_models, task.key, null); markSectionDirty('default_models')">清除</el-button></el-form-item></el-form>
+        <section class="settings-section"><div class="section-title"><div><h2>默认任务模型</h2><p>只显示适合对应任务的已配置模型，以及所含模型全部适合该任务的路由组。</p></div></div>
+          <el-form label-position="top" class="default-grid"><el-form-item v-for="task in defaultTasks" :key="task.key" :label="task.label" :error="operationError(`default_models.${task.key}`)"><el-select :value="sectionDrafts.default_models[task.key]" clearable filterable placeholder="未配置" class="full-control" @change="setDefaultModel(task.key, $event)"><el-option-group label="模型"><el-option v-for="model in modelsForTask(task.key)" :key="model.fullName" :label="model.fullName" :value="model.fullName" /></el-option-group><el-option-group label="路由组"><el-option v-for="group in groupsForTask(task.key)" :key="group" :label="group" :value="group" /></el-option-group></el-select></el-form-item></el-form>
         </section><SectionAction :dirty="isSectionDirty('default_models')" :saving="saving === 'default_models'" effect="保存后立即热加载" @reset="resetSection('default_models')" @save="saveSection('default_models')" />
       </el-tab-pane>
 
@@ -190,24 +191,22 @@
       </el-tab-pane>
 
       <el-tab-pane v-for="tab in schemaTabs" :key="tab.name" :label="tab.label" :name="tab.name">
-        <SettingsLayout v-if="tab.name === 'advanced'" v-model="advancedCategory" :query="advancedSearch" :groups="advancedGroups" @search="advancedSearch = $event">
-          <section v-for="group in advancedGroups" v-show="advancedSearch.trim() ? group.count > 0 : advancedCategory === group.key" :key="group.key">
-            <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-tag type="success" size="mini">保存后热加载</el-tag></header>
-            <div v-for="(field, index) in group.fields" v-show="advancedMatches(field)" :key="field.path">
+        <SettingsLayout v-model="settingsCategory[tab.name]" :query="settingsSearch[tab.name]" :groups="settingGroups[tab.name]" @search="settingsSearch[tab.name] = $event">
+          <section v-for="group in settingGroups[tab.name]" v-show="settingsSearch[tab.name].trim() ? group.count > 0 : settingsCategory[tab.name] === group.key" :key="group.key">
+            <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-tag :type="group.restart ? 'warning' : 'success'" size="mini">{{ group.restart ? "部分设置需重启" : "保存后热加载" }}</el-tag></header>
+            <div v-for="(field, index) in group.fields" v-show="settingMatches(tab.name, field)" :key="field.path">
               <h4 v-if="field.section && (index === 0 || group.fields[index - 1].section !== field.section)" class="advanced-provider-heading">{{ field.section }}</h4>
-              <SchemaField presentation="settings" :value="advancedValue(field.segments)" :schema="field.schema" :root-schema="schema" :label="field.label" :path="field.path" :ui="field.ui" :query="advancedSearch" :issues="advancedIssues" @input="updateAdvancedField(field.segments, $event)">
-                <template #meta><span v-if="advancedFieldChanged(field.segments)" class="advanced-modified">未保存修改</span></template>
+              <SchemaField presentation="settings" :value="settingValue(tab.name, field)" :schema="field.schema" :root-schema="schema" :label="field.label" :path="field.path" :ui="settingUi(tab.name, field)" :query="settingsSearch[tab.name]" :issues="settingIssues(tab.name)" @input="updateSetting(tab.name, field, $event)">
+                <template #meta><el-tag v-if="field.ui.restart" size="mini" type="warning" class="setting-restart">重启后生效</el-tag><span v-if="settingChanged(tab.name, field)" class="advanced-modified">未保存修改</span></template>
               </SchemaField>
             </div>
             <p v-if="group.key === 'client_settings'" class="advanced-proxy-note">代理由统一网络策略管理。<el-button type="text" @click="$router.push('/network-proxy')">打开网络代理设置</el-button></p>
           </section>
-          <template #footer><div class="save-description"><strong>{{ advancedChangeCount ? advancedChangeCount + ' 项未保存修改' : '没有未保存的修改' }}</strong><span v-if="advancedChangeCount">保存本页全部分类，随后热加载</span></div><el-button :disabled="!isSectionDirty('advanced') || Boolean(saving)" @click="resetAdvanced">撤销修改</el-button><el-button type="primary" :disabled="!isSectionDirty('advanced')" :loading="saving === 'advanced'" @click="saveAdvanced">保存高级设置</el-button></template>
+          <template #footer><div class="save-description"><strong>{{ settingChangeCount(tab.name) ? settingChangeCount(tab.name) + " 项未保存修改" : "没有未保存的修改" }}</strong><span v-if="settingChangeCount(tab.name)">保存本页全部分类，{{ tab.effect }}</span></div><el-button :disabled="!isSectionDirty(tab.name) || Boolean(saving)" @click="resetSettings(tab.name)">撤销修改</el-button><el-button type="primary" :disabled="!isSectionDirty(tab.name)" :loading="saving === tab.name" @click="saveSettings(tab.name)">{{ tab.saveLabel }}</el-button></template>
         </SettingsLayout>
-        <section v-else class="settings-section"><div class="section-title"><div><h2>{{ tab.title }}</h2><p>{{ tab.description }}</p></div><el-tag v-if="tab.name === 'sandbox'" size="small" type="warning">部分设置需要重启</el-tag></div>
-          <SchemaForm v-if="sectionSchema(tab.name)" :key="`${tab.name}-${revision}`" v-model="sectionDrafts[tab.name]" :schema="sectionSchema(tab.name)" :root-schema="schema" :field-ui="sectionFieldUi(tab.name)" :issues="operationIssues" @change="markSectionDirty(tab.name)" @validity-change="setSectionValidity(tab.name, $event)" />
-        </section><SectionAction v-if="tab.name !== 'advanced'" :dirty="isSectionDirty(tab.name)" :saving="saving === tab.name" :invalid="sectionInvalid(tab.name)" :effect="tab.effect" @reset="resetSection(tab.name)" @save="saveSection(tab.name)" />
       </el-tab-pane>
     </el-tabs>
+    </template>
 
     <el-dialog title="修复失效引用" :visible.sync="repairVisible" width="min(720px, 94vw)" append-to-body>
       <p>保留服务商、密钥和有效路由。只清除以下失效引用；已有草稿会保留。</p>
@@ -224,7 +223,7 @@
     <el-dialog title="发现模型" :visible.sync="discoveryDialog" width="min(680px, 92vw)" append-to-body>
       <el-input v-model="discoverySearch" clearable prefix-icon="el-icon-search" placeholder="筛选远端模型" />
       <el-checkbox-group v-model="selectedDiscovered" class="discovery-list"><el-checkbox v-for="name in filteredDiscovered" :key="name" :label="name">{{ name }}</el-checkbox></el-checkbox-group>
-      <span slot="footer"><span class="dialog-note">发现 {{ discoveredModels.length }} 个模型</span><el-button icon="el-icon-close" @click="discoveryDialog = false">取消</el-button><el-button type="primary" icon="el-icon-plus" :loading="saving === 'discovered-models'" :disabled="!selectedDiscovered.length || Boolean(saving)" @click="addDiscoveredModels">添加并保存</el-button></span>
+      <span slot="footer"><span class="dialog-note">发现 {{ discoveredModels.length }} 个模型</span><el-button icon="el-icon-close" @click="discoveryDialog = false">取消</el-button><el-button type="primary" icon="el-icon-plus" :disabled="!selectedDiscovered.length" @click="addDiscoveredModels">添加到模型列表</el-button></span>
     </el-dialog>
   </div>
 </template>
@@ -232,26 +231,28 @@
 <script>
 import SettingsLayout from "@/components/config/SettingsLayout.vue"
 import SchemaField from "@/components/config/SchemaField.vue"
-import { advancedSettingGroups, valueAt, updateAt } from "@/components/config/settings-ui"
+import { advancedSettingGroups, aiSectionGroups, valueAt, updateAt } from "@/components/config/settings-ui"
 import { fieldMatches, validateField } from "@/components/config/schema-utils"
-import SchemaForm from "@/components/config/SchemaForm.vue"
 import StoreTemplate from "@/components/store/StoreTemplate.vue"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 import { localLogin } from "@/utils/local-login"
-import { removeRoutingGroup } from "@/utils/ai-routing"
+import { removeRoutingGroup, routingGroupsForModels } from "@/utils/ai-routing"
 
 const clone = (value) => JSON.parse(JSON.stringify(value ?? null))
 const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`
 const emptyModel = () => ({ model_name: "", is_available: true, temperature: null, max_output_tokens: null, api_type: null, endpoint: null, task_type: null, path_prefix: null, max_input_tokens: null, reasoning_effort: null })
 
+const TASK_TYPES = { embedding: ["embedding"], rerank: ["rerank"], image: ["image_generation"], tts: ["tts"] }
+const SECTION_KEYS = { context: "context_settings", agent: "agent_settings", sandbox: "sandbox" }
+
 const SectionAction = {
-  props: { dirty: Boolean, saving: Boolean, invalid: Boolean, effect: String },
+  props: { dirty: Boolean, saving: Boolean, invalid: Boolean, effect: String, invalidText: { type: String, default: "请先修正表单错误" }, resetLabel: { type: String, default: "撤销本区修改" } },
   render(h) {
     return h("div", { class: "section-action" }, [
-      h("span", this.invalid ? "请先修正表单错误" : this.effect),
-      h("el-button", { props: { icon: "el-icon-refresh-left", disabled: !this.dirty }, on: { click: () => this.$emit("reset") } }, "撤销本区修改"),
+      h("span", this.invalid ? this.invalidText : this.effect),
+      h("el-button", { props: { icon: "el-icon-refresh-left", disabled: !this.dirty }, on: { click: () => this.$emit("reset") } }, this.resetLabel),
       h("el-button", { props: { type: "primary", icon: "el-icon-check", loading: this.saving, disabled: !this.dirty || this.invalid }, on: { click: () => this.$emit("save") } }, "保存"),
     ])
   },
@@ -259,35 +260,71 @@ const SectionAction = {
 
 export default {
   name: "AIConfiguration",
-  components: { SchemaForm, SchemaField, SettingsLayout, StoreTemplate, SectionAction },
+  components: { SchemaField, SettingsLayout, StoreTemplate, SectionAction },
   data() {
     return {
-      advancedCategory: "client_settings", advancedSearch: "", advancedLocalIssues: [], repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
+      settingsCategory: { context: "llm_summary", agent: "loop", sandbox: "runtime", advanced: "client_settings" }, settingsSearch: { context: "", agent: "", sandbox: "", advanced: "" }, settingsLocalIssues: {}, repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
       loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, apiTypes: [], defaultApiBases: {}, discoveryApiTypes: [], providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
       providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, sandbox: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
       discovering: false, discoveryDialog: false, discoveredModels: [], selectedDiscovered: [], discoverySearch: "", providerProbeResults: {}, modelDialog: false, modelDraft: emptyModel(), modelEditIndex: null, testingModelKey: "",
       personaLoading: false, personaSaving: false, personaAvailable: null, personaError: "", personaRevision: "", personaDraft: { name: "", prompt: "", style: "", enabled: true }, personaOriginal: null, personaToneText: "", personaDialogueText: "", personaDirty: false,
       defaultTasks: [{ key: "chat", label: "对话" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
       schemaTabs: [
-        { name: "context", label: "上下文", title: "上下文管理", description: "控制对话总结、多模态窗口和工具结果修剪。", effect: "保存后立即热加载" },
-        { name: "agent", label: "Agent", title: "Agent 执行策略", description: "设置工具循环、并行调用、反思与人工介入。", effect: "保存后立即热加载" },
-        { name: "sandbox", label: "沙箱", title: "沙箱运行环境", description: "沙箱开关和驱动需要重启，镜像与清理参数影响新会话。", effect: "部分设置在新会话或重启后生效" },
-        { name: "advanced", label: "高级设置", title: "客户端与厂商高级设置", description: "网络重试、调试日志及厂商专属行为。", effect: "保存后立即热加载" },
+        { name: "context", label: "上下文", saveLabel: "保存上下文设置", effect: "保存后立即热加载" },
+        { name: "agent", label: "Agent", saveLabel: "保存 Agent 设置", effect: "保存后立即热加载" },
+        { name: "sandbox", label: "沙箱", saveLabel: "保存沙箱设置", effect: "部分设置在新会话或重启后生效" },
+        { name: "advanced", label: "高级设置", saveLabel: "保存高级设置", effect: "保存后立即热加载" },
       ],
     }
   },
   computed: {
+    /**
+     * 移动端分区下拉框的选项，与标签页一一对应
+     * @returns {{ name: string, label: string }[]} 分区名称与标题
+     */
+    sectionOptions() {
+      return [
+        { name: "providers", label: "服务商与模型" },
+        { name: "default_models", label: "默认模型" },
+        { name: "model_groups", label: "模型路由" },
+        { name: "persona", label: "AI人设" },
+        { name: "chat_plugins", label: "AI聊天" },
+        ...this.schemaTabs.map(({ name, label }) => ({ name, label })),
+      ]
+    },
     dirtyCount() { return Number(this.providerDirty) + Number(this.modelsDirty) + Number(this.personaDirty) + Object.values(this.dirtySections).filter(Boolean).length },
     filteredProviders() { const key = this.providerSearch.trim().toLowerCase(); return this.providers.filter((item) => `${item.name} ${item.api_type}`.toLowerCase().includes(key)) },
     filteredModels() { const key = this.modelSearch.trim().toLowerCase(); return (this.providerDraft?.models || []).filter((item) => item.model_name.toLowerCase().includes(key)) },
-    groupNames() { return this.groupRows.map((item) => item.name.trim()).filter(Boolean) },
     allModels() { return this.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.name, fullName: `${provider.name}/${model.model_name}` }))) },
     filteredRouteGroups() { const key = this.routeSearch.trim().toLowerCase(); return this.groupRows.filter((item) => !key || item.name.toLowerCase().includes(key)) },
     selectedRouteGroup() { return this.groupRows.find((item) => item.clientId === this.selectedRouteGroupId) || null },
     filteredDiscovered() { const key = this.discoverySearch.trim().toLowerCase(); return this.discoveredModels.filter((item) => item.toLowerCase().includes(key)) },
-    advancedGroups() { return advancedSettingGroups(this.schema, this.sectionDrafts.advanced || {}).map(group => ({ ...group, count: group.fields.filter(this.advancedMatches).length })) },
-    advancedChangeCount() { return this.advancedGroups.reduce((count, group) => count + group.fields.filter(field => this.advancedFieldChanged(field.segments)).length, 0) },
-    advancedIssues() { return [...this.advancedLocalIssues, ...this.operationIssues.map(issue => ({ ...issue, path: String(issue.path || '').replace(/^(advanced|value)\./, '') }))] },
+    /**
+     * 上下文、Agent、沙箱与高级设置各分区的设置分组，按依赖开关隐藏不可用的字段
+     * @returns {Object<string, object[]>} 分区名称到设置分组的映射
+     */
+    settingGroups() {
+      return Object.fromEntries(this.schemaTabs.map(({ name }) => {
+        const draft = this.sectionDrafts[name] || {}
+        const groups = name === "advanced" ? advancedSettingGroups(this.schema, draft) : aiSectionGroups(name, this.sectionSchema(name), this.schema, draft)
+        return [name, groups.map((group) => {
+          const fields = group.fields.filter((field) => !field.ui.requires || valueAt(draft, field.ui.requires) === true)
+          return { ...group, fields, count: fields.filter((field) => this.settingMatches(name, field)).length }
+        })]
+      }))
+    },
+    /**
+     * 对话类模型与路由组选项，供总结模型等字段选择
+     * @returns {{ value: string, label: string }[]} 选项，空值表示使用默认对话模型
+     */
+    chatModelOptions() { return [{ value: "", label: "使用默认对话模型" }, ...this.modelsForTask("chat").map((model) => ({ value: model.fullName, label: model.fullName })), ...this.groupsForTask("chat").map((group) => ({ value: group, label: `${group}（路由组）` }))] },
+    providerHasKey() { return Boolean(this.providerDraft?.api_key_slots.some((slot) => String(slot.value || "").trim())) },
+    providerSaveEffect() {
+      if (this.providerDraft?.isNew) return "服务商参数、密钥和模型列表将一起保存"
+      if (this.providerDirty && this.modelsDirty) return "服务商参数与模型列表均有修改，将一起保存并热加载"
+      if (this.modelsDirty) return "模型列表有未保存修改，保存后热加载"
+      return this.providerDirty ? "服务商参数有未保存修改，保存后热加载" : "保存后立即热加载"
+    },
     providerDiscoverySupported() { return Boolean(this.providerDraft && this.discoveryApiTypes.includes(this.providerDraft.api_type)) },
     providerDraftStatus() {
       if (!this.providerDraft) return { code: "unavailable", label: "状态待确认", type: "info", reason: "请先选择服务商" }
@@ -381,7 +418,7 @@ export default {
       finally { this.loading = false }
     },
     applyConfiguration(data, preferredName = "") {
-      this.advancedLocalIssues = []
+      this.settingsLocalIssues = {}
       this.revision = data.revision; this.schema = data.schema || {}; this.apiTypes = data.api_types || []; this.defaultApiBases = data.default_api_bases || {}; this.discoveryApiTypes = data.discovery_api_types || []; this.providers = clone(data.providers || []); this.validationIssues = data.validation_issues || []; this.operationIssues = []
       this.originalSections = clone(data.sections || {}); this.sectionDrafts = clone(data.sections || {}); this.dirtySections = {}; this.invalidSections = {}; this.groupRows = this.groupsToRows(this.sectionDrafts.model_groups); this.selectedRouteGroupId = this.groupRows.some((item) => item.clientId === this.selectedRouteGroupId) ? this.selectedRouteGroupId : this.groupRows[0]?.clientId || ""; this.routingIssues = []
       const target = preferredName || this.selectedProviderName; this.selectedProviderName = this.providers.some((item) => item.name === target) ? target : this.providers[0]?.name || ""
@@ -440,14 +477,18 @@ export default {
     handleApiTypeChange(value) { if (!this.providerDraft.api_base && this.defaultApiBases[value]) this.providerDraft.api_base = this.defaultApiBases[value]; this.markProviderDirty() },
     addKey() { this.providerDraft.api_key_slots.push({ value: "", clientId: uid() }); this.markProviderDirty() },
     removeKey(index) { this.providerDraft.api_key_slots.splice(index, 1); this.markProviderDirty() },
-    providerPayload({ includeModels = false } = {}) { return { expected_revision: this.revision, name: this.providerDraft.name.trim(), api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base?.trim() || null, timeout: this.providerDraft.timeout, temperature: this.providerDraft.temperature, max_output_tokens: this.providerDraft.max_output_tokens, api_keys: this.providerDraft.api_key_slots.map((slot) => String(slot.value || "").trim()).filter(Boolean), models: this.providerDraft.isNew || includeModels ? this.providerDraft.models.map(({ capabilities, ...model }) => model) : null } },
-    async saveProvider(options = {}) {
-      if (this.saving) return false
-      const includeModels = Boolean(options?.includeModels)
-      this.saving = options?.savingKey || "provider"
+    providerPayload({ includeModels = false } = {}) { return { expected_revision: this.revision, name: this.providerDraft.name.trim(), api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base?.trim() || null, timeout: this.providerDraft.timeout, temperature: this.providerDraft.temperature, max_output_tokens: this.providerDraft.max_output_tokens, api_keys: this.providerDraft.api_key_slots.map((slot) => String(slot.value || "").trim()).filter(Boolean), models: this.providerDraft.isNew || includeModels ? this.providerDraft.models.map(({ capabilities, capability_source, ...model }) => model) : null } },
+    /**
+     * 一次保存服务商参数、密钥与模型列表；模型列表未修改时不提交模型
+     * @returns {Promise<boolean>} 是否保存成功
+     */
+    async saveProvider() {
+      if (this.saving || !this.providerDraft) return false
+      const includeModels = this.modelsDirty || this.providerDraft.isNew
+      this.saving = "provider"
       try {
         const { models, ...fields } = clone(this.providerDraft)
-        const submitted = { provider: JSON.stringify(fields), models: includeModels || fields.isNew ? JSON.stringify(models) : undefined }
+        const submitted = { provider: JSON.stringify(fields), models: includeModels ? JSON.stringify(models) : undefined }
         const path = this.providerDraft.isNew ? "/ai/providers" : `/ai/providers/${encodeURIComponent(this.selectedProviderName)}`
         const payload = this.providerPayload({ includeModels })
         const response = this.providerDraft.isNew ? await this.aiPost(`${this.$root.prefix}${path}`, payload) : await this.aiPut(`${this.$root.prefix}${path}`, payload)
@@ -457,6 +498,13 @@ export default {
         return true
       } catch (error) { this.captureOperationError(error, "服务商保存失败。"); return false }
       finally { this.saving = "" }
+    },
+    /** 撤销当前服务商的未保存修改；新建中的服务商回到列表中的第一个服务商 */
+    resetProvider() {
+      if (this.saving) return
+      if (this.providerDraft?.isNew) this.selectedProviderName = this.providers[0]?.name || ""
+      this.providerDirty = false; this.modelsDirty = false; this.operationIssues = []
+      this.resetProviderDraft(); this.invalidateProbeResults(); this.syncDirty()
     },
     async removeProvider() {
       if (this.saving) return
@@ -490,7 +538,7 @@ export default {
       }
       return states[provider.discovery_status] || { label: "状态待确认", type: "info" }
     },
-    async addDiscoveredModels() {
+    addDiscoveredModels() {
       const exists = new Set(this.providerDraft.models.map((item) => item.model_name))
       let added = 0
       this.selectedDiscovered.forEach((name) => {
@@ -500,21 +548,24 @@ export default {
         }
       })
       this.modelsDirty = this.modelsDirty || added > 0
-      if (added) this.invalidateProbeResults()
       this.syncDirty()
-      const saved = await this.saveProvider({ includeModels: true, savingKey: "discovered-models" })
-      if (!saved) return
       this.discoveryDialog = false
       this.selectedDiscovered = []
+      this.$message.success(added ? `已添加 ${added} 个模型，保存后生效。` : "所选模型已在列表中。")
     },
-    openModelEditor(model = null, index = null) { this.modelDraft = model ? { ...clone(model), capabilities: undefined } : emptyModel(); this.modelEditIndex = index; this.modelDialog = true },
-    confirmModel() { if (!this.modelDraft.model_name.trim()) return this.$message.warning("请填写模型名称。"); const value = { ...this.modelDraft, model_name: this.modelDraft.model_name.trim() }; delete value.capabilities; if (this.modelEditIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.modelEditIndex, 1, value); this.modelsDirty = true; this.invalidateProbeResults(); this.modelDialog = false; this.syncDirty() },
+    openModelEditor(model = null, index = null) { this.modelDraft = model ? { ...clone(model), capabilities: undefined, capability_source: undefined } : emptyModel(); this.modelEditIndex = index; this.modelDialog = true },
+    confirmModel() { const name = this.modelDraft.model_name.trim(); if (!name) return this.$message.warning("请填写模型名称。"); if (this.providerDraft.models.some((item, index) => item.model_name === name && index !== this.modelEditIndex)) return this.$message.warning("该服务商下已有同名模型。"); const value = { ...this.modelDraft, model_name: name }; delete value.capabilities; delete value.capability_source; if (this.modelEditIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.modelEditIndex, 1, value); this.modelsDirty = true; this.invalidateProbeResults(); this.modelDialog = false; this.syncDirty() },
     modelIndex(model) { return this.providerDraft.models.findIndex((item) => item === model || item.model_name === model.model_name) },
     modelTestKey(model) { return `${this.providerDraft?.name || this.selectedProviderName}/${model.model_name}` },
     deleteModel(model) { const actual = this.modelIndex(model); if (actual < 0) return; this.providerDraft.models.splice(actual, 1); this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty() },
-    async saveModels() { if (this.saving) return; this.saving = "models"; try { const submitted = { models: JSON.stringify(this.providerDraft.models) }; const models = this.providerDraft.models.map(({ capabilities, ...model }) => model); const response = await this.aiPut(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}/models`, { expected_revision: this.revision, models }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "模型列表保存失败。") } finally { this.saving = "" } },
-    capabilityTags(model) { const caps = model.capabilities || {}; const result = []; if (caps.is_embedding_model) result.push("Embedding"); if (caps.is_rerank_model) result.push("Rerank"); if ((caps.output_modalities || []).includes("image")) result.push("图像"); if ((caps.output_modalities || []).includes("audio")) result.push("语音"); if (caps.supports_tool_calling) result.push("工具"); return result.slice(0, 3) },
-    modelTask(model) { const caps = model.capabilities || {}; if (caps.is_embedding_model || model.task_type === "embedding") return "embedding"; if (caps.is_rerank_model || model.task_type === "rerank") return "rerank"; if ((caps.output_modalities || []).includes("image") || model.task_type === "image_generation") return "image"; if ((caps.output_modalities || []).includes("audio") || model.task_type === "tts") return "tts"; return "chat" },
+    /**
+     * 获取已收录模型的能力；未收录的模型只有宽松的默认能力，不用于判断任务类型
+     * @param {object} model 模型视图
+     * @returns {object} 已收录时为模型能力，否则为空对象
+     */
+    knownCapabilities(model) { return model.capability_source === "registry" ? model.capabilities || {} : {} },
+    capabilityTags(model) { const caps = this.knownCapabilities(model); const result = []; if (caps.is_embedding_model || model.task_type === "embedding") result.push("Embedding"); if (caps.is_rerank_model || model.task_type === "rerank") result.push("Rerank"); if ((caps.output_modalities || []).includes("image") || model.task_type === "image_generation") result.push("图像"); if ((caps.output_modalities || []).includes("audio") || model.task_type === "tts") result.push("语音"); if (caps.supports_tool_calling) result.push("工具"); if (model.capability_source === "default" && !model.task_type) result.push("能力未收录"); return result.slice(0, 3) },
+    modelTask(model) { const caps = this.knownCapabilities(model); if (caps.is_embedding_model || model.task_type === "embedding") return "embedding"; if (caps.is_rerank_model || model.task_type === "rerank") return "rerank"; if ((caps.output_modalities || []).includes("image") || model.task_type === "image_generation") return "image"; if ((caps.output_modalities || []).includes("audio") || model.task_type === "tts") return "tts"; return "chat" },
     async testModel(model) {
       const task = this.modelTask(model)
       const providerName = this.providerDraft.name.trim() || this.selectedProviderName
@@ -585,48 +636,61 @@ export default {
     },
     resolveSchema(node) { if (!node?.$ref) return node || {}; return node.$ref.replace(/^#\//, "").split("/").reduce((value, key) => value?.[key], this.schema) || node },
     sectionSchema(name) { const properties = this.schema.properties || {}; const map = { context: "context_settings", agent: "agent_settings", sandbox: "sandbox" }; if (name === "advanced") return { type: "object", properties: { client_settings: properties.client_settings, debug_log: properties.debug_log, provider_settings: properties.provider_settings } }; return this.resolveSchema(properties[map[name]]) },
-    advancedValue(path) { return valueAt(this.sectionDrafts.advanced, path) },
-    advancedFieldChanged(path) { return JSON.stringify(this.advancedValue(path)) !== JSON.stringify(valueAt(this.originalSections.advanced, path)) },
-    advancedMatches(field) { return fieldMatches(this.advancedSearch, `${field.path} ${field.label} ${field.section} ${field.ui.description || ''}`, field.schema, this.advancedValue(field.segments), this.schema) },
-    updateAdvancedField(segments, value) { const path = segments.join('.'); this.$set(this.sectionDrafts, 'advanced', updateAt(this.sectionDrafts.advanced, segments, value)); this.advancedLocalIssues = this.advancedLocalIssues.filter(issue => issue.path !== path && !String(issue.path).startsWith(path + '.')); this.operationIssues = this.operationIssues.filter(issue => !String(issue.path).endsWith(path)); this.markSectionDirty('advanced') },
-    resetAdvanced() { this.resetSection('advanced'); this.advancedLocalIssues = []; this.operationIssues = []; this.$set(this.invalidSections, 'advanced', []) },
-    focusAdvancedIssue() { const issue = this.advancedIssues[0]; if (!issue) return; const group = this.advancedGroups.find(group => group.fields.some(field => issue.path === field.path || issue.path.startsWith(field.path + '.'))); if (group) this.advancedCategory = group.key; this.advancedSearch = ''; this.$nextTick(() => this.$el.querySelector('.settings-workspace .field-error')?.scrollIntoView({ block: 'center', behavior: 'smooth' })) },
-    async saveAdvanced() {
-      const keys = new Set([...['client_settings', 'provider_settings', 'debug_log'], ...Object.keys(this.sectionDrafts.advanced || {})])
-      this.advancedLocalIssues = [...keys].flatMap(key => validateField(this.sectionDrafts.advanced?.[key], this.schema.properties?.[key] || {}, this.schema, key))
-      this.$set(this.invalidSections, 'advanced', this.advancedLocalIssues.map(issue => issue.path))
-      if (this.advancedLocalIssues.length) { this.focusAdvancedIssue(); return }
-      await this.saveSection('advanced')
-      if (this.advancedIssues.length) this.focusAdvancedIssue()
+    /**
+     * 读取设置项的草稿值；模型选择字段的 null 显示为“使用默认对话模型”
+     * @param {string} tab 分区名称
+     * @param {object} field 设置项
+     * @returns {*} 草稿值
+     */
+    settingValue(tab, field) { const value = valueAt(this.sectionDrafts[tab], field.segments); return field.ui.modelTask && value == null ? "" : value },
+    settingUi(tab, field) {
+      if (!field.ui.modelTask) return field.ui
+      const current = valueAt(this.sectionDrafts[tab], field.segments)
+      const options = this.chatModelOptions
+      return { ...field.ui, options: current && !options.some((item) => item.value === current) ? [...options, { value: current, label: `${current}（当前值）` }] : options }
     },
-    sectionFieldUi(name) {
-      if (name === "context") return {
-        llm_summary: { label: "对话总结压缩", order: 10 },
-        vision_window_size: { label: "多模态窗口轮数", order: 20 },
-        tool_pruning: { label: "工具结果修剪", order: 30 },
-      }
-      if (name === "agent") return {
-        max_cycles: { label: "单次最大循环", order: 10 },
-        global_max_cycles: { label: "全局最大循环", order: 20 },
-        enable_parallel_calls: { label: "并行工具调用", order: 30 },
-        reflexion_retries: { label: "反思重试次数", order: 40 },
-        enable_fallback_summary: { label: "启用兜底总结", order: 50 },
-        enable_hitl: { label: "允许向用户求助", order: 60 },
-        mcp_cleanup_timeout: { label: "MCP 闲置回收", order: 70, unit: "秒" },
-      }
-      if (name === "sandbox") return {
-        enable_sandbox: { label: "启用沙箱", order: 0 },
-        sandbox_type: { label: "沙箱驱动", order: 10, options: [{ label: "Docker", value: "docker" }], visible_when: { path: "enable_sandbox", operator: "eq", value: true } },
-        docker_image: { label: "Docker 镜像", order: 20, visible_when: { path: "enable_sandbox", operator: "eq", value: true } },
-        cleanup_timeout: { label: "闲置清理时间", order: 30, unit: "秒", visible_when: { path: "enable_sandbox", operator: "eq", value: true } },
-        enable_vfs_helper: { label: "VFS 路径防护", order: 40, visible_when: { path: "enable_sandbox", operator: "eq", value: true } },
-      }
-      if (name === "advanced") return {
-        client_settings: { label: "客户端请求策略", order: 10 },
-        debug_log: { label: "调试日志", order: 20 },
-        provider_settings: { label: "厂商高级设置", order: 30 },
-      }
-      return {}
+    settingChanged(tab, field) { return JSON.stringify(valueAt(this.sectionDrafts[tab], field.segments)) !== JSON.stringify(valueAt(this.originalSections[tab], field.segments)) },
+    settingMatches(tab, field) { return fieldMatches(this.settingsSearch[tab], `${field.path} ${field.label} ${field.section} ${field.ui.description || ""}`, field.schema, valueAt(this.sectionDrafts[tab], field.segments), this.schema) },
+    /**
+     * 获取分区的本地与服务端校验问题，路径统一为分区内的相对路径
+     * @param {string} tab 分区名称
+     * @returns {object[]} 校验问题
+     */
+    settingIssues(tab) {
+      const prefix = new RegExp(`^(AI\\.)?(value|${tab}|${SECTION_KEYS[tab] || tab})\\.`)
+      return [...(this.settingsLocalIssues[tab] || []), ...this.operationIssues.map((issue) => ({ ...issue, path: String(issue.path || "").replace(prefix, "") }))]
+    },
+    settingChangeCount(tab) { return (this.settingGroups[tab] || []).reduce((count, group) => count + group.fields.filter((field) => this.settingChanged(tab, field)).length, 0) },
+    updateSetting(tab, field, value) {
+      const next = field.ui.modelTask && value === "" ? null : value
+      this.$set(this.sectionDrafts, tab, updateAt(this.sectionDrafts[tab], field.segments, next))
+      this.$set(this.settingsLocalIssues, tab, (this.settingsLocalIssues[tab] || []).filter((issue) => issue.path !== field.path && !String(issue.path).startsWith(`${field.path}.`)))
+      this.operationIssues = this.operationIssues.filter((issue) => !String(issue.path).endsWith(field.path))
+      this.markSectionDirty(tab)
+    },
+    resetSettings(tab) { this.resetSection(tab); this.$set(this.settingsLocalIssues, tab, []); this.operationIssues = []; this.$set(this.invalidSections, tab, []) },
+    focusSettingIssue(tab) {
+      const issue = this.settingIssues(tab)[0]
+      if (!issue) return
+      const group = this.settingGroups[tab].find((item) => item.fields.some((field) => issue.path === field.path || issue.path.startsWith(`${field.path}.`)))
+      if (group) this.settingsCategory[tab] = group.key
+      this.settingsSearch[tab] = ""
+      this.$nextTick(() => this.$el.querySelector(".el-tab-pane:not([style*='display: none']) .settings-workspace .field-error")?.scrollIntoView({ block: "center", behavior: "smooth" }))
+    },
+    /**
+     * 本地校验后保存设置分区，校验失败时定位到第一个问题
+     * @param {string} tab 分区名称
+     */
+    async saveSettings(tab) {
+      const draft = this.sectionDrafts[tab] || {}
+      const issues = tab === "advanced"
+        ? [...new Set(["client_settings", "provider_settings", "debug_log", ...Object.keys(draft)])].flatMap((key) => validateField(draft[key], this.schema.properties?.[key] || {}, this.schema, key))
+        : validateField(draft, this.sectionSchema(tab), this.schema, "")
+      this.$set(this.settingsLocalIssues, tab, issues)
+      this.$set(this.invalidSections, tab, issues.map((issue) => issue.path))
+      if (issues.length) { this.focusSettingIssue(tab); return }
+      await this.saveSection(tab)
+      if (this.settingIssues(tab).length) this.focusSettingIssue(tab)
     },
     markSectionDirty(name) {
       this.$nextTick(() => {
@@ -637,7 +701,6 @@ export default {
     },
     isSectionDirty(name) { return Boolean(this.dirtySections[name]) },
     resetSection(name) { this.$set(this.sectionDrafts, name, clone(this.originalSections[name])); if (name === "model_groups") { this.groupRows = this.groupsToRows(this.sectionDrafts.model_groups); this.selectedRouteGroupId = this.groupRows[0]?.clientId || ""; this.routingIssues = [] } this.$set(this.dirtySections, name, false); this.syncDirty() },
-    setSectionValidity(name, paths) { this.$set(this.invalidSections, name, paths || []) },
     sectionInvalid(name) { return Boolean(this.invalidSections[name]?.length) },
     async saveSection(name, value = this.sectionDrafts[name]) { if (this.sectionInvalid(name) || (this.saving && this.saving !== "model_groups")) return; this.saving = name; try { const submitted = { section: name, value: JSON.stringify(name === "model_groups" ? this.groupRows : this.sectionDrafts[name]) }; const response = await this.aiPut(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
     groupsToRows(groups) { const names = new Set(Object.keys(groups || {})); return Object.entries(groups || {}).map(([name, targets]) => ({ name, targets: targets.map((value) => ({ kind: names.has(value) ? "group" : "model", value, clientId: uid() })), clientId: uid() })) },
@@ -697,7 +760,33 @@ export default {
       } catch (error) { this.captureOperationError(error, fallback) }
       finally { if (this.saving === "model_groups") this.saving = "" }
     },
-    modelsForTask(task) { return this.allModels.filter((model) => { const caps = model.capabilities || {}; if (!model.is_available) return false; if (task === "embedding") return caps.is_embedding_model || model.task_type === "embedding"; if (task === "rerank") return caps.is_rerank_model || model.task_type === "rerank"; if (task === "image") return (caps.output_modalities || []).includes("image") || model.task_type === "image_generation"; if (task === "tts") return (caps.output_modalities || []).includes("audio") || model.task_type === "tts"; return !caps.is_embedding_model && !caps.is_rerank_model && ((caps.output_modalities || ["text"]).includes("text")) }) },
+    /**
+     * 获取适合指定任务的路由组
+     * @param {string} task 任务键
+     * @returns {string[]} 路由组名称
+     */
+    groupsForTask(task) { return routingGroupsForModels(this.groupRows, new Set(this.modelsForTask(task).map((model) => model.fullName))) },
+    /**
+     * 获取适合指定任务的已启用模型；专用任务只认已收录能力或显式任务类型
+     * @param {string} task 任务键
+     * @returns {object[]} 模型列表
+     */
+    modelsForTask(task) {
+      return this.allModels.filter((model) => {
+        if (!model.is_available) return false
+        const caps = this.knownCapabilities(model)
+        const outputs = caps.output_modalities || []
+        if (task === "chat") return !Object.values(TASK_TYPES).flat().includes(model.task_type) && !caps.is_embedding_model && !caps.is_rerank_model && (!outputs.length || outputs.includes("text"))
+        if (TASK_TYPES[task].includes(model.task_type)) return true
+        return { embedding: caps.is_embedding_model, rerank: caps.is_rerank_model, image: outputs.includes("image"), tts: outputs.includes("audio") }[task] === true
+      })
+    },
+    /**
+     * 设置默认任务模型，清空时保存为 null
+     * @param {string} task 任务键
+     * @param {string} value 模型或路由组名称
+     */
+    setDefaultModel(task, value) { this.$set(this.sectionDrafts.default_models, task, value || null); this.markSectionDirty("default_models") },
     captureOperationError(error, fallback) { this.operationIssues = apiErrorIssues(error); this.$message.error(apiErrorDetail(error, fallback)) },
     handleAiApply(response) { return handleApplyResult(this, response, { restartPrompt: "AI 启动期配置已保存，需要重启后生效。", restartRequest: () => this.aiPost(`${this.$root.prefix}/system/configuration/restart`, {}), returnRoute: "/ai", recoveryMessage: "AI 启动期配置将在新进程中生效。" }) },
     operationError(path) {
@@ -713,7 +802,7 @@ export default {
 </script>
 
 <style scoped>
-.ai-page { border-radius:16px; max-width:1600px; margin:0 auto; min-height: 100%; padding: 20px 22px 32px; overflow-y: auto; color: var(--text-color); background: var(--bg-color-secondary,#fff); }.page-header, .section-title, .subheading, .provider-actions, .models-save, .section-action { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.page-header { margin-bottom: 12px; }.configuration-warning { margin-bottom: 12px; }.configuration-warning code { margin-right: 6px; }.load-error { display: grid; min-height: 260px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 28px; border: 1px solid var(--danger-color); border-radius: 8px; background: var(--bg-color-secondary); }.load-error > i { color: var(--danger-color); font-size: 34px; }.load-error h2 { margin: 0; font-size: 18px; }.load-error p { margin: 8px 0 0; color: var(--text-color-secondary); }.page-header h1, .section-title h2, .subheading h3 { margin: 0; letter-spacing: 0; }.page-header h1 { font-size: 24px; }.page-header p, .section-title p, .subheading p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 13px; }.header-status { display: flex; align-items: center; gap: 8px; }.ai-tabs { min-height: 0; }.provider-workbench { display: grid; min-height: 650px; grid-template-columns: 250px minmax(0, 1fr); border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.provider-sidebar { min-width: 0; padding: 16px; border-right: 1px solid var(--border-color); }.sidebar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }.provider-list { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }.provider-list button { display: flex; width: 100%; min-height: 58px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.provider-list button:hover { background: var(--bg-color-hover); }.provider-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.provider-list span { display: flex; min-width: 0; flex-direction: column; }.provider-list strong, .provider-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.provider-list small { margin-top: 4px; color: var(--text-color-secondary); }.provider-main { min-width: 0; padding: 20px 22px 26px; }.provider-form, .advanced-grid, .default-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.full-control { width: 100%; }.secret-section, .models-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-color-light); }.secret-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 10px; }.advanced-collapse { margin-top: 14px; border-bottom: 0; }.provider-actions { margin-top: 18px; }.models-section { margin-top: 24px; }.model-search { max-width: 420px; margin: 14px 0 10px; }.model-list { border-top: 1px solid var(--border-color-light); }.model-row { display: flex; min-height: 64px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-color-light); }.model-name { display: flex; min-width: 0; flex-direction: column; gap: 7px; }.model-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.model-name span { display: flex; flex-wrap: wrap; gap: 5px; }.model-actions { flex: none; white-space: nowrap; }.models-save { margin-top: 14px; }.models-save span { color: var(--warning-color); font-size: 12px; }.provider-empty { display: grid; place-content: center; color: var(--text-color-secondary); text-align: center; }.provider-empty i { font-size: 42px; }.settings-section { min-height: 480px; padding: 20px 22px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.section-action { position: sticky; bottom: 0; z-index: 3; margin-top: 10px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color); }.section-action span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.group-row { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; gap: 10px; margin-top: 12px; }.empty-copy { padding: 30px 12px; color: var(--text-color-secondary); text-align: center; }.danger-text { color: var(--danger-color) !important; }.model-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }.discovery-list { display: grid; max-height: 360px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; overflow-y: auto; }.discovery-list .el-checkbox { min-width: 0; margin-right: 0; overflow: hidden; text-overflow: ellipsis; }.dialog-note { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
+.ai-page { border-radius:16px; max-width:1600px; margin:0 auto; min-height: 100%; padding: 20px 22px 32px; overflow-y: auto; color: var(--text-color); background: var(--bg-color-secondary,#fff); }.page-header, .section-title, .subheading, .provider-actions, .section-action { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.page-header { margin-bottom: 12px; }.configuration-warning { margin-bottom: 12px; }.configuration-warning code { margin-right: 6px; }.load-error { display: grid; min-height: 260px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 28px; border: 1px solid var(--danger-color); border-radius: 8px; background: var(--bg-color-secondary); }.load-error > i { color: var(--danger-color); font-size: 34px; }.load-error h2 { margin: 0; font-size: 18px; }.load-error p { margin: 8px 0 0; color: var(--text-color-secondary); }.page-header h1, .section-title h2, .subheading h3 { margin: 0; letter-spacing: 0; }.page-header h1 { font-size: 24px; }.page-header p, .section-title p, .subheading p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 13px; }.header-status { display: flex; align-items: center; gap: 8px; }.ai-tabs { min-height: 0; }.provider-workbench { display: grid; min-height: 650px; grid-template-columns: 250px minmax(0, 1fr); border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.provider-sidebar { min-width: 0; padding: 16px; border-right: 1px solid var(--border-color); }.sidebar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }.provider-list { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }.provider-list button { display: flex; width: 100%; min-height: 58px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.provider-list button:hover { background: var(--bg-color-hover); }.provider-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.provider-list span { display: flex; min-width: 0; flex-direction: column; }.provider-list strong, .provider-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.provider-list small { margin-top: 4px; color: var(--text-color-secondary); }.provider-main { min-width: 0; padding: 20px 22px 26px; }.provider-form, .advanced-grid, .default-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.full-control { width: 100%; }.secret-section, .models-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-color-light); }.secret-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 10px; }.advanced-collapse { margin-top: 14px; border-bottom: 0; }.provider-actions { margin-top: 18px; }.models-section { margin-top: 24px; }.model-search { max-width: 420px; margin: 14px 0 10px; }.model-list { border-top: 1px solid var(--border-color-light); }.model-row { display: flex; min-height: 64px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-color-light); }.model-name { display: flex; min-width: 0; flex-direction: column; gap: 7px; }.model-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.model-name span { display: flex; flex-wrap: wrap; gap: 5px; }.model-actions { flex: none; white-space: nowrap; }.provider-empty { display: grid; place-content: center; color: var(--text-color-secondary); text-align: center; }.provider-empty i { font-size: 42px; }.settings-section { min-height: 480px; padding: 20px 22px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.section-action { position: sticky; bottom: 0; z-index: 3; margin-top: 10px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color); }.section-action span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.group-row { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; gap: 10px; margin-top: 12px; }.empty-copy { padding: 30px 12px; color: var(--text-color-secondary); text-align: center; }.danger-text { color: var(--danger-color) !important; }.model-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }.discovery-list { display: grid; max-height: 360px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; overflow-y: auto; }.discovery-list .el-checkbox { min-width: 0; margin-right: 0; overflow: hidden; text-overflow: ellipsis; }.dialog-note { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
 .advanced-settings-section { min-height: 0; }
 
 
@@ -724,6 +813,8 @@ export default {
 
 @media (max-width: 820px) { .ai-page { padding: 12px; }.page-header, .section-title, .subheading { align-items: flex-start; flex-direction: column; }.header-status { width: 100%; flex-wrap: wrap; }.load-error { min-height: 220px; grid-template-columns: auto minmax(0, 1fr); padding: 20px; }.load-error .el-button { grid-column: 1 / -1; }.provider-workbench { grid-template-columns: 1fr; }.provider-sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }.provider-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }.provider-main { padding: 16px; }.provider-form, .advanced-grid, .default-grid, .model-form { grid-template-columns: 1fr; }.group-row { grid-template-columns: 1fr auto; }.group-row .el-select { grid-column: 1 / -1; grid-row: 2; }.model-row { align-items: flex-start; flex-direction: column; padding: 10px 0; }.model-actions { align-self: flex-end; }.discovery-list { grid-template-columns: 1fr; } }
 .mobile-provider-select { display: none; width: 100%; margin-top: 10px; }
+.mobile-section-select { display: none; width: 100%; margin-bottom: 12px; }
+@media (max-width: 767px) { .mobile-section-select { display: block; }.ai-tabs ::v-deep > .el-tabs__header { display: none; } }
 .group-name-field { margin-bottom: 0; }
 .route-section { padding: 0; overflow: hidden; }
 .route-section > .section-title { padding: 20px 22px 16px; }
@@ -750,10 +841,11 @@ export default {
 .add-route-target, .route-issues { margin-top: 14px; }
 .persona-section { min-height: 520px; }.persona-form { margin-top: 18px; }.persona-basics { display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: 18px; }.persona-section .el-alert { margin-top: 18px; }.persona-section .el-alert p { margin: 0 0 12px; }
 .provider-heading-actions { display: flex; align-items: center; gap: 10px; }.provider-probe-result { margin-top: 12px; }
+.secret-hint { margin: 10px 0 0; color: var(--text-color-secondary); font-size: 12px; line-height: 1.6; }.secret-section .field-error { margin-top: 8px; color: var(--danger-color); font-size: 12px; }.provider-main > .section-action { margin-top: 20px; }.setting-restart { margin: 6px 8px 0 0; }
 @media (max-width: 820px) { .mobile-provider-select { display: block; }.provider-list { display: none; } }
 @media (max-width: 820px) { .route-workbench { grid-template-columns: 1fr; }.route-sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }.route-editor { padding: 16px; }.route-target-row { grid-template-columns: 54px 100px minmax(0, 1fr); padding: 10px 0; }.route-target-actions { grid-column: 2 / -1; justify-content: flex-end; } }
 @media (max-width: 620px) { .persona-basics { grid-template-columns: 1fr; gap: 0; } }
-@media (max-width: 460px) { .provider-list { grid-template-columns: 1fr; }.provider-actions, .models-save, .section-action { align-items: stretch; flex-direction: column; }.section-action span { margin: 0; }.secret-row { grid-template-columns: 1fr; } }
+@media (max-width: 460px) { .provider-list { grid-template-columns: 1fr; }.provider-actions, .section-action { align-items: stretch; flex-direction: column; }.section-action span { margin: 0; }.secret-row { grid-template-columns: 1fr; } }
 </style>
 
 <style scoped>

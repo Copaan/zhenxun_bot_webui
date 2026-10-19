@@ -1,6 +1,6 @@
 <template>
   <el-dialog title="依赖管理" :visible="visible" width="min(760px, 94vw)" append-to-body :before-close="close">
-    <p>优先复用现有依赖；实际包变更在手动重启验证后生效。ORM 及数据库驱动仅由控制台管理。</p>
+    <p>优先复用现有依赖；实际包变更需通过 launcher（uv run zx）启动后才能准备，并在手动重启验证后生效。ORM 及数据库驱动仅由控制台管理。</p>
     <el-radio-group v-model="action" :disabled="busy || pending" @change="invalidate">
       <el-radio-button label="install">安装或调整版本</el-radio-button>
       <el-radio-button label="uninstall">撤销手动托管</el-radio-button>
@@ -8,13 +8,14 @@
     <el-input v-model="input" type="textarea" :rows="3" :disabled="pending" :placeholder="action === 'uninstall' ? '每行一个已手动托管的包名，不需要版本或 extras' : '每行一个包要求，例如 example-package[feature]>=1.0'" @input="invalidate" />
     <el-alert v-if="error" type="error" :title="error" :closable="false" />
     <div v-if="preview">
-      <p v-if="!preview.changes.length">无需安装或切换包版本；确认后会保存本次托管声明。</p>
+      <p v-if="preview.no_change">依赖和托管声明均无需变更，确认后不会保存任何内容。</p>
+      <p v-else-if="preview.declaration_only">无需安装或切换包版本；确认后只保存本次托管声明，无需重启。</p>
+      <p v-else-if="!preview.changes.length">无需安装或切换包版本；托管声明变更将加入待重启事务，重启验证后生效。</p>
       <div v-for="change in preview.changes" :key="change.name" class="dependency-row">
         <code>{{ change.name }}</code><span>{{ change.from || '未安装' }} → {{ change.to || '移除托管包' }}</span>
       </div>
       <p v-for="item in preview.retained" :key="`retained-${item.name}`">保留 {{ item.name }} {{ item.version }}：{{ item.owners.join('、') }}</p>
       <el-alert v-if="preview.source_build_required" title="本次需要源码构建；确认准备即同意展示的构建与包变更。" type="warning" :closable="false" />
-      <p v-if="preview.declaration_only">只保存托管声明，无需重启。</p>
       <p v-if="preview.remaining_conflicts && preview.remaining_conflicts.length">保留 {{ preview.remaining_conflicts.length }} 项未受本次操作影响的历史问题，可在环境详情中继续处理。</p>
     </div>
     <p v-if="result" class="dependency-result">{{ resultMessage }}</p>
@@ -74,7 +75,7 @@ export default {
       const code = typeof detail === 'string' ? detail : detail?.code || body.info || body.message
       if (code === 'orm_dependency_console_required') return 'WebUI 不更改 ORM 或数据库驱动，请在控制台安装或调整后重新分析（orm_dependency_console_required）' + (detail?.issues ? '：' + JSON.stringify(detail.issues) : '')
       if (code === 'dependency_source_metadata_unavailable') return '源码包缺少可静态读取的依赖元数据。请提供 Wheel 或在控制台安装后重新分析；预览不会执行构建代码。'
-      const messages = { dependency_not_managed: '此包未被手动托管，不能从这里卸载基础环境或其他插件的依赖', environment_analysis_stale: '环境或待处理事务已变化，请重新分析', dependency_transaction_pending: '有依赖事务正在验证或等待处理', plugin_operation_in_progress: '另一项插件操作正在执行', dependency_resolution_failed: '依赖版本无法同时满足，请查看具体包要求', dependency_layer_build_failed: '候选依赖安装失败，当前环境未切换', dependency_environment_repair_required: '现有依赖层需要先修复', dependency_operation_interrupted: '依赖准备已中断，当前环境未切换', plugin_operation_not_found: '尚未找到此操作，请先刷新任务状态' }
+      const messages = { dependency_not_managed: '此包未被手动托管，不能从这里卸载基础环境或其他插件的依赖', environment_analysis_stale: '环境或待处理事务已变化，请重新分析', dependency_transaction_pending: '有依赖事务正在验证或等待处理', plugin_operation_in_progress: '另一项插件操作正在执行', dependency_resolution_failed: '依赖版本无法同时满足，请查看具体包要求', dependency_layer_build_failed: '候选依赖安装失败，当前环境未切换', dependency_environment_repair_required: '现有依赖层需要先修复', dependency_operation_interrupted: '依赖准备已中断，当前环境未切换', plugin_operation_not_found: '尚未找到此操作，请先刷新任务状态', dependency_repair_requires_launcher: '需通过 launcher（uv run zx）启动后才能准备依赖' }
       return [messages[code] ? `${messages[code]}（${code}）` : code || '依赖请求失败', detail?.stage ? `阶段：${detail.stage}` : '', detail?.diagnostic || detail?.message, detail?.issues ? JSON.stringify(detail.issues) : ''].filter(Boolean).join('；')
     },
     async request(method, path, data) {

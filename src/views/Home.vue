@@ -1,6 +1,12 @@
 <template>
   <div class="min-h-screen" :style="{ background: 'var(--bg-color)' }">
     <div class="flex">
+      <div
+        v-if="isMobile && asideShow"
+        class="mobile-sidebar-mask md:hidden"
+        aria-hidden="true"
+        @click="toggleMenu"
+      ></div>
       <!-- 侧边栏 -->
       <aside
         class="app-sidebar fixed md:relative z-50 h-screen flex flex-col"
@@ -198,7 +204,7 @@
           </div>
 
           <!-- 右侧功能区 -->
-          <div class="flex items-center space-x-4">
+          <div class="flex items-center space-x-2 md:space-x-4">
             <el-tooltip :content="startupSummary.detail" placement="bottom" :disabled="startupDrawerVisible">
               <button
                 type="button"
@@ -260,7 +266,7 @@
               @command="selectBot"
             >
               <div class="bot-switch flex items-center cursor-pointer group">
-                <span class="mr-2" :style="{ color: 'var(--text-color)' }">切换 Bot</span>
+                <span class="mr-2 hidden md:inline" :style="{ color: 'var(--text-color)' }">切换 Bot</span>
                 <el-image
                   :src="botInfo.ava_url || logoUrl"
                   class="w-10 h-10 rounded-full object-cover border-2 shadow-sm"
@@ -365,6 +371,7 @@
           <bot-required-state
             v-if="routeBlockState"
             :state="routeBlockState"
+            :has-supported-bot="hasSupportedBot"
             @configure="navigateTo('/protocol')"
             @retry="getBotInfo()"
             @switch-supported="switchToSupportedBot"
@@ -475,9 +482,6 @@
           </p>
           <p v-for="reason in lifecycleStatus.plugin_runtime?.pending_restart_reasons || []" :key="reason" class="startup-failures">{{ runtimeReasonLabel(reason) }}</p>
           <NetworkStatus :status="lifecycleStatus.network || {}" />
-          <div v-if="lifecycleStatus.recovery_required?.length" class="startup-failures">
-            需要恢复：{{ lifecycleStatus.recovery_required.join("、") }}
-          </div>
           <div v-if="lifecycleUnhealthyComponents.length" class="startup-failures">
             {{ lifecycleUnhealthyComponents.join("、") }}
           </div>
@@ -612,6 +616,11 @@ export default {
         .find((item) => item.meta.requiredCapability)
       return record ? record.meta.requiredCapability : ""
     },
+    hasSupportedBot() {
+      return Boolean(this.requiredCapability) && this.botList.some(
+        (item) => item.capabilities?.[this.requiredCapability]
+      )
+    },
     routeBlockState() {
       if (!this.routeRequiresBot) return ""
       if (this.botState !== "ready") return this.botState
@@ -652,6 +661,7 @@ export default {
         return { status: "warning", label: "部分降级", detail: source ? `${stage}：${source} (${reason.code})` : `启动完成，但有 ${this.startupStatus.errors?.length || 1} 项能力降级` }
       }
       if (state === "failed") return { status: "danger", label: "启动异常", detail: "Bot运行时初始化失败，管理功能仍可用于诊断" }
+      if (state === "unknown") return { status: "unknown", label: "启动状态暂不可读取", detail: "启动状态接口请求失败，无法确认当前启动状态，稍后会自动重试" }
       return { status: "warning", label: "运行时初始化", detail: "WebUI与数据库已可用，Bot事件暂不处理" }
     },
     startupElapsed() {
@@ -695,7 +705,11 @@ export default {
     },
     restartTooltip() {
       if (this.restartStatusUnknown) return this.pendingRestartCount ? `有 ${this.pendingRestartCount} 项修改等待重启应用；当前状态暂不可确认` : "重启状态暂不可确认"
-      if (this.pendingRestartCount) return `有 ${this.pendingRestartCount} 项修改等待重启应用`
+      if (this.pendingRestartCount) {
+        return this.restartAvailable
+          ? `有 ${this.pendingRestartCount} 项修改等待重启应用`
+          : `有 ${this.pendingRestartCount} 项修改等待重启应用；当前不是 launcher 托管模式，请手动重启`
+      }
       return this.restartAvailable
         ? "重启真寻"
         : "当前不是 launcher 托管模式，请手动重启"
@@ -804,10 +818,10 @@ export default {
         }
       } catch (error) {
         if (isBusinessNetworkFrozen() || !hasValidAuthToken() || epoch !== businessNetworkEpoch()) return
-        this.startupStatus = { state: "failed", stages: {}, errors: [{ code: "status_unavailable" }] }
+        this.startupStatus = { state: "unknown", stages: {}, errors: [{ code: "status_unavailable" }] }
       }
       if (isBusinessNetworkFrozen() || !hasValidAuthToken() || this._isDestroyed || this._isBeingDestroyed) return
-      const settled = ["warmup_ready", "degraded", "failed"].includes(this.startupStatus.state)
+      const settled = ["warmup_ready", "degraded", "failed", "unknown"].includes(this.startupStatus.state)
       this.startupPollTimer = window.setTimeout(this.loadStartupStatus, settled ? 10000 : 1200)
     },
     async openStartupReport() {
@@ -898,7 +912,7 @@ export default {
         const transaction = store && pendingResponse.data[store]
         if (transaction) {
           const mode = { pending_restart: 'restart_pending', migration_blocked: 'restart_pending', verification_pending: 'verifying', building: 'preparing', committed: 'applied', cleanup_pending: 'applied', recovery_required: 'recovery_required', failed: transaction.rollback_confirmed ? 'rolled_back' : 'failed' }[transaction.state]
-          this.$store.commit("START_PLUGIN_OPERATION", { ...context, title: "插件事务等待重启", message: "插件修改已暂存，明确重启后统一应用。" })
+          this.$store.commit("START_PLUGIN_OPERATION", { ...context, ...this.pluginTransactionNotice(transaction) })
           if (['verifying', 'preparing'].includes(mode)) this.schedulePluginOperation()
           else this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({ status: transaction.state, result: { apply_mode: mode, transaction_state: transaction.state, cleanup_error: transaction.cleanup_error } }, this.restartAvailable, store))
           return
@@ -909,6 +923,25 @@ export default {
       this.$store.commit("START_PLUGIN_OPERATION", context)
       this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({}, this.restartAvailable, saved.store))
       this.schedulePluginOperation()
+    },
+    /**
+     * 按插件事务状态生成恢复进度提示
+     * @param {Object} transaction 待处理插件事务
+     * @returns {{title: string, message: string}} 提示标题与说明
+     */
+    pluginTransactionNotice(transaction) {
+      const notices = {
+        building: ["插件事务正在准备", "正在构建插件依赖，请等待完成。"],
+        pending_restart: ["插件事务等待重启", "插件修改已暂存，重启后统一应用。"],
+        migration_blocked: ["插件事务被迁移阻塞", "数据库迁移未完成，插件修改暂未应用，请处理迁移后重启。"],
+        verification_pending: ["插件事务等待验证", "插件修改已应用，正在等待新进程启动验证。"],
+        committed: ["插件事务已完成", "插件修改已生效。"],
+        cleanup_pending: ["插件事务已完成", "插件修改已生效，旧文件清理待完成。"],
+        recovery_required: ["插件事务需要恢复", "插件事务未能完成，需要恢复后才能继续操作。"],
+        failed: ["插件事务失败", transaction.rollback_confirmed ? "插件修改应用失败，已回滚。" : "插件修改应用失败，回滚尚未确认。"],
+      }
+      const [title, message] = notices[transaction.state] || ["插件事务状态未确认", "正在恢复上次插件操作结果。"]
+      return { title, message }
     },
     handleSocketState(event) {
       const channel = event.detail?.channel
@@ -1098,7 +1131,7 @@ export default {
       try {
         const resp = await this.getRequest(
           `${this.$root.prefix}/main/get_base_info`,
-          { bot_id: botKey },
+          { bot_id: botKey || this.$store.state.selectedBotKey || undefined },
           { suppressErrorToast: true }
         )
         if (requestSequence !== this.botRequestSequence) return
@@ -1150,6 +1183,13 @@ export default {
 .app-sidebar {
   border-right: 1px solid var(--border-color);
   box-shadow: 4px 0 18px rgba(20, 24, 31, 0.04);
+}
+
+.mobile-sidebar-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: rgba(15, 23, 42, 0.45);
 }
 
 .mobile-sidebar-close {
@@ -1273,6 +1313,12 @@ export default {
   white-space: nowrap;
 }
 
+@media (max-width: 767px) {
+  .socket-status {
+    display: none;
+  }
+}
+
 .startup-status {
   min-height: 34px;
   padding: 0 6px;
@@ -1300,6 +1346,7 @@ export default {
 }
 
 .startup-status.is-danger i { background: var(--el-color-danger); }
+.startup-status.is-unknown i { background: var(--el-color-info); }
 
 ::v-deep .startup-drawer {
   background: var(--bg-color-secondary);

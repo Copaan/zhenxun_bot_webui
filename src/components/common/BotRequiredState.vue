@@ -17,7 +17,7 @@
         type="primary"
         icon="el-icon-sort"
         @click="$emit('switch-supported')"
-      >切换到 OneBot 账号</el-button>
+      >{{ hasSupportedBot ? "切换到 OneBot 账号" : "去接入 OneBot" }}</el-button>
       <el-button
         :loading="state === 'loading'"
         icon="el-icon-refresh"
@@ -37,6 +37,10 @@ export default {
       validator: (value) =>
         ["loading", "empty", "error", "unsupported"].includes(value),
     },
+    hasSupportedBot: {
+      type: Boolean,
+      default: false,
+    },
   },
   computed: {
     iconClass() {
@@ -54,7 +58,7 @@ export default {
     description() {
       if (this.state === "loading") return "连接信息就绪后会自动打开当前页面。"
       if (this.state === "error") return "可以重新检查，或前往协议端设置确认连接状态。"
-      if (this.state === "unsupported") return "QQ 官方 Bot 已正常连接，但此页面依赖 OneBot 的好友、群组或管理接口。"
+      if (this.state === "unsupported") return "当前 Bot 不是 OneBot V11 协议，此页面依赖 OneBot V11 的好友、群组或管理接口。"
       return "连接机器人后即可使用当前管理功能，其他 WebUI 页面仍可正常访问。"
     },
   },

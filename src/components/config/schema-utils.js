@@ -85,7 +85,7 @@ export function validateField(value, schema = {}, root = schema, path = "", requ
     if (!matches.length || resolved.oneOf && matches.length !== 1) return [{ path, message: "值不符合联合类型，请检查类型及内容" }]
     return []
   }
-  if (!matchesSchema(value, { ...resolved, properties: undefined, required: undefined, items: undefined, prefixItems: undefined, additionalProperties: undefined }, root)) return [{ path, message: "值不符合字段类型" }]
+  if (!matchesSchema(value, { ...resolved, properties: undefined, required: undefined, items: undefined, prefixItems: undefined, additionalProperties: undefined, minimum: undefined, maximum: undefined }, root)) return [{ path, message: "值不符合字段类型" }]
   if (typeof value === "number" && (!Number.isFinite(value) || resolved.minimum !== undefined && value < resolved.minimum || resolved.maximum !== undefined && value > resolved.maximum)) return [{ path, message: "数值超出允许范围" }]
   if (typeof value === "string") {
     if (resolved.minLength !== undefined && value.length < resolved.minLength || resolved.maxLength !== undefined && value.length > resolved.maxLength) return [{ path, message: "文本长度不符合要求" }]

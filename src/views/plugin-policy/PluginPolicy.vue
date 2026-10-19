@@ -106,6 +106,7 @@
         </el-form>
 
         <template v-if="policyScope === 'account' || groupAccount || privateAccount">
+        <div class="feature-sticky">
         <div class="feature-toolbar">
           <el-radio-group v-model="activeKind" size="small">
             <el-radio-button label="plugins">插件</el-radio-button>
@@ -121,17 +122,18 @@
         </div>
 
         <div class="batch-toolbar">
-          <el-checkbox :value="allFilteredSelected" :indeterminate="someFilteredSelected" @change="toggleFilteredSelection">选择筛选结果</el-checkbox>
+          <el-checkbox :value="allFilteredSelected" :indeterminate="someFilteredSelected" :disabled="!filteredFeatures.length" @change="toggleFilteredSelection">全选筛选结果（{{ filteredFeatures.length }}）</el-checkbox>
           <span>{{ selectedModules.length }} 项已选择</span>
           <el-button size="mini" icon="el-icon-check" :disabled="!selectedModules.length || saving" @click="setSelectedEnabled(true)">启用所选</el-button>
           <el-button size="mini" icon="el-icon-close" :disabled="!selectedModules.length || saving" @click="setSelectedEnabled(false)">禁用所选</el-button>
+        </div>
         </div>
 
         <div class="feature-table">
           <div class="feature-row feature-head">
             <span></span><span>功能</span><span>类型</span><span>最终状态</span><span>{{ editingPolicy ? '共享策略设置' : policyScope === 'group' ? '本群设置' : '账号设置' }}</span>
           </div>
-          <div v-for="item in filteredFeatures" :key="item.module" class="feature-row">
+          <div v-for="item in visibleFeatures" :key="item.module" class="feature-row">
             <el-checkbox v-model="selectedModules" :label="item.module"><span></span></el-checkbox>
             <div class="feature-name">
               <strong>{{ item.name }}</strong>
@@ -144,6 +146,9 @@
             <span><el-switch :value="isEnabled(item.module)" :disabled="saving" @change="setFeatureEnabled(item.module, $event)" /></span>
           </div>
           <div v-if="!filteredFeatures.length" class="empty-state">没有符合条件的功能</div>
+          <div v-else-if="remainingCount" class="load-more">
+            <el-button size="small" @click="showMoreFeatures">加载更多（剩余 {{ remainingCount }} 条）</el-button>
+          </div>
         </div>
 
         </template>
@@ -199,7 +204,7 @@
       <el-select v-model="copyTargets" multiple filterable class="full-control" placeholder="选择目标账号" @change="loadCopyImpacts">
         <el-option v-for="item in copyCandidates" :key="item.bot_id" :label="accountLabel(item)" :value="item.bot_id" />
       </el-select>
-      <div v-if="copyTargets.length" class="impact-line">将覆盖 {{ copyTargets.length }} 个账号的插件与被动技能设置</div>
+      <div v-if="copyTargets.length" class="impact-line">将覆盖 {{ copyTargets.length }} 个账号的账号层插件与被动技能设置，群聊和私聊设置不受影响</div>
       <div v-if="copyImpacts.length" class="impact-list">
         <div v-for="item in copyImpacts" :key="item.bot_id">
           <strong>{{ item.name }}</strong>
@@ -209,7 +214,7 @@
       <span slot="footer"><el-button @click="copyDialogVisible = false">取消</el-button><el-button type="primary" :loading="dialogSaving" :disabled="!copyTargets.length" @click="copyAccount">确认复制</el-button></span>
     </el-dialog>
     <el-dialog title="策略迁移与导入导出" :visible.sync="transferVisible" width="85%" custom-class="policy-dialog" :close-on-click-modal="false">
-      <p>数据库为唯一策略来源。导入用于同一部署，按修订校验；修改模板会影响所有关联账号。配置文件不会在每次启动覆盖策略。</p>
+      <p>数据库为唯一策略来源。导入用于同一部署，按修订校验；修改共享策略会影响所有关联账号。配置文件不会在每次启动覆盖策略。</p>
       <el-button size="small" :disabled="transferBusy" @click="loadTransfer">重新读取数据库策略</el-button>
       <el-input v-model="transferText" type="textarea" :rows="12" :disabled="transferBusy" aria-label="策略 JSON" />
       <el-table :data="migrationPreview" max-height="280">
@@ -230,6 +235,7 @@
 import { apiErrorDetail } from "@/utils/api-error"
 
 const sorted = (values) => [...new Set(values || [])].sort()
+const FEATURE_PAGE_SIZE = 30
 
 export default {
   name: "PluginPolicy",
@@ -241,7 +247,7 @@ export default {
       selectedBotId: "", account: null, editingPolicy: null,
       policyScope: "account", groups: [], groupAccount: null, selectedGroupKey: "", privateAccount: null, selectionRequest: 0, listRequest: 0, destroyed: false,
       draft: { plugins: [], tasks: [] },
-      activeKind: "plugins", accountSearch: "", featureSearch: "", statusFilter: "all", selectedModules: [],
+      activeKind: "plugins", accountSearch: "", featureSearch: "", statusFilter: "all", selectedModules: [], visibleCount: FEATURE_PAGE_SIZE,
       createDialogVisible: false, policyDialogVisible: false, bindDialogVisible: false, copyDialogVisible: false,
       createForm: { name: "", description: "", bindCurrent: true },
         bindingPolicy: null, bindTargets: [], copyTargets: [], bindImpacts: [], copyImpacts: [], impactRequest: 0,
@@ -252,13 +258,21 @@ export default {
     filteredAccounts() { const q = this.accountSearch.trim().toLowerCase(); return q ? this.accounts.filter((x) => `${x.nickname} ${x.bot_id} ${x.runtime_bot_id}`.toLowerCase().includes(q)) : this.accounts },
     currentFeatures() { const known = this.catalog[this.activeKind] || []; const target = this.groupAccount || this.privateAccount || this.account; const missing = target && !this.editingPolicy ? (this.activeKind === "plugins" ? target.missing_plugins : target.missing_tasks) || [] : []; return [...known, ...missing.filter((module) => !known.some((x) => x.module === module)).map((module) => ({ module, name: "已缺失模块", feature_type: "MISSING", load_status: false, global_status: false, missing: true }))] },
     filteredFeatures() { const q = this.featureSearch.trim().toLowerCase(); return this.currentFeatures.filter((item) => { const matchText = !q || `${item.name} ${item.module} ${item.menu_type || ""}`.toLowerCase().includes(q); const enabled = this.isEnabled(item.module); const unavailable = !item.load_status || !item.global_status; const matchStatus = this.statusFilter === "all" || (this.statusFilter === "enabled" && enabled) || (this.statusFilter === "disabled" && !enabled) || (this.statusFilter === "unavailable" && unavailable); return matchText && matchStatus }) },
+    visibleFeatures() { return this.filteredFeatures.slice(0, this.visibleCount) },
+    remainingCount() { return Math.max(this.filteredFeatures.length - this.visibleCount, 0) },
     allFilteredSelected() { return this.filteredFeatures.length > 0 && this.filteredFeatures.every((x) => this.selectedModules.includes(x.module)) },
     someFilteredSelected() { const count = this.filteredFeatures.filter((x) => this.selectedModules.includes(x.module)).length; return count > 0 && count < this.filteredFeatures.length },
     copyCandidates() { return this.accounts.filter((x) => x.bot_id !== this.selectedBotId) },
     bindCandidates() { return this.accounts.filter((x) => !this.bindingPolicy?.bound_bot_ids.includes(x.bot_id)) },
   },
   watch: {
-    activeKind() { this.selectedModules = [] },
+    activeKind() { this.selectedModules = []; this.resetVisibleFeatures() },
+    featureSearch: "resetVisibleFeatures",
+    statusFilter: "resetVisibleFeatures",
+    policyScope: "resetVisibleFeatures",
+    selectedGroupKey: "resetVisibleFeatures",
+    selectedBotId: "resetVisibleFeatures",
+    "editingPolicy.id": "resetVisibleFeatures",
   },
   async mounted() { await this.loadAll() },
   beforeDestroy() { this.destroyed = true; this.selectionRequest++; this.listRequest++; this.impactRequest++ },
@@ -412,6 +426,14 @@ export default {
       this.draft = next
       if (!await (this.editingPolicy ? this.savePolicy() : this.saveTarget())) this.draft = previous
     },
+    /**
+     * 将功能列表的显示数量恢复为首屏条数
+     */
+    resetVisibleFeatures() { this.visibleCount = FEATURE_PAGE_SIZE },
+    /**
+     * 在功能列表末尾追加显示下一批条目
+     */
+    showMoreFeatures() { this.visibleCount += FEATURE_PAGE_SIZE },
     toggleFilteredSelection(value) { const values = new Set(this.selectedModules); this.filteredFeatures.forEach((x) => value ? values.add(x.module) : values.delete(x.module)); this.selectedModules = [...values] },
     typeLabel(item) { const map = { NORMAL: "普通", DEPENDANT: "依赖", ADMIN: "管理员", SUPERUSER: "超级用户", ADMIN_SUPER: "管理/超管", TASK: "被动", MISSING: "缺失" }; return map[item.feature_type] || item.feature_type },
     effectiveLabel(item) {
@@ -554,10 +576,29 @@ export default {
 .account-list { display: flex; max-height: 610px; flex-direction: column; gap: 4px; margin-top: 10px; overflow-y: auto; }.account-list button { display: grid; width: 100%; min-height: 66px; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.account-list button:hover { background: var(--bg-color-hover); }.account-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.account-list span, .policy-list-row > span { display: flex; min-width: 0; flex-direction: column; gap: 4px; }.account-list strong, .account-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.account-list small, .account-list em, .policy-list-row small { color: var(--text-color-secondary); font-size: 11px; font-style: normal; }.connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-color-disabled); }.connection-dot.online { background: var(--success-color); }
 .editor-pane { min-width: 0; padding: 20px 22px 24px; }.editor-heading { min-height: 46px; justify-content: space-between; gap: 12px; }.editor-heading > div:first-child { min-width: 0; }.back-button { width: 34px; height: 34px; margin-right: 10px; border: 0; border-radius: 4px; color: var(--text-color); background: var(--bg-color-hover); cursor: pointer; }.editor-status { flex: none; }
 .policy-meta-form { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr); gap: 12px; margin-top: 16px; }.policy-meta-form .el-form-item { margin-bottom: 0; }
-.feature-toolbar { gap: 10px; margin-top: 18px; }.feature-toolbar .el-input { max-width: 330px; margin-left: auto; }.feature-toolbar .el-select { width: 150px; }.batch-toolbar { min-height: 48px; gap: 10px; margin-top: 12px; border-top: 1px solid var(--border-color-light); border-bottom: 1px solid var(--border-color-light); }.batch-toolbar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
-.feature-table { min-width: 680px; }.feature-row { display: grid; min-height: 64px; grid-template-columns: 34px minmax(210px, 1fr) 110px 110px 90px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-color-light); }.feature-head { min-height: 42px; color: var(--text-color-secondary); font-size: 12px; }.feature-name { display: flex; min-width: 0; flex-direction: column; gap: 5px; }.feature-name strong, .feature-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.feature-name small { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 11px; }.empty-state, .empty-editor { display: grid; min-height: 140px; place-items: center; color: var(--text-color-secondary); }
+.feature-sticky { position: sticky; top: 0; z-index: 5; margin-top: 8px; padding-top: 10px; background: var(--bg-color-secondary); }.feature-toolbar { gap: 10px; }.feature-toolbar .el-input { max-width: 330px; margin-left: auto; }.feature-toolbar .el-select { width: 150px; }.batch-toolbar { min-height: 48px; gap: 10px; margin-top: 12px; border-top: 1px solid var(--border-color-light); border-bottom: 1px solid var(--border-color-light); }.batch-toolbar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
+.feature-table { min-width: 680px; }.feature-row { display: grid; min-height: 64px; grid-template-columns: 34px minmax(210px, 1fr) 110px 110px 90px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-color-light); }.feature-head { min-height: 42px; color: var(--text-color-secondary); font-size: 12px; }.feature-name { display: flex; min-width: 0; flex-direction: column; gap: 5px; }.feature-name strong, .feature-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.feature-name small { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 11px; }.load-more { display: flex; justify-content: center; padding: 16px 0 4px; }.empty-state, .empty-editor { display: grid; min-height: 140px; place-items: center; color: var(--text-color-secondary); }
 .policy-list { border-top: 1px solid var(--border-color-light); }.policy-list-row { min-height: 70px; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-color-light); }.policy-list-row > div { gap: 6px; flex: none; }.dialog-copy, .impact-line { color: var(--text-color-secondary); font-size: 13px; }.impact-line { margin-top: 14px; padding: 10px 12px; border-left: 3px solid var(--warning-color); background: var(--bg-color-hover); }.full-control { width: 100%; }.mobile-account-select { display: none; margin-bottom: 10px; }.mobile-account-select .el-select { width: 100%; }
 .impact-list { max-height: 190px; margin-top: 10px; overflow-y: auto; border-top: 1px solid var(--border-color-light); }.impact-list > div { display: flex; flex-direction: column; gap: 3px; padding: 8px 2px; border-bottom: 1px solid var(--border-color-light); font-size: 12px; }.impact-list span { color: var(--text-color-secondary); }
-@media (max-width: 820px) { .policy-page { padding: 12px; }.page-header { align-items: flex-start; flex-direction: column; }.header-actions { width: 100%; justify-content: flex-start; }.mobile-account-select { display: block; }.policy-workbench { min-height: 560px; grid-template-columns: 1fr; }.account-pane { display: none; }.editor-pane { padding: 16px 14px 20px; overflow-x: hidden; }.policy-meta-form { grid-template-columns: 1fr; }.feature-toolbar { align-items: stretch; flex-direction: column; }.feature-toolbar .el-input, .feature-toolbar .el-select { width: 100%; max-width: none; margin-left: 0; }.batch-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 8px 0; }.batch-toolbar span { width: calc(100% - 130px); }.feature-table { min-width: 0; }.feature-head { display: none; }.feature-row:not(.feature-head) { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px; padding: 10px 0; }.feature-row:not(.feature-head) > .el-checkbox { grid-row: 1 / 3; }.feature-row:not(.feature-head) > span:nth-child(3) { grid-column: 2; }.feature-row:not(.feature-head) > span:nth-child(4) { grid-column: 3; grid-row: 2; }.feature-row:not(.feature-head) > span:nth-child(5) { grid-column: 3; grid-row: 1; }.policy-list-row { align-items: flex-start; flex-direction: column; padding: 12px 0; }.policy-list-row > div { flex-wrap: wrap; } }
+@media (max-width: 820px) { .policy-page { padding: 12px; }.page-header { align-items: flex-start; flex-direction: column; }.header-actions { width: 100%; justify-content: flex-start; }.mobile-account-select { display: block; }.policy-workbench { min-height: 560px; grid-template-columns: 1fr; }.account-pane { display: none; }.editor-pane { padding: 16px 14px 20px; overflow-x: clip; }.policy-meta-form { grid-template-columns: 1fr; }.feature-toolbar { align-items: stretch; flex-direction: column; }.feature-toolbar .el-input, .feature-toolbar .el-select { width: 100%; max-width: none; margin-left: 0; }.batch-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 8px 0; }.batch-toolbar span { width: calc(100% - 130px); }.feature-table { min-width: 0; }.feature-head { display: none; }.feature-row:not(.feature-head) { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px; padding: 10px 0; }.feature-row:not(.feature-head) > .el-checkbox { grid-row: 1 / 3; }.feature-row:not(.feature-head) > span:nth-child(3) { grid-column: 2; }.feature-row:not(.feature-head) > span:nth-child(4) { grid-column: 3; grid-row: 2; }.feature-row:not(.feature-head) > span:nth-child(5) { grid-column: 3; grid-row: 1; }.policy-list-row { align-items: flex-start; flex-direction: column; padding: 12px 0; }.policy-list-row > div { flex-wrap: wrap; } }
 .dialog-note { margin: 0; color: var(--text-color-secondary); font-size: 12px; }
+@media (max-width: 767px) {
+  .page-header { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .page-header > div, .header-actions { display: contents; }
+  .page-header h1, .page-header p { grid-column: 1 / -1; }
+  .page-header p { margin-bottom: 4px; }
+  .page-header .el-button { width: 100%; min-height: 40px; margin-left: 0; padding: 10px 8px; font-size: 13px; white-space: normal; }
+  .feature-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 118px; gap: 8px; }
+  .feature-toolbar .el-radio-group { grid-column: 1 / -1; }
+  .batch-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 4px 8px; padding: 4px 0 8px; }
+  .batch-toolbar span { width: auto; margin-right: 0; text-align: right; }
+  .batch-toolbar .el-checkbox { display: inline-flex; align-items: center; min-height: 44px; }
+  .batch-toolbar .el-button { margin-left: 0; }
+  .feature-row:not(.feature-head) { min-height: 64px; grid-template-columns: 44px minmax(0, 1fr) auto; padding: 6px 0; }
+  .feature-row > .el-checkbox { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; margin-right: 0; }
+  .feature-row > span:last-child { display: flex; align-items: center; min-height: 44px; }
+  .feature-row .el-switch { height: auto; padding: 12px 4px; }
+  .el-button--mini { min-height: 32px; padding: 8px 14px; }
+  .load-more .el-button { width: 100%; min-height: 44px; }
+}
 </style>

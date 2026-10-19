@@ -23,7 +23,7 @@ export const handleAuthenticationExpired = (showMessage = true) => {
   const now = Date.now()
   if (showMessage && now - lastNotificationAt > 5000) {
     lastNotificationAt = now
-    Message.error({ message: "会话已过期，连接已断开。已提交的任务仍在后台执行。" })
+    Message.error({ message: "登录已失效，请重新登录" })
   }
 
 }

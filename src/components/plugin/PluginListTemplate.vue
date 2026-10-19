@@ -1,27 +1,11 @@
 <template>
-  <div class="plugin-list-container h-full overflow-auto">
-    <div
-      class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4"
-    >
-      <div
+  <div class="plugin-list-container">
+    <div class="plugin-grid">
+      <article
         v-for="data in dataList"
         :key="data.module"
-        class="plugin-card relative rounded-xl p-4 transition-all duration-300 cursor-pointer"
-        :class="{
-          'border-2 shadow-lg transform -translate-y-1': isSelected(
-            data.module
-          ),
-          'border-2 border-transparent hover:border-opacity-50': !isSelected(
-            data.module
-          ),
-        }"
-        :style="{
-          borderColor: isSelected(data.module)
-            ? 'var(--primary-color)'
-            : 'var(--border-color-light)',
-          boxShadow: isSelected(data.module) ? 'var(--primary-shadow)' : 'none',
-          background: 'var(--bg-color-secondary)',
-        }"
+        class="plugin-card"
+        :class="{ 'is-selected': isSelected(data.module), 'is-off': !data.status }"
         role="button"
         tabindex="0"
         :aria-pressed="isSelected(data.module)"
@@ -30,115 +14,57 @@
         @keydown.enter.prevent="toggleSelection(data)"
         @keydown.space.prevent="toggleSelection(data)"
       >
-        <!-- 选中标记 -->
-        <div
-          v-if="isSelected(data.module)"
-          class="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-white text-xs z-10 animate-bounce"
-          :style="{ backgroundColor: 'var(--primary-color)' }"
-        >
-          <i class="fas fa-check"></i>
-        </div>
+        <span v-if="isSelected(data.module)" class="selected-mark"><i class="el-icon-check"></i></span>
 
-        <!-- 插件内容 -->
-        <div class="flex flex-col h-full">
-          <!-- 插件名称和版本 -->
-          <div class="flex items-baseline mb-1">
-            <h3
-              class="text-lg font-bold truncate"
-              :style="{ color: 'var(--primary-color)' }"
-            >
-              {{ data.plugin_name }}
-            </h3>
-            <span
-              class="ml-2 text-xs px-1.5 py-0.5 rounded-full"
-              :style="{
-                color: 'var(--primary-color)',
-                backgroundColor: 'var(--bg-color-hover)',
-              }"
-              >v{{ data.version }}</span
-            >
+        <div class="card-head">
+          <div class="card-title">
+            <h3 :title="data.plugin_name">{{ data.plugin_name }}</h3>
+            <span class="version">v{{ data.version }}</span>
           </div>
-
-          <!-- 模块和作者 -->
-          <p
-            class="text-sm mb-2 truncate"
-            :style="{ color: 'var(--text-color-secondary)' }"
+          <div
+            class="plugin-switch"
+            title="全局关闭后，符合条件的第三方插件会在后台卸载以释放资源，重新开启时自动加载；其余插件仅关闭"
+            @click.stop
           >
-            <span class="font-mono">{{ data.module }}</span>
-            <span
-              v-if="data.author"
-              class="ml-2"
-              :style="{ color: 'var(--primary-color-light)' }"
-              >@{{ data.author }}</span
-            >
-          </p>
-
-          <!-- 菜单类型标签 -->
-          <div v-if="data.menu_type" class="mt-auto">
-            <span
-              class="inline-block px-2 py-1 text-xs rounded-full"
-              :style="{
-                backgroundColor: 'var(--bg-color-hover)',
-                color: 'var(--primary-color)',
-              }"
-            >
-              {{ data.menu_type }}
-            </span>
-          </div>
-
-          <!-- 底部按钮区域 - 右侧横向排列 -->
-          <div class="flex items-center mt-3 pt-2 plugin-actions">
-            <NormalButton
-              iconClass="readme"
-              text="帮助"
-              title="查看使用帮助"
-              base-class="hover:scale-110"
-              active-class="bg-blue-100 text-blue-600 hover:bg-blue-200 hover:text-blue-800"
-              @click="openUsage(data)"
-            />
-
-            <!-- 配置按钮 -->
-            <NormalButton
-              icon-class="fas fa-cog text-lg"
-              iconClass="setting"
-              :disabled="!data.allow_setting"
-              text="配置"
-              title="插件配置"
-              base-class="hover:scale-110"
-              active-class="bg-blue-100 text-blue-600 hover:bg-blue-200 hover:text-blue-800"
-              @click="openSetting(data)"
-            />
-
-            <!-- 卸载按钮 -->
-            <NormalButton
-              v-if="data.management_source === 'nonebot_store'"
-              iconClass="store"
-              text="NB商店"
-              title="前往 NoneBot 商店管理或卸载"
-              base-class="hover:scale-110"
-              active-class="bg-blue-100 text-blue-600 hover:bg-blue-200 hover:text-blue-800"
-              @click="goToManagement(data)"
-            />
-            <NormalButton
-              v-else
-              text="卸载"
-              :iconClass="
-                !data.uninstall_supported ? 'uninstall-disabled' : 'uninstall-purple'
-              "
-              :title="data.uninstall_supported ? '卸载插件' : data.uninstall_reason || '该插件不可卸载'"
-              :disabled="!data.uninstall_supported"
-              :base-class="'hover:scale-110'"
-              :active-class="'bg-purple-100 text-purple-600 hover:bg-purple-200 hover:text-purple-800'"
-              @click="uninstallPlugin(data)"
-            />
-            <div class="plugin-switch flex items-center ml-auto" title="全局关闭后会在后台卸载插件以释放资源，重新开启时自动加载" @click.stop>
-              <el-switch :value="data.status" :disabled="!data.allow_switch" @change="onSwitchChange(data, $event)" />
-              <span class="ml-2 text-xs" :style="{ color: data.status ? 'var(--el-color-success)' : 'var(--el-color-danger)' }">{{ switchLabel(data) }}</span>
-            </div>
+            <el-switch :value="data.status" :disabled="!data.allow_switch || data.switching" @change="onSwitchChange(data, $event)" />
           </div>
         </div>
-      </div>
+
+        <p class="card-module" :title="data.module">
+          <span>{{ data.module }}</span>
+          <em v-if="data.author">@{{ data.author }}</em>
+        </p>
+
+        <div class="card-tags">
+          <span v-if="data.menu_type" class="tag">{{ data.menu_type }}</span>
+          <span class="tag state" :class="switchStateClass(data)">{{ switchLabel(data) }}</span>
+        </div>
+
+        <div class="card-actions" @click.stop>
+          <el-button type="text" size="mini" icon="el-icon-reading" @click="openUsage(data)">帮助</el-button>
+          <el-button type="text" size="mini" icon="el-icon-setting" :disabled="!data.allow_setting" @click="openSetting(data)">配置</el-button>
+          <el-button
+            v-if="data.management_source === 'nonebot_store'"
+            type="text"
+            size="mini"
+            icon="el-icon-goods"
+            title="前往 NoneBot 商店管理或卸载"
+            @click="goToManagement(data)"
+          >NB商店</el-button>
+          <el-button
+            v-else
+            type="text"
+            size="mini"
+            icon="el-icon-delete"
+            class="danger-action"
+            :title="data.uninstall_supported ? '卸载插件' : data.uninstall_reason || '该插件不可卸载'"
+            :disabled="!data.uninstall_supported"
+            @click="uninstallPlugin(data)"
+          >卸载</el-button>
+        </div>
+      </article>
     </div>
+    <el-empty v-if="loaded && !dataList.length" description="当前分类下没有插件" :image-size="90" />
 
     <UpdateDialog
       v-if="dialogVisible"
@@ -169,7 +95,6 @@
 
 <script>
 import UpdateDialog from "./UpdateDialog"
-import NormalButton from "@/components/ui/NormalButton.vue"
 import { notifyRestartStatusChanged } from "@/utils/apply-result"
 import { newOperationId, reasonText, rememberPluginOperation, storeOperationResult } from "@/utils/plugin-operation"
 
@@ -182,7 +107,7 @@ const PLUGIN_TYPE_GROUPS = {
 export default {
   name: "PluginListTemplate",
   props: { pluginType: String, menuType: String },
-  components: { UpdateDialog, NormalButton },
+  components: { UpdateDialog },
   data() {
     return {
       dataList: [],
@@ -191,6 +116,7 @@ export default {
       selectedPlugins: [],
       usageVisible: false,
       usagePlugin: null,
+      loaded: false,
     }
   },
   computed: {
@@ -225,7 +151,10 @@ export default {
           this.$message.error("请求插件列表失败: " + error)
           this.dataList = []
         })
-        .finally(() => loading.close())
+        .finally(() => {
+          this.loaded = true
+          loading.close()
+        })
     },
     onSwitchChange(data, newStatus) {
       if (data.switching) return
@@ -318,6 +247,10 @@ export default {
         }
       }
     },
+    switchStateClass(data) {
+      if (!data.status) return "is-off"
+      return data.block_type ? "is-partial" : "is-on"
+    },
     switchLabel(data) {
       if (!data.allow_switch) return "不可切换"
       if (!data.status) return "关闭"
@@ -352,16 +285,181 @@ export default {
 </script>
 
 <style scoped>
+.plugin-list-container {
+  height: 100%;
+  overflow: auto;
+}
+
+.plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+
 .plugin-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 14px 14px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-color-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.plugin-card:hover {
+  border-color: var(--primary-color-light-5);
   box-shadow: var(--card-shadow);
-  background-image: radial-gradient(
-      circle at 10% 20%,
-      var(--primary-color-light) 0%,
-      var(--bg-color-hover) 90%
-    ),
-    linear-gradient(to bottom right, var(--bg-color), var(--bg-color-secondary));
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-  min-height: 140px;
+}
+
+.plugin-card:focus-visible {
+  outline: 2px solid var(--primary-color-light-5);
+  outline-offset: 2px;
+}
+
+.plugin-card.is-selected {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px var(--primary-shadow);
+}
+
+.selected-mark {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #ffffff;
+  background: var(--primary-color);
+  font-size: 12px;
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.card-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.card-title h3 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-color);
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-card.is-off .card-title h3 {
+  color: var(--text-color-secondary);
+}
+
+.version {
+  flex-shrink: 0;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+}
+
+.plugin-switch {
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.card-module {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 10px;
+  overflow: hidden;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.card-module span {
+  overflow: hidden;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  text-overflow: ellipsis;
+}
+
+.card-module em {
+  flex-shrink: 0;
+  color: var(--primary-color);
+  font-style: normal;
+}
+
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.tag {
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--text-color-secondary);
+  background: var(--bg-color-hover);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.tag.state.is-on {
+  color: var(--success-color);
+  background: color-mix(in srgb, var(--success-color) 12%, transparent);
+}
+
+.tag.state.is-partial {
+  color: var(--warning-color);
+  background: color-mix(in srgb, var(--warning-color) 12%, transparent);
+}
+
+.tag.state.is-off {
+  color: var(--danger-color);
+  background: var(--el-color-danger-light-9);
+}
+
+.card-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color-light);
+  cursor: default;
+}
+
+.card-actions .el-button {
+  padding: 6px 8px;
+  color: var(--text-color-secondary);
+}
+
+.card-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.card-actions .el-button:not(.is-disabled):hover {
+  color: var(--primary-color);
+}
+
+.card-actions .danger-action:not(.is-disabled):hover {
+  color: var(--danger-color);
+}
+
+.card-actions .el-button.is-disabled {
+  color: var(--text-color-disabled);
 }
 
 .usage-drawer {
@@ -389,98 +487,22 @@ export default {
   white-space: pre-wrap;
 }
 
-.plugin-card .button-row {
-  border-top: 1px dashed var(--border-color-light);
-  padding-top: 8px;
-  margin-top: 8px;
-}
-
-.plugin-card:hover {
-  transform: translateY(-3px) scale(1.02);
-  box-shadow: var(--primary-shadow);
-}
-
-/* 选中状态动画 */
-.plugin-card.is-selected {
-  animation: pulse 2s infinite;
-  border-color: var(--primary-color);
-}
-
-@keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 var(--primary-shadow);
-  }
-  70% {
-    box-shadow: 0 0 0 12px transparent;
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
+@media (max-width: 760px) {
+  .plugin-list-container {
+    height: auto;
+    overflow: visible;
   }
 }
 
-/* 按钮区域 */
-.plugin-card .button-area {
-  border-left: 1px dashed var(--border-color-light);
-}
-
-.plugin-card .plugin-switch {
-  order: 2;
-  margin-left: auto;
-}
-
-/* 移动端适配 */
-@media (max-width: 640px) {
-  /* 小屏幕下只显示图标 */
-  .plugin-card button span {
-    display: none;
-  }
-  .plugin-card button {
-    padding: 6px;
-    min-width: 32px;
-  }
-}
-
-/* 二次元风格确认对话框 */
-:deep(.anime-confirm-dialog) {
-  border-radius: 16px;
-  background: var(--bg-color-secondary);
-  border: 2px solid var(--border-color-light);
-
-  .el-message-box__header {
-    background: var(--primary-color);
-    border-radius: 14px 14px 0 0;
-    padding: 10px 20px;
-
-    .el-message-box__title {
-      color: var(--bg-color);
-      text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
-    }
+@media (max-width: 520px) {
+  .plugin-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 10px;
   }
 
-  .el-message-box__content {
-    padding: 20px;
-    color: var(--primary-color);
-  }
-
-  .el-message-box__btns {
-    padding: 10px 20px 20px;
-
-    button {
-      border-radius: 12px;
-      padding: 8px 16px;
-
-      &.el-button--primary {
-        background: var(--primary-color);
-        border-color: var(--primary-color);
-        color: var(--bg-color);
-      }
-
-      &.el-button--default {
-        background: var(--bg-color-hover);
-        border-color: var(--border-color-light);
-        color: var(--primary-color);
-      }
-    }
+  .card-actions .el-button {
+    padding: 8px 10px;
   }
 }
 </style>

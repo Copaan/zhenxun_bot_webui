@@ -14,6 +14,9 @@
           <em v-if="databaseStatus.latency_ms != null">{{ databaseStatus.latency_ms }} ms</em>
         </span>
       </div>
+      <div class="database-mode-grid" role="radiogroup" aria-label="数据库类型">
+        <button v-for="tab in databaseTabs" :key="tab.name" type="button" role="radio" class="zx-chip" :class="{ 'is-active': databaseMode === tab.name }" :aria-checked="String(databaseMode === tab.name)" @click="databaseMode = tab.name">{{ tab.label }}</button>
+      </div>
       <el-tabs v-model="databaseMode" class="database-tabs">
         <el-tab-pane v-for="tab in databaseTabs" :key="tab.name" :label="tab.label" :name="tab.name">
           <el-form label-position="top"><DatabaseFields v-model="databaseDrafts[tab.name]" /></el-form>
@@ -39,7 +42,7 @@
         <el-form-item label="端口"><el-input-number v-model="cache.port" :min="1" :max="65535" controls-position="right" /></el-form-item>
         <el-form-item label="密码" class="wide"><el-input v-model="cache.password" autocomplete="new-password" placeholder="无密码可留空" show-password /></el-form-item>
       </el-form>
-      <div v-if="runtime.cache && runtime.cache.redis && cache.mode === 'REDIS'" class="metric-row">
+      <div v-if="runtimeCacheMode === 'REDIS' && runtime.cache.redis" class="metric-row">
         <span>Redis 键数 <strong>{{ formatNumber(runtime.cache.redis.dbsize) }}</strong></span>
         <span>内存使用 <strong>{{ formatBytes(runtime.cache.redis.used_memory) }}</strong></span>
       </div>
@@ -63,7 +66,7 @@
       <div class="cache-actions">
         <el-button :loading="cacheAction === 'refresh'" @click="refreshRuntime">刷新运行时缓存</el-button>
         <el-button :loading="cacheAction === 'local'" @click="clearLocal">清理本地临时缓存</el-button>
-        <el-button v-if="cache.mode === 'REDIS'" type="danger" plain :loading="cacheAction === 'redis'" @click="clearRedis">清理真寻 Redis 命名空间</el-button>
+        <el-button v-if="runtimeCacheMode === 'REDIS'" type="danger" plain :loading="cacheAction === 'redis'" @click="clearRedis">清理真寻 Redis 命名空间</el-button>
       </div>
     </section>
 
@@ -122,9 +125,11 @@ export default {
     pageError() { return this.operationError || this.databaseProbeErrors[this.databaseMode] || "" },
     cacheStatus() {
       if (this.activeProbeResult.cache) return this.activeProbeResult.cache
-      if (this.cache.mode === "REDIS") return this.runtime.cache?.redis || {}
-      return { status: "ok", latency_ms: 0 }
+      const mode = String(this.cache.mode || "").toUpperCase()
+      if (mode !== "REDIS") return mode ? { status: "skipped" } : {}
+      return this.runtimeCacheMode === "REDIS" ? this.runtime.cache?.redis || {} : {}
     },
+    runtimeCacheMode() { return this.runtime.cache?.actual_mode || "" },
     runtimeCacheRows() { return Object.entries(this.runtime.cache?.runtime || {}).map(([name, value]) => ({ name, ...value })) },
     runtimeEntryCount() { return this.runtimeCacheRows.reduce((total, item) => total + Number(item.entry_count || 0), 0) },
     boundedTotals() {
@@ -141,7 +146,7 @@ export default {
   },
   methods: {
     formatBytes,
-    statusLabel(status) { return { ok: "连接正常", warning: "需要注意", error: "连接异常" }[status] || "尚未检查" },
+    statusLabel(status) { return { ok: "连接正常", warning: "需要注意", error: "连接异常", skipped: "无需检测" }[status] || "尚未检查" },
     formatNumber(value) { return value == null ? "-" : Number(value).toLocaleString() },
     async loadRuntime() {
       if (this.loading || this.saving) return
@@ -239,6 +244,8 @@ export default {
 .data-page { min-height: 100%; padding: 22px; color: var(--text-color); background: var(--bg-color); }.page-header, .section-heading, .save-bar, .cache-actions, .metric-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }.page-header { margin-bottom: 16px; }.page-header h1, .section-heading h2 { margin: 0; }.page-header h1 { font-size: 24px; }.page-header p, .section-heading p { margin: 5px 0 0; color: var(--text-color-secondary); }
 .settings-band { margin-bottom: 14px; padding: 18px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.section-heading h2 { font-size: 18px; }.mode-selector { margin: 18px 0 14px; }.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.form-grid .wide { grid-column: 1 / -1; }.form-grid ::v-deep .el-input-number { width: 100%; }.metric-row { justify-content: flex-start; margin-top: 10px; color: var(--text-color-secondary); }.metric-row span { padding-right: 22px; }
 .metrics-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }.metric { min-width: 0; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; }.metric span { display: block; overflow: hidden; color: var(--text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.metric strong { display: block; margin-top: 5px; font-size: 20px; }.runtime-table { margin-bottom: 14px; }.cache-actions { justify-content: flex-start; flex-wrap: wrap; }
-.save-bar { position: sticky; bottom: 0; z-index: 3; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color); }.save-bar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.inline-error { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--el-color-danger-light-7); border-radius: 5px; color: var(--el-color-danger); background: var(--el-color-danger-light-9); }.status-pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-color-secondary); font-size: 12px; white-space: nowrap; }.status-pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-info); }.status-pill.is-ok i { background: var(--el-color-success); }.status-pill.is-error i { background: var(--el-color-danger); }.status-pill em { font-style: normal; }
+.save-bar { position: sticky; bottom: 0; z-index: 3; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color-secondary); }.save-bar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.inline-error { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--el-color-danger-light-7); border-radius: 5px; color: var(--el-color-danger); background: var(--el-color-danger-light-9); }.status-pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-color-secondary); font-size: 12px; white-space: nowrap; }.status-pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-info); }.status-pill.is-ok i { background: var(--el-color-success); }.status-pill.is-error i { background: var(--el-color-danger); }.status-pill em { font-style: normal; }
 @media (max-width: 1050px) { .metrics-grid { grid-template-columns: repeat(3, 1fr); } }@media (max-width: 680px) { .data-page { padding: 12px; }.page-header, .section-heading { align-items: flex-start; }.form-grid { grid-template-columns: 1fr; }.form-grid .wide { grid-column: auto; }.mode-selector { display: flex; overflow-x: auto; }.metrics-grid { grid-template-columns: repeat(2, 1fr); }.save-bar { flex-wrap: wrap; }.save-bar span { width: 100%; } }
+.database-mode-grid { display: none; }
+@media (max-width: 767px) { .database-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 16px 0 6px; }.database-mode-grid .zx-chip { justify-content: center; height: 36px; min-width: 0; border-radius: 6px; font-family: inherit; font-size: 13px; white-space: nowrap; }.database-tabs ::v-deep > .el-tabs__header { display: none; } }
 </style>

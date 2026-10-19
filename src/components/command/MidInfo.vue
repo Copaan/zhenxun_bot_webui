@@ -1,10 +1,13 @@
 <template>
   <div ref="midInfo" class="mid-info text-gray-800 p-4 flex flex-col h-full">
-    <!-- 消息接收区域 -->
+    <!-- 消息接收 / 功能调用区域 -->
     <div
-      class="metric-panel message-area p-4 mb-3"
+      v-for="group in metricGroups"
+      :key="group.className"
+      class="metric-panel p-4 mb-3"
+      :class="group.className"
       :style="{
-        height: areaHeight + 'px',
+        height: compact ? 'auto' : areaHeight + 'px',
         backgroundColor: 'var(--bg-color-secondary)',
         border: '1px solid var(--border-color-light)',
       }"
@@ -14,80 +17,31 @@
           class="text-md font-bold flex items-center"
           :style="{ color: 'var(--primary-color)' }"
         >
-          消息接收
+          {{ group.title }}
         </p>
         <span
           class="text-xs ml-3"
           :style="{ color: 'var(--text-color-secondary)' }"
         >
-          实时统计
+          每 30 秒刷新
         </span>
       </div>
 
-      <div
-        class="grid grid-cols-2 md:grid-cols-5 gap-3"
-        :style="{ height: areaHeight - 80 + 'px' }"
-      >
-        <div
-          v-for="(item, key) in progressItems"
-          :key="key"
-          class="flex flex-col p-1 justify-center"
-        >
-          <div
-            class="progress-container flex-col w-full flex justify-center items-center"
+      <div v-if="compact" class="stat-grid">
+        <div v-for="(item, key) in progressItems" :key="key" class="stat-cell">
+          <p
+            class="stat-value"
+            :style="{ color: item.color }"
+            :title="String(group.counts[key])"
           >
-            <div
-              class="progress-container w-full flex justify-center items-center"
-            >
-              <el-progress
-                type="circle"
-                :percentage="percentage(chCnt, key)"
-                :width="progressWidth"
-                :stroke-width="strokeWidth"
-                :color="item.color"
-                :format="() => String(chCnt[key])"
-                :style="{
-                  '--progress-font-size': fontSize + 'px',
-                  'max-width': '100%',
-                }"
-              />
-            </div>
-            <p
-              class="text-sm font-medium mt-2 text-center truncate w-full"
-              :style="{ color: 'var(--text-color-secondary)' }"
-            >
-              {{ item.label }}
-            </p>
-          </div>
+            {{ group.counts[key] }}
+          </p>
+          <p class="stat-label">{{ item.label }}</p>
         </div>
       </div>
-    </div>
-
-    <!-- 功能调用区域 -->
-    <div
-      class="metric-panel function-area p-4 mb-3"
-      :style="{
-        height: areaHeight + 'px',
-        backgroundColor: 'var(--bg-color-secondary)',
-        border: '1px solid var(--border-color-light)',
-      }"
-    >
-      <div class="title-box flex items-center mb-3">
-        <p
-          class="text-md font-bold flex items-center"
-          :style="{ color: 'var(--primary-color)' }"
-        >
-          功能调用
-        </p>
-        <span
-          class="text-xs ml-3"
-          :style="{ color: 'var(--text-color-secondary)' }"
-        >
-          实时统计
-        </span>
-      </div>
 
       <div
+        v-else
         class="grid grid-cols-2 md:grid-cols-5 gap-3"
         :style="{ height: areaHeight - 80 + 'px' }"
       >
@@ -104,11 +58,11 @@
             >
               <el-progress
                 type="circle"
-                :percentage="percentage(callCnt, key)"
+                :percentage="percentage(group.counts, key)"
                 :width="progressWidth"
                 :stroke-width="strokeWidth"
                 :color="item.color"
-                :format="() => String(callCnt[key])"
+                :format="() => String(group.counts[key])"
                 :style="{
                   '--progress-font-size': fontSize + 'px',
                   'max-width': '100%',
@@ -131,7 +85,7 @@
       class="metric-panel chart-area p-4 flex-1 min-h-[100px]"
       ref="chartArea"
       :style="{
-        height: computedChartHeight + 'px',
+        height: compact ? 'auto' : computedChartHeight + 'px',
         backgroundColor: 'var(--bg-color-secondary)',
         border: '1px solid var(--border-color-light)',
         background:
@@ -141,7 +95,9 @@
       <div
         ref="chart"
         class="w-full h-full"
-        :style="{ height: computedChartHeight - 20 + 'px' }"
+        :style="{
+          height: (compact ? 240 : computedChartHeight - 20) + 'px',
+        }"
       ></div>
     </div>
   </div>
@@ -149,7 +105,7 @@
 
 <script>
 import EventBus from "@/utils/event-bus"
-import { getCssVar } from "@/utils/template"
+import { abbreviateNumber, getCssVar } from "@/utils/template"
 import { debounce } from "lodash"
 
 const lineSeries = (name, data, yAxisIndex, color, areaFrom, areaTo) => ({
@@ -193,6 +149,7 @@ export default {
       fontSize: 14,
       areaHeight: 300,
       chartBorderHeight: 0,
+      compact: window.innerWidth < 768,
       botInfo: null,
       chCnt: { num: 0, day: 0, week: 0, month: 0, year: 0 },
       callCnt: { num: 0, day: 0, week: 0, month: 0, year: 0 },
@@ -232,6 +189,15 @@ export default {
     EventBus.$on("change-theme", this.themeChangeHandler)
   },
   computed: {
+    /**
+     * 消息接收与功能调用两组统计数据
+     */
+    metricGroups() {
+      return [
+        { title: "消息接收", className: "message-area", counts: this.chCnt },
+        { title: "功能调用", className: "function-area", counts: this.callCnt },
+      ]
+    },
     computedChartHeight() {
       if (!this.chartBorderHeight) {
         this.handleResize()
@@ -278,13 +244,14 @@ export default {
       if (this.destroyed) return
       const width = window.innerWidth
       const height = window.innerHeight
+      const compact = width < 768
+      if (compact !== this.compact) {
+        this.compact = compact
+        this.renderChart()
+      }
 
-      // 进度条大小调整逻辑保持不变
-      if (width < 640) {
-        this.progressWidth = Math.min(70, Math.max(50, width * 0.15))
-        this.strokeWidth = 6
-        this.fontSize = 10
-      } else if (width < 1024) {
+      // 进度环尺寸（仅桌面端渲染）
+      if (width < 1024) {
         this.progressWidth = 75
         this.strokeWidth = 7
         this.fontSize = 12
@@ -354,8 +321,8 @@ export default {
     },
     chartOption() {
       const textStyle = { color: getCssVar("--text-color"), fontSize: 14 }
-      return {
-        title: { text: "消息/调用统计", textStyle: { color: getCssVar("--primary-color"), fontSize: 16 } },
+      const option = {
+        title: { text: "近30天消息/调用统计", textStyle: { color: getCssVar("--primary-color"), fontSize: 16 } },
         tooltip: {
           trigger: "axis",
           backgroundColor: getCssVar("--el-bg-color-overlay"),
@@ -382,6 +349,28 @@ export default {
           lineSeries("调用统计", this.chatAndCallMonth.call || [], 1, "--primary-color-light", "--el-fill-color", "--el-fill-color-lighter"),
         ],
       }
+      return this.compact ? this.compactChartOption(option) : option
+    },
+    /**
+     * 将趋势图配置调整为移动端紧凑布局：图例置底，隐藏纵轴名称，缩小字号并缩写纵轴刻度
+     *
+     * @param {Object} option 桌面端图表配置
+     * @returns {Object} 移动端图表配置
+     */
+    compactChartOption(option) {
+      const textStyle = { ...option.legend.textStyle, fontSize: 12 }
+      option.title.textStyle.fontSize = 14
+      option.tooltip.textStyle = textStyle
+      option.legend = { ...option.legend, bottom: 0, itemWidth: 16, itemHeight: 8, textStyle }
+      option.grid = { ...option.grid, top: 44, left: 0, right: 0, bottom: 28 }
+      option.toolbox.itemSize = 12
+      option.xAxis.axisLabel.fontSize = 10
+      option.yAxis.forEach((axis) => {
+        axis.splitNumber = 3
+        axis.name = ""
+        axis.axisLabel = { ...axis.axisLabel, fontSize: 10, formatter: abbreviateNumber }
+      })
+      return option
     },
     renderChart() {
       if (this.destroyed || !this.chart) return
@@ -438,36 +427,56 @@ export default {
   align-items: center;
 }
 
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stat-cell {
+  min-width: 0;
+  padding: 8px 4px;
+  text-align: center;
+  border: 1px solid var(--border-color-light);
+  border-radius: 6px;
+  background: var(--bg-color);
+}
+
+.stat-value {
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-label {
+  margin-top: 2px;
+  color: var(--text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 /* 移动端响应式样式 */
-@media (max-width: 640px) {
-  .message-area,
-  .function-area {
+@media (max-width: 767px) {
+  .mid-info {
+    height: auto;
+    padding: 0;
+  }
+
+  .metric-panel {
     padding: 12px;
   }
 
   .title-box {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-
-  .title-box span {
-    margin-left: 0;
-    margin-top: 4px;
-    width: 100%;
-  }
-
-  .progress-container {
-    min-width: 60px;
-    max-width: 80px;
-  }
-
-  .grid-cols-2 {
-    gap: 8px;
+    margin-bottom: 8px;
   }
 }
 
 /* 平板响应式样式 */
-@media (max-width: 1024px) and (min-width: 641px) {
+@media (max-width: 1024px) and (min-width: 768px) {
   .message-area,
   .function-area {
     padding: 12px;

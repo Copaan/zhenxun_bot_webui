@@ -31,8 +31,6 @@ export async function requestRestartWithRecovery(vm, { request, recovery = {} })
     const authoritative = Array.isArray(returnedUrls) || Array.isArray(returnedTargets)
     startRestartRecovery({
       bootId: data.boot_id,
-      launcherBootId: data.launcher_boot_id,
-      restartId: data.restart_id,
       accessUrls: authoritative ? returnedUrls || [] : recovery.accessUrls || [],
       accessTargets: authoritative ? returnedTargets || [] : recovery.accessTargets || [],
       preferredUrl: authoritative ? data.preferred_url || "" : recovery.preferredUrl || "",

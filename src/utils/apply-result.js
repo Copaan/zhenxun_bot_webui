@@ -42,10 +42,6 @@ export async function handleApplyResult(vm, response, options = {}) {
     })
   }
   if (mode === "restart_requested") return true
-  if (["saved", "saved_only"].includes(mode)) {
-    vm.$message.success("配置已保存，尚未应用到当前运行状态。")
-    return true
-  }
   if (!["config_reloaded", "hot_reloaded", "component_restarted"].includes(mode)) {
     vm.$message.warning("配置已保存，生效状态待确认。")
     return true

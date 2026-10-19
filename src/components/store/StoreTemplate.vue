@@ -10,6 +10,8 @@
 
     <div class="store-toolbar">
       <el-input v-model.trim="search" clearable prefix-icon="el-icon-search" placeholder="搜索名称、模块或作者" />
+      <el-button class="filter-toggle" :class="{ 'is-open': filtersOpen }" icon="el-icon-s-operation" :aria-expanded="String(filtersOpen)" @click="filtersOpen = !filtersOpen">筛选<span v-if="activeFilterCount" class="filter-count">{{ activeFilterCount }}</span></el-button>
+      <div class="store-filters" :class="{ 'is-open': filtersOpen }">
       <el-select v-model="statusFilter" aria-label="安装状态">
         <el-option label="全部状态" value="all" />
         <el-option label="未安装" value="uninstalled" />
@@ -31,6 +33,7 @@
         <el-option label="仅阿里" value="ali" />
         <el-option label="仅 GitHub" value="git" />
       </el-select>
+      </div>
     </div>
 
     <div v-if="error" class="inline-state is-error">
@@ -38,8 +41,18 @@
       <el-button type="text" @click="loadPlugins(false)">重新加载</el-button>
     </div>
 
-    <div v-loading="loading" class="store-content">
-      <div v-if="pagedPlugins.length" class="plugin-grid">
+    <div v-loading="loading && plugins.length > 0" class="store-content">
+      <div v-if="loading && !plugins.length" class="plugin-grid" aria-busy="true" aria-label="正在加载插件">
+        <div v-for="index in 6" :key="index" class="plugin-card is-skeleton">
+          <span class="zx-skeleton skeleton-title"></span>
+          <span class="zx-skeleton skeleton-module"></span>
+          <span class="zx-skeleton skeleton-line"></span>
+          <span class="zx-skeleton skeleton-line is-short"></span>
+          <div class="skeleton-meta"><span v-for="cell in 4" :key="cell" class="zx-skeleton"></span></div>
+          <span class="zx-skeleton skeleton-action"></span>
+        </div>
+      </div>
+      <div v-else-if="pagedPlugins.length" class="plugin-grid">
         <article v-for="plugin in pagedPlugins" :key="plugin.store_key || plugin.id" class="plugin-card">
           <div class="plugin-card__head">
             <div class="plugin-title">
@@ -154,7 +167,7 @@ export default {
   data() {
     let source = "auto"
     try { source = localStorage.getItem("zhenxun_plugin_download_source") || "auto" } catch (_) { /* Storage may be disabled. */ }
-    return { chatSwitches: {}, switchRevision: "", switchSaving: false, switchLoading: false, switchSequence: 0, downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", page: 1, pageSize: 18, actionId: null, actionType: "", pendingActionKey: "", drawerVisible: false, selectedPlugin: null, configModule: "" }
+    return { chatSwitches: {}, switchRevision: "", switchSaving: false, switchLoading: false, switchSequence: 0, downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", filtersOpen: false, page: 1, pageSize: 18, actionId: null, actionType: "", pendingActionKey: "", drawerVisible: false, selectedPlugin: null, configModule: "" }
   },
   computed: {
     pluginOperation() { return this.$store.state.pluginOperation },
@@ -172,6 +185,11 @@ export default {
       if (this.sortBy === "version") return [...result].sort((left, right) => compareVersion(right.version, left.version))
       return [...result].sort((left, right) => String(left[this.sortBy] || "").localeCompare(String(right[this.sortBy] || ""), "zh-CN"))
     },
+    /**
+     * 统计偏离默认值的筛选项数量
+     * @returns {number} 已启用的筛选项数量
+     */
+    activeFilterCount() { return [this.statusFilter !== "all", this.typeFilter !== "all", this.sortBy !== "default", this.downloadSource !== "auto"].filter(Boolean).length },
     pagedPlugins() { const start = (this.page - 1) * this.pageSize; return this.filteredPlugins.slice(start, start + this.pageSize) },
     drawerSize() { return window.innerWidth <= 680 ? "92%" : "520px" },
   },
@@ -208,15 +226,19 @@ export default {
         this.$message.error(error.response?.status === 409 ? "配置已变化，请检查更新后重新操作。" : error.message || "开关保存失败")
       } finally { this.switchSaving = false }
     },
-    saveDownloadSource() { try { localStorage.setItem("zhenxun_plugin_download_source", this.downloadSource) } catch (_) { /* Optional preference. */ } },
+    saveDownloadSource() {
+      try { localStorage.setItem("zhenxun_plugin_download_source", this.downloadSource) } catch (_) { /* Optional preference. */ }
+      this.loadPlugins()
+    },
     repositoryUrl(plugin) { return plugin.github_url || plugin.ali_url || "" },
     openRepository(plugin) { window.open(this.repositoryUrl(plugin), "_blank", "noopener,noreferrer") },
     showDetails(plugin) { this.selectedPlugin = plugin; this.drawerVisible = true },
     reloadLabel(plugin) {
       if (plugin.stopped) {
         if ((plugin.reload_reasons || []).includes("dependency_missing")) return "缺少依赖已停用，安装依赖后重启"
-        return "加载失败已停用，修复后可热重载"
+        return plugin.reload_support === "hot_reloadable" ? "加载失败已停用，修复后可热重载" : "加载失败已停用，修复后需重启生效"
       }
+      if (plugin.parked) return "已全局关闭（已卸载）"
       if (plugin.reload_support === "hot_reloadable") return "支持热加载"
       if ((plugin.reload_reasons || []).includes("not_loaded")) return "尚未加载"
       return "变更后需要重启"
@@ -238,7 +260,7 @@ export default {
     async loadPlugins(refresh = false) {
       this.loading = true; this.error = ""
       try {
-        const response = await this.getRequest(`${this.$root.prefix}/store/get_plugin_store`, { refresh })
+        const response = await this.getRequest(`${this.$root.prefix}/store/get_plugin_store`, { refresh, download_source: this.downloadSource })
         if (!response.suc) throw new Error(response.info || "插件商店加载失败")
         this.plugins = Array.isArray(response.data.plugin_list) ? response.data.plugin_list : []
         if (this.capability === "ai_chat") await this.loadChatSwitches()
@@ -366,6 +388,8 @@ export default {
 .store-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) 150px 150px 150px 230px; gap: 10px; margin-bottom: 16px; }
 .store-content { min-height: 260px; }.plugin-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .plugin-card { display: flex; min-width: 0; min-height: 244px; flex-direction: column; padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
+.plugin-card.is-skeleton { gap: 10px; }.skeleton-title { width: 45%; height: 18px; }.skeleton-module { width: 30%; }.skeleton-line { width: 92%; }.skeleton-line.is-short { width: 60%; }
+.skeleton-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-top: 8px; }.skeleton-meta .zx-skeleton { width: 70%; }.skeleton-action { width: 72px; height: 28px; margin-top: auto; margin-left: auto; }
 .plugin-card__head { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 10px; }.plugin-title { min-width: 0; }
 .plugin-title h2 { margin: 0; overflow: hidden; color: var(--text-color); font-size: 16px; line-height: 24px; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-title span, .detail-module { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 12px; }
@@ -378,5 +402,15 @@ export default {
 .empty-state { min-height: 300px; flex-direction: column; }.empty-state i { font-size: 34px; }.empty-state h2, .empty-state p { margin: 0; }.store-pagination { margin-top: 20px; text-align: center; }
 .detail-drawer { padding: 0 22px 24px; color: var(--text-color); }.detail-drawer h3 { margin: 22px 0 8px; font-size: 14px; }.detail-drawer p, .detail-drawer pre { margin: 0; color: var(--text-color-secondary); line-height: 1.7; white-space: pre-wrap; word-break: break-word; }.detail-drawer a { word-break: break-all; }
 @media (max-width: 1180px) { .plugin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.store-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 680px) { .store-shell { padding: 14px; }.store-header { align-items: flex-start; }.store-toolbar, .plugin-grid { grid-template-columns: 1fr; }.plugin-card { min-height: 224px; } }
+@media (max-width: 680px) { .store-shell { padding: 14px; }.store-header { align-items: flex-start; }.plugin-grid { grid-template-columns: 1fr; }.plugin-card { min-height: 224px; } }
+.store-filters { display: contents; }.filter-toggle { display: none; }
+.filter-count { display: inline-block; min-width: 18px; height: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; color: #fff; background: var(--primary-color); font-size: 11px; line-height: 18px; text-align: center; box-sizing: border-box; }
+@media (max-width: 767px) {
+  .store-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+  .filter-toggle { display: inline-block; margin-left: 0; }
+  .filter-toggle.is-open { border-color: var(--primary-color); color: var(--primary-color); }
+  .store-filters { display: none; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .store-filters.is-open { display: grid; }
+  .store-filters .download-source { grid-column: 1 / -1; }
+}
 </style>

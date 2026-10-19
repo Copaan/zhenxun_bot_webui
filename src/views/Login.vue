@@ -413,10 +413,6 @@ export default {
       syncApiWithBrowserLocation()
     }
     this.checkFirstRun()
-    const firstSetting = this.$route.params.firstSetting
-    if (firstSetting) {
-      this.$alert("请等待小真寻重启成功后登录！", "温馨提示", { type: "info" }).catch(() => {})
-    }
 
     // 添加键盘事件监听
     const handleKeyDown = (event) => {

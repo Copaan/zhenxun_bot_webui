@@ -16,14 +16,14 @@
       <div>
         <strong><i v-if="restoring" class="el-icon-loading"></i> {{ restoreView.title }}</strong>
         <p v-if="restoreView.detail">{{ restoreView.detail }}</p>
-        <p v-if="skipped.length">已跳过依赖无法安装的插件 / 依赖：{{ skipped.join("、") }}</p>
+        <p v-for="note in restoreNotes" :key="note.text" :class="`is-${note.type}`">{{ note.text }}</p>
       </div>
       <el-button v-if="!restoring" size="mini" @click="dismiss">知道了</el-button>
     </div>
     <div v-if="running" class="backup-progress" role="status">
       <span>{{ status.stage === "files" ? "正在打包文件" : "正在导出数据库" }}</span>
       <el-progress v-if="status.stage === 'files' && status.total" :percentage="percent" />
-      <span v-else-if="status.done">已导出 {{ status.done }} 行</span>
+      <span v-else-if="status.table">正在导出 {{ status.table }}（{{ status.done }} 行）</span>
     </div>
     <el-alert v-if="status.state === 'failed'" :title="`导出失败：${status.error}`" type="error" :closable="false" show-icon />
     <el-alert v-if="status.state === 'done' && status.manifest && status.manifest.skipped_files.length" :title="`有 ${status.manifest.skipped_files.length} 个文件读取失败未打包`" type="warning" :closable="false" show-icon />
@@ -45,7 +45,7 @@
       <p v-if="scanning" role="status"><i class="el-icon-loading"></i> 正在统计文件与依赖…</p>
       <template v-else-if="scan">
         <h3>备份内容</h3>
-        <p class="backup-hint">数据库总是完整导出，可恢复到 SQLite / MySQL / PostgreSQL 任一类型。</p>
+        <p class="backup-hint">数据库导出已加载插件的全部数据表；未加载插件的表不包含在内。恢复时写回当前使用的数据库，仅首次部署时可指定 SQLite / MySQL / PostgreSQL 空库作为恢复目标；如需更换数据库，请使用「切换数据库」。</p>
         <el-checkbox-group v-model="categories" class="backup-categories">
           <el-checkbox v-for="(info, key) in scan.categories" :key="key" :label="key">
             {{ categoryLabels[key] }} <small>{{ info.files }} 个文件 · {{ formatBytes(info.bytes) }}</small>
@@ -53,15 +53,16 @@
         </el-checkbox-group>
         <template v-if="scan.dependencies.length">
           <h3>未纳管的依赖（{{ scan.dependencies.length }}）</h3>
-          <p class="backup-hint">这些包既不在项目锁定文件里，也不在插件依赖层清单中，新环境不会自动安装。勾选后会随备份记录，恢复时尝试安装。</p>
+          <p class="backup-hint">这些包既不在项目锁定文件里，也不在插件依赖层清单中，新环境不会自动安装。勾选的会随备份记录，恢复时尝试安装；不需要的可以取消勾选。</p>
           <div class="backup-deps-actions">
-            <el-button size="mini" @click="extras = scan.dependencies.map(item => item.name)">全选</el-button>
+            <el-button size="mini" @click="extras = supportedExtras">全选</el-button>
             <el-button size="mini" @click="extras = []">清空</el-button>
           </div>
           <el-checkbox-group v-model="extras" class="backup-deps">
-            <el-checkbox v-for="item in scan.dependencies" :key="item.name" :label="item.name">
+            <el-checkbox v-for="item in scan.dependencies" :key="item.name" :label="item.name" :disabled="Boolean(item.unsupported)">
               {{ item.name }}<small v-if="item.version"> {{ item.version }}</small>
               <small class="backup-source">{{ item.sources.join("、") }}</small>
+              <small v-if="item.unsupported" class="backup-source is-unsupported">不随备份恢复：{{ item.unsupported }}</small>
             </el-checkbox>
           </el-checkbox-group>
         </template>
@@ -82,6 +83,7 @@
 <script>
 import { getBaseUrl } from "@/utils/api"
 import { getAuthToken } from "@/utils/auth-token"
+import { reasonLabels, reasonText } from "@/utils/plugin-operation"
 import { startRestartRecovery } from "@/utils/restart-recovery"
 import { formatBytes } from "@/utils/utils"
 import BackupRestoreDialog from "./BackupRestoreDialog.vue"
@@ -121,21 +123,48 @@ export default {
     running() { return this.status.state === "running" },
     percent() { return Math.min(100, Math.floor((this.status.done / this.status.total) * 100)) },
     restoring() { return RESTORING.includes(this.restore.state) },
-    skipped() {
+    supportedExtras() {
+      return (this.scan?.dependencies || []).filter(item => !item.unsupported).map(item => item.name)
+    },
+    restoreNotes() {
       const report = this.restore.dependencies || {}
-      return [...(report.skipped_plugins || []), ...(report.skipped_requirements || [])]
+      const layer = report.layer || {}
+      const notes = []
+      if (layer.state === "failed") {
+        notes.push({ type: "error", text: `插件依赖层安装失败，商店插件与恢复的依赖都未生效：${reasonText(layer.error_code)}${layer.detail ? `（${layer.detail}）` : ""}。请在插件商店查看依赖事务后处理。` })
+      } else if (layer.state === "pending") {
+        notes.push({ type: "info", text: "插件依赖正在安装或等待启动验证。" })
+      }
+      const skipped = [...(report.skipped_plugins || []), ...(report.skipped_requirements || [])]
+      if (skipped.length) notes.push({ type: "warning", text: `已跳过依赖无法安装的插件 / 依赖：${skipped.join("、")}` })
+      const downgraded = Object.entries(report.downgraded || {})
+      if (downgraded.length) {
+        notes.push({ type: "warning", text: `以下依赖低于备份时的版本，对应插件可能无法正常工作：${downgraded.map(([name, [from, to]]) => `${name} ${from} → ${to}`).join("、")}` })
+      }
+      const tables = this.restore.report?.skipped_tables
+      const lost = tables && !Array.isArray(tables) ? Object.entries(tables).filter(([, rows]) => rows > 0) : []
+      if (lost.length) {
+        notes.push({ type: "warning", text: `以下表所属的插件当前未加载，其中的数据未导入：${lost.map(([table, rows]) => `${table}（${rows} 行）`).join("、")}。备份文件中仍保留这些数据，插件可用后可重新从备份恢复。` })
+      }
+      return notes
+    },
+    restoreError() {
+      const restore = this.restore
+      if (!restore.error_code || !reasonLabels[restore.error_code]) return restore.error
+      return `依赖无法安装：${reasonLabels[restore.error_code]}${restore.error_detail ? `（${restore.error_detail}）` : ""}`
     },
     restoreView() {
       const restore = this.restore
       const action = restore.kind === "switch" ? "切换数据库" : "恢复"
       const progress = restore.progress ? `正在导入 ${restore.progress.table}（${restore.progress.rows} 行）` : ""
+      const incomplete = this.restoreNotes.some(note => note.type !== "info")
       return {
         pending: { type: "info", title: `正在准备${action}`, detail: "正在安装依赖并写入文件" },
         importing: { type: "info", title: `正在${action}：导入数据`, detail: progress },
         failed_import: { type: "warning", title: "导入失败，正在回滚", detail: restore.error },
         rollback_import: { type: "warning", title: "导入失败，正在回滚", detail: restore.error },
-        done: { type: "success", title: `${action}完成`, detail: restore.kind === "switch" ? `已切换到 ${restore.db_url}` : `来自 ${restore.name}` },
-        failed: { type: "error", title: `${action}未执行`, detail: `${restore.error}。没有做任何改动。` },
+        done: { type: incomplete ? "warning" : "success", title: incomplete ? `${action}完成，但有部分内容未生效` : `${action}完成`, detail: restore.kind === "switch" ? `已切换到 ${restore.db_url}` : `来自 ${restore.name}` },
+        failed: { type: "error", title: `${action}未执行`, detail: `${this.restoreError}。没有做任何改动。` },
         rolled_back: { type: "warning", title: `${action}失败，已回滚到之前的状态`, detail: restore.error },
         rollback_failed: { type: "error", title: `${action}失败，回滚也失败了`, detail: `导入错误：${restore.error}；回滚错误：${restore.rollback_error}。请检查数据库后手动处理。` },
       }[restore.state] || { type: "info", title: restore.state }
@@ -197,8 +226,6 @@ export default {
       if (username) message += `恢复后请使用备份中的管理员账号 ${username} 登录。`
       startRestartRecovery({
         bootId: data.boot_id,
-        launcherBootId: data.launcher_boot_id,
-        restartId: data.restart_id,
         accessUrls: data.access_urls,
         accessTargets: data.access_targets,
         preferredUrl: data.preferred_url,
@@ -231,6 +258,7 @@ export default {
         if (!response?.suc) throw new Error(response?.info)
         this.scan = response.data
         this.categories = [...response.data.default_categories]
+        this.extras = this.supportedExtras
       } catch (error) {
         this.dialog = false
         this.error = error.message || "导出预览失败"
@@ -289,6 +317,9 @@ export default {
 .backup-restore.is-success { border-color: #67c23a; background: #f3faef; }
 .backup-restore.is-warning { border-color: #e6a23c; background: #fdf8ef; }
 .backup-restore.is-error { border-color: #f56c6c; background: #fdf2f2; }
+.backup-restore p.is-warning { color: #a8662a; }
+.backup-restore p.is-error { color: #c45656; }
+.backup-source.is-unsupported { color: #a8662a; }
 .backup-progress { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .backup-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; border-bottom: 1px solid #e2e7eb; padding: 12px 0; font-size: 14px; }
 .backup-item > div:first-child { display: flex; gap: 8px; align-items: center; overflow-wrap: anywhere; }

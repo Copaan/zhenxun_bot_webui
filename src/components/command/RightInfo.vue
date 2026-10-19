@@ -64,7 +64,10 @@
     </div>
 
     <!-- 图表区域 - 自适应高度 -->
-    <div class="chart-area" :style="{ height: computedChartAreaHeight + 'px' }">
+    <div
+      class="chart-area"
+      :style="{ height: compact ? 'auto' : computedChartAreaHeight + 'px' }"
+    >
       <!-- 活跃群聊图表 -->
       <div
         class="active-group chart-container command-surface p-4"
@@ -73,11 +76,9 @@
           border: '1px solid var(--border-color-light)',
         }"
       >
-        <div
-          class="flex flex-col md:flex-row md:items-center md:justify-between mb-3"
-        >
+        <div class="flex flex-col gap-2 mb-3">
           <p
-            class="text-base font-bold mb-1 md:mb-0 flex items-center"
+            class="text-base font-bold flex items-center whitespace-nowrap"
             :style="{ color: 'var(--primary-color)' }"
           >
             活跃群组
@@ -120,11 +121,9 @@
           border: '1px solid var(--border-color-light)',
         }"
       >
-        <div
-          class="flex flex-col md:flex-row md:items-center md:justify-between mb-3"
-        >
+        <div class="flex flex-col gap-2 mb-3">
           <p
-            class="text-base font-bold mb-1 md:mb-0 flex items-center"
+            class="text-base font-bold flex items-center whitespace-nowrap"
             :style="{ color: 'var(--primary-color)' }"
           >
             热门插件
@@ -164,7 +163,7 @@
 
 <script>
 import { debounce } from "lodash"
-import { getChartOption } from "@/utils/template"
+import { abbreviateNumber, getChartOption } from "@/utils/template"
 import EventBus from "@/utils/event-bus"
 export default {
   name: "RightInfo",
@@ -173,12 +172,13 @@ export default {
       chartHeight: 100,
       timeTypes: [
         { label: "全部", value: "all" },
-        { label: "日", value: "day" },
-        { label: "周", value: "week" },
-        { label: "月", value: "month" },
-        { label: "年", value: "year" },
+        { label: "今日", value: "day" },
+        { label: "近7天", value: "week" },
+        { label: "近30天", value: "month" },
+        { label: "近一年", value: "year" },
       ],
       chartAreaHeight: 0,
+      compact: window.innerWidth < 768,
       activeGroupData: [],
       hotPluginData: [],
       botInfo: {},
@@ -219,6 +219,7 @@ export default {
     if (!this.botInfo.self_id) return
     await this.initCharts()
     if (this.destroyed) return
+    this.handleResize()
     this.setupResizeListener()
     this.startTimers()
     this.sidebarResizeHandler = debounce(this.handleResize, 200)
@@ -268,11 +269,21 @@ export default {
       this.hotPluginChart?.resize()
     },
 
+    /**
+     * 根据容器尺寸重新计算图表高度并刷新图表，移动端使用固定图表高度
+     */
     handleResize() {
       if (this.destroyed) return
+      const compact = window.innerWidth < 768
+      if (compact !== this.compact) {
+        this.compact = compact
+        this.updateChartTheme()
+      }
       this.$nextTick(() => {
         if (this.destroyed) return
-        if (this.$refs.rightInfo && this.$refs.groupType) {
+        if (this.compact) {
+          this.chartHeight = 240
+        } else if (this.$refs.rightInfo && this.$refs.groupType) {
           const infoHeight =
             this.$refs.rightInfo.querySelector(".base-info").offsetHeight
           this.chartAreaHeight =
@@ -283,23 +294,17 @@ export default {
           }
           this.chartHeight =
             this.chartAreaHeight / 2 - this.$refs.groupType.offsetHeight - 20
-          this.$nextTick(() => {
-            if (this.destroyed) return
-            this.groupChart?.resize()
-            this.hotPluginChart?.resize()
-          })
         }
-      })
-    },
-
-    setupResizeListener() {
-      this.resizeHandler = debounce(() => {
         this.$nextTick(() => {
           if (this.destroyed) return
           this.groupChart?.resize()
           this.hotPluginChart?.resize()
         })
-      }, 200)
+      })
+    },
+
+    setupResizeListener() {
+      this.resizeHandler = debounce(this.handleResize, 200)
       window.addEventListener("resize", this.resizeHandler)
     },
 
@@ -352,6 +357,17 @@ export default {
       option.xAxis.name = name
       option.xAxis.data = data.map((item) => item.name)
       option.series[0].data = data
+      if (this.compact) {
+        option.grid = { top: 24, bottom: 4, left: 4, right: 8, containLabel: true }
+        option.xAxis.name = ""
+        option.xAxis.axisLabel.rotate = 40
+        option.xAxis.axisLabel.fontSize = 10
+        option.xAxis.axisLabel.formatter = (value) =>
+          value.length > 4 ? value.slice(0, 4) + "…" : value
+        option.yAxis.splitNumber = 3
+        option.yAxis.axisLabel.fontSize = 10
+        option.yAxis.axisLabel.formatter = abbreviateNumber
+      }
       return option
     },
 
@@ -454,9 +470,10 @@ button:hover {
 }
 
 /* 移动端适配 */
-@media (max-width: 640px) {
+@media (max-width: 767px) {
   .right-info {
-    padding: 0.75rem;
+    height: auto;
+    padding: 0;
   }
 
   .base-info {

@@ -116,7 +116,7 @@
     <div
       class="plugin-section"
       :style="{
-        height: pluginSectionHeight + 'px',
+        height: compact ? 'auto' : pluginSectionHeight + 'px',
         backgroundColor: 'var(--bg-color-secondary)',
       }"
     >
@@ -173,6 +173,7 @@ export default {
       },
       botInfo: {},
       pluginSectionHeight: 0,
+      compact: window.innerWidth < 768,
       statusBusy: false,
     }
   },
@@ -188,7 +189,12 @@ export default {
     window.removeEventListener("resize", this.calculateHeights)
   },
   methods: {
+    /**
+     * 计算插件策略卡片高度，移动端改为随内容自适应
+     */
     calculateHeights() {
+      this.compact = window.innerWidth < 768
+      if (this.compact) return
       this.$nextTick(() => {
         const container = this.$refs.leftInfoContainer
         if (container) {
@@ -315,9 +321,21 @@ export default {
   min-height: 300px;
 }
 
-.bot-id,
-.apply-button {
+.bot-id {
   border-radius: 6px;
+}
+
+@media (max-width: 767px) {
+  .left-info-container {
+    padding: 0;
+    overflow: visible;
+  }
+
+  .plugin-section {
+    flex-grow: 0;
+    min-height: 0;
+    overflow: visible;
+  }
 }
 
 .anime-font {

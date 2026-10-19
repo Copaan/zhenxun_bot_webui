@@ -25,3 +25,20 @@ export function removeRoutingGroup(rows, defaults, clientId) {
     rows: kept.map(row => ({ ...row, targets: row.targets.filter(target => !names.has(target.value)) })),
   }
 }
+
+/**
+ * 筛选全部最终模型都适合指定任务的路由组
+ * @param {Array<{name: string, targets: Array<{value: string}>}>} rows 路由组草稿
+ * @param {Set<string>} suitableModels 适合该任务的模型全名
+ * @returns {string[]} 适用的路由组名称
+ */
+export function routingGroupsForModels(rows, suitableModels) {
+  const groups = new Map(rows.map(row => [row.name.trim(), row.targets.map(target => target.value.trim())]).filter(([name]) => name))
+  const fits = (name, visiting) => {
+    if (visiting.has(name)) return false
+    const next = new Set(visiting).add(name)
+    const targets = groups.get(name)
+    return targets.length > 0 && targets.every(value => groups.has(value) ? fits(value, next) : suitableModels.has(value))
+  }
+  return [...groups.keys()].filter(name => fits(name, new Set()))
+}
