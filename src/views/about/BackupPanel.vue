@@ -52,19 +52,28 @@
           </el-checkbox>
         </el-checkbox-group>
         <template v-if="scan.dependencies.length">
-          <h3>未纳管的依赖（{{ scan.dependencies.length }}）</h3>
-          <p class="backup-hint">这些包既不在项目锁定文件里，也不在插件依赖层清单中，新环境不会自动安装。勾选的会随备份记录，恢复时尝试安装；不需要的可以取消勾选。</p>
-          <div class="backup-deps-actions">
-            <el-button size="mini" @click="extras = supportedExtras">全选</el-button>
-            <el-button size="mini" @click="extras = []">清空</el-button>
-          </div>
-          <el-checkbox-group v-model="extras" class="backup-deps">
-            <el-checkbox v-for="item in scan.dependencies" :key="item.name" :label="item.name" :disabled="Boolean(item.unsupported)">
-              {{ item.name }}<small v-if="item.version"> {{ item.version }}</small>
-              <small class="backup-source">{{ item.sources.join("、") }}</small>
-              <small v-if="item.unsupported" class="backup-source is-unsupported">不随备份恢复：{{ item.unsupported }}</small>
-            </el-checkbox>
-          </el-checkbox-group>
+          <h3>依赖（{{ scan.dependencies.length }}）</h3>
+          <p class="backup-hint">默认记录当前环境中插件使用的全部依赖，包括商店插件、插件声明的依赖和虚拟环境中额外安装的第三方包。恢复时优先安装备份时的版本，不可用时改装相近版本，仍无法安装的跳过并提示。<template v-if="unsupportedCount">其中 {{ unsupportedCount }} 项无法自动安装，恢复后会提示在控制台手动安装。</template></p>
+          <p class="backup-dep-summary"><span v-for="group in dependencyGroups" :key="group.kind">{{ group.label }} {{ group.items.length }}</span></p>
+          <el-checkbox v-model="advancedDeps">高级：手动选择要记录的依赖</el-checkbox>
+          <template v-if="advancedDeps">
+            <div class="backup-deps-actions">
+              <el-button size="mini" @click="extras = allExtras">全选</el-button>
+              <el-button size="mini" @click="extras = []">清空</el-button>
+              <small>已选 {{ extras.length }} / {{ scan.dependencies.length }}</small>
+            </div>
+            <section v-for="group in dependencyGroups" :key="group.kind" class="backup-dep-group">
+              <h4>{{ group.label }}</h4>
+              <el-checkbox-group v-model="extras" class="backup-deps">
+                <el-checkbox v-for="item in group.items" :key="item.name" :label="item.name">
+                  {{ item.name }}<small v-if="item.version"> {{ item.version }}</small>
+                  <small v-if="item.kind === 'store' || item.kind === 'plugin'" class="backup-source">{{ item.sources.join("、") }}</small>
+                  <small v-if="item.url" class="backup-source">直链安装：{{ item.url }}</small>
+                  <small v-if="item.unsupported" class="backup-source is-unsupported">需手动安装：{{ item.unsupported }}</small>
+                </el-checkbox>
+              </el-checkbox-group>
+            </section>
+          </template>
         </template>
         <h3>加密</h3>
         <el-input v-model="password" type="password" show-password autocomplete="new-password" placeholder="留空则不加密" />
@@ -90,6 +99,14 @@ import BackupRestoreDialog from "./BackupRestoreDialog.vue"
 import BackupSwitchDialog from "./BackupSwitchDialog.vue"
 
 const RESTORING = ["pending", "importing", "failed_import", "rollback_import"]
+const DEPENDENCY_KINDS = {
+  nonebot_plugin: "NoneBot 商店插件",
+  manual: "手动依赖",
+  store: "真寻商店插件依赖",
+  plugin: "插件声明的依赖",
+  venv: "虚拟环境第三方包",
+  layer: "依赖层其他包",
+}
 
 export default {
   name: "BackupPanel",
@@ -108,6 +125,7 @@ export default {
       scan: null,
       categories: [],
       extras: [],
+      advancedDeps: false,
       password: "",
       starting: false,
       downloading: "",
@@ -123,8 +141,17 @@ export default {
     running() { return this.status.state === "running" },
     percent() { return Math.min(100, Math.floor((this.status.done / this.status.total) * 100)) },
     restoring() { return RESTORING.includes(this.restore.state) },
-    supportedExtras() {
-      return (this.scan?.dependencies || []).filter(item => !item.unsupported).map(item => item.name)
+    allExtras() {
+      return (this.scan?.dependencies || []).map(item => item.name)
+    },
+    unsupportedCount() {
+      return (this.scan?.dependencies || []).filter(item => item.unsupported).length
+    },
+    dependencyGroups() {
+      const items = this.scan?.dependencies || []
+      return Object.entries(DEPENDENCY_KINDS)
+        .map(([kind, label]) => ({ kind, label, items: items.filter(item => item.kind === kind) }))
+        .filter(group => group.items.length)
     },
     restoreNotes() {
       const report = this.restore.dependencies || {}
@@ -135,12 +162,17 @@ export default {
       } else if (layer.state === "pending") {
         notes.push({ type: "info", text: "插件依赖正在安装或等待启动验证。" })
       }
-      const skipped = [...(report.skipped_plugins || []), ...(report.skipped_requirements || [])]
-      if (skipped.length) notes.push({ type: "warning", text: `已跳过依赖无法安装的插件 / 依赖：${skipped.join("、")}` })
-      const downgraded = Object.entries(report.downgraded || {})
-      if (downgraded.length) {
-        notes.push({ type: "warning", text: `以下依赖低于备份时的版本，对应插件可能无法正常工作：${downgraded.map(([name, [from, to]]) => `${name} ${from} → ${to}`).join("、")}` })
+      const nearby = Object.entries(report.nearby || {})
+      if (nearby.length) {
+        notes.push({ type: "info", text: `以下依赖备份时的版本不可用，已改装相近版本：${nearby.map(([name, [from, to]]) => `${name} ${from} → ${to}`).join("、")}` })
       }
+      const skipped = [...(report.skipped_plugins || []), ...(report.skipped_requirements || [])]
+      if (skipped.length) {
+        const reasons = report.skip_reasons || {}
+        notes.push({ type: "warning", text: `已跳过无法安装的插件 / 依赖：${skipped.map(name => reasons[name] ? `${name}（${reasons[name]}）` : name).join("；")}` })
+      }
+      const unsupported = report.unsupported_requirements || []
+      if (unsupported.length) notes.push({ type: "warning", text: `以下依赖无法由恢复自动安装，请在控制台手动安装：${unsupported.join("、")}` })
       const tables = this.restore.report?.skipped_tables
       const lost = tables && !Array.isArray(tables) ? Object.entries(tables).filter(([, rows]) => rows > 0) : []
       if (lost.length) {
@@ -252,13 +284,13 @@ export default {
       finally { this.uploading = null }
     },
     async openExport() {
-      this.dialog = true; this.scanning = true; this.scan = null; this.password = ""; this.extras = []
+      this.dialog = true; this.scanning = true; this.scan = null; this.password = ""; this.extras = []; this.advancedDeps = false
       try {
         const response = await this.getRequest(this.api("/scan"))
         if (!response?.suc) throw new Error(response?.info)
         this.scan = response.data
         this.categories = [...response.data.default_categories]
-        this.extras = this.supportedExtras
+        this.extras = this.allExtras
       } catch (error) {
         this.dialog = false
         this.error = error.message || "导出预览失败"
@@ -268,7 +300,7 @@ export default {
       this.starting = true
       try {
         const response = await this.postRequest(this.api("/export"), {
-          categories: this.categories, extras: this.extras, password: this.password || null,
+          categories: this.categories, extras: this.advancedDeps ? this.extras : null, password: this.password || null,
         })
         if (!response?.suc) throw new Error(response?.info)
         this.dialog = false; this.password = ""
@@ -330,7 +362,10 @@ export default {
 .backup-categories .el-checkbox, .backup-deps .el-checkbox { display: flex; align-items: flex-start; margin-right: 0; white-space: normal; }
 .backup-deps ::v-deep .el-checkbox__input { margin-top: 2px; }
 .backup-deps { max-height: 260px; overflow-y: auto; padding-right: 6px; }
-.backup-deps-actions { margin-bottom: 8px; }
+.backup-deps-actions { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.backup-deps-actions .el-button { margin-left: 0; }
+.backup-dep-summary { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 8px; color: #64717c; font-size: 13px; }
+.backup-dep-group h4 { font-size: 13px; margin: 12px 0 6px; color: #35424d; }
 .backup-source { display: block; overflow-wrap: anywhere; }
 .backup-warning { color: #a8662a; font-size: 13px; margin-top: 8px; }
 @media (max-width: 600px) {

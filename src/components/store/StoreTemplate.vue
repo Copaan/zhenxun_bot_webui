@@ -315,7 +315,7 @@ export default {
         if (!response.suc && ["install", "update"].includes(action) && String(response.info || "").includes("source_build_confirmation_required")) {
           const sourceConfirmed = await this.$confirmAction({
             title: "确认源码构建风险",
-            message: "该插件缺少当前环境可用的 Wheel，依赖需要从源码构建。构建会在隔离依赖层中执行，并且必须重启验证；失败时会回滚。是否继续？",
+            message: "该插件的依赖需要从源码构建。确认后会先在临时目录构建，构建失败时不修改插件文件和依赖；构建成功后需重启验证，失败时会回滚。是否继续？",
             confirmButtonText: "接受风险并继续",
             cancelButtonText: "取消",
             type: "warning",

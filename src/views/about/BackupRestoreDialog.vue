@@ -12,7 +12,7 @@
         <dt>来源版本</dt><dd>{{ summary.bot_version || "未知" }} · Python {{ summary.python }} · {{ summary.platform }}</dd>
         <dt>数据库</dt><dd>{{ summary.database.dialect }} · {{ Object.keys(summary.database.tables).length }} 张表 · {{ totalRows }} 行</dd>
         <dt>文件</dt><dd>{{ summary.files }} 个</dd>
-        <dt>依赖</dt><dd>{{ summary.plugins.length }} 个商店插件 · {{ summary.manual_requirements.length + summary.extra_requirements.length }} 个手动 / 未纳管依赖</dd>
+        <dt>依赖</dt><dd>{{ summary.plugins.length }} 个 NoneBot 商店插件 · {{ summary.manual_requirements.length + summary.extra_requirements.length }} 项其他依赖<template v-if="(summary.unsupported_requirements || []).length"> · {{ summary.unsupported_requirements.length }} 项需手动安装</template></dd>
       </dl>
       <el-alert v-for="text in summary.warnings" :key="text" :title="text" type="warning" :closable="false" show-icon />
       <h3>恢复的文件</h3>

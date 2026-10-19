@@ -259,6 +259,7 @@
                 </div>
               </div>
               <el-button v-if="analysis.environment && analysis.environment.repairable" type="warning" plain icon="el-icon-refresh" :loading="repairing" @click="repairEnvironment">预览依赖修复</el-button>
+              <el-button v-if="(analysis.blocked_reasons || []).some(reason => reason.code === 'dependency_source_metadata_unavailable')" type="warning" plain icon="el-icon-cpu" @click="startAnalysis(analysis.action, analysisPlugin, analysis.prefer_existing !== false, true)">允许源码构建并重新分析</el-button>
             </el-alert>
             <template v-else-if="analysis.status === 'ready'">
               <section class="analysis-section core-ok">
@@ -302,7 +303,7 @@
                 <p>这些变化可能影响其他第三方插件，需要单独确认。</p>
               </el-alert>
               <el-alert v-if="analysis.plan.source_build_required" title="需要从源码构建" type="warning" :closable="false" show-icon>
-                <p>构建过程可能调用本机编译工具，仅会在停止 worker 后执行，并强制重启验证。</p>
+                <p>确认后会先在临时目录构建，构建失败时不保存任何改动；构建成功后需重启验证。</p>
               </el-alert>
               <el-alert v-if="analysis.plan.database_migration_possible" title="插件可能包含数据库迁移" type="warning" :closable="false" show-icon>
                 <p v-if="analysis.plan.database_type === 'external'">当前使用外部数据库。系统只执行迁移检查，不会自动修改；迁移未完成时将保留旧运行版本。</p>
@@ -319,7 +320,7 @@
 
               <div class="confirmations">
                 <p>点击下方按钮即确认以上插件代码、依赖和构建范围。</p>
-                <p>ORM 和数据库驱动版本保持不变；需要调整时请在控制台处理。</p>
+                <p>已安装的 ORM 和数据库驱动版本保持不变；插件需要的新 ORM 包会随依赖安装。</p>
               </div>
             </template>
           </template>
@@ -621,13 +622,13 @@ export default {
       finally { if (epoch === this.detailEpoch) this.detailLoading = false }
     },
     openHomepage(url) { window.open(url, "_blank", "noopener,noreferrer") },
-    async startAnalysis(action, plugin, preferExisting = true) {
+    async startAnalysis(action, plugin, preferExisting = true, allowSourceBuild = false) {
       if (this.readsPaused || this.componentDestroyed) return
       const epoch = ++this.analysisEpoch
       if (this.$store.state.pluginOperation.active) { this.$message.warning("已有插件操作正在进行，请等待完成。"); return }
       this.analysisPlugin = plugin; this.analysis = null; this.analysisLoading = true; this.analysisVisible = true
       try {
-        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/analyze`, { project_link: plugin.project_link, action, prefer_existing: preferExisting })
+        const response = await this.postRequest(`${this.$root.prefix}/store/nonebot/analyze`, { project_link: plugin.project_link, action, prefer_existing: preferExisting, allow_source_build: allowSourceBuild })
         if (epoch !== this.analysisEpoch) return
         if (!response.suc) throw new Error(response.info || "依赖分析无法启动")
         this.analysis = response.data
@@ -766,7 +767,7 @@ export default {
           if (['analysis_stale', 'analysis_not_found'].includes(response.info) && !this.retryingSummary) {
             this.retrySummary = this.analysis.plan.summary_revision; this.retryingSummary = true; this.applying = false
             this.$store.commit('CLEAR_PLUGIN_OPERATION'); sessionStorage.removeItem('zhenxun_plugin_operation')
-            await this.startAnalysis(action, this.analysisPlugin, this.analysis.prefer_existing !== false); return
+            await this.startAnalysis(action, this.analysisPlugin, this.analysis.prefer_existing !== false, Boolean(this.analysis.allow_source_build)); return
           }
           throw new Error(this.diagnostic(response))
         }
