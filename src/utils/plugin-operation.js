@@ -38,6 +38,7 @@ export const reasonLabels = {
   plugin_configuration_invalid: "插件启动配置无效，本次安装未生效。请在 系统设置 → 配置中心 → 环境配置 中修正并保存，重启生效后重新安装。",
   plugin_import_failed: "插件导入失败，请查看事务与回滚状态。",
   plugin_startup_verification_failed: "插件未通过启动验证，请查看回滚结果。",
+  worker_startup_failed: "依赖生效后 Bot 未能完成启动，已自动回滚依赖层，请查看本地日志中的启动错误。",
   nonebot_plugin_apply_failed: "插件应用失败，请查看具体阶段和事务状态。",
   external_database_manual_migration_required: "外部数据库未完成迁移，请停止实例并备份，使用页面提供的候选环境控制台命令处理后重启。",
   database_migration_failed: "数据库迁移失败，请查看数据库回滚结果。",

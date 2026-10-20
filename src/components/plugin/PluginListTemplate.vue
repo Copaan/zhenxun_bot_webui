@@ -21,12 +21,23 @@
             <h3 :title="data.plugin_name">{{ data.plugin_name }}</h3>
             <span class="version">v{{ data.version }}</span>
           </div>
-          <div
-            class="plugin-switch"
-            title="全局关闭后，符合条件的第三方插件会在后台卸载以释放资源，重新开启时自动加载；其余插件仅关闭"
-            @click.stop
-          >
-            <el-switch :value="data.status" :disabled="!data.allow_switch || data.switching" @change="onSwitchChange(data, $event)" />
+          <div class="plugin-switch" @click.stop>
+            <el-select
+              :value="runState(data)"
+              size="mini"
+              :disabled="!data.allow_switch || data.switching"
+              aria-label="插件状态"
+              @change="onStateChange(data, $event)"
+            >
+              <el-option label="开启" value="on" />
+              <el-option label="关闭" value="off" title="插件保持加载，超级群与超级用户仍可使用" />
+              <el-option
+                label="停用"
+                value="unloaded"
+                :disabled="data.is_builtin"
+                :title="data.is_builtin ? '内置插件不可停用' : '关闭并卸载插件代码以释放资源，超级群与超级用户也无法使用；重新开启时自动加载'"
+              />
+            </el-select>
           </div>
         </div>
 
@@ -156,27 +167,40 @@ export default {
           loading.close()
         })
     },
-    onSwitchChange(data, newStatus) {
-      if (data.switching) return
-      const previousStatus = Boolean(data.status)
-      this.$set(data, "status", Boolean(newStatus))
+    runState(data) {
+      if (data.parked) return "unloaded"
+      return data.status ? "on" : "off"
+    },
+    async postState(path, payload) {
+      const resp = await this.postRequest(`${this.$root.prefix}/plugin/${path}`, payload, { suppressErrorToast: true })
+      if (!resp?.suc) throw new Error(resp?.info || "插件状态更新失败")
+      return resp
+    },
+    async onStateChange(data, state) {
+      if (data.switching || state === this.runState(data)) return
       this.$set(data, "switching", true)
-      this.postRequest(`${this.$root.prefix}/plugin/change_switch`, {
-        module: data.module,
-        status: newStatus,
-        expected_revision: data.policy_revision,
-      }, { suppressErrorToast: true }).then((resp) => {
-        if (resp?.suc) {
-          this.$message.success(resp.info || "插件状态已更新")
-          return this.getPluginList()
+      try {
+        let resp
+        if (data.parked) {
+          resp = await this.postState("unload", { module: data.module, unloaded: false })
         }
-        throw new Error(resp?.info || "插件状态更新失败")
-      }).catch((error) => {
-        this.$set(data, "status", previousStatus)
+        if (state === "on") {
+          resp = await this.postState("change_switch", { module: data.module, status: true, expected_revision: data.policy_revision })
+        } else if (!data.parked) {
+          if (data.status) {
+            resp = await this.postState("change_switch", { module: data.module, status: false, expected_revision: data.policy_revision })
+          }
+          if (state === "unloaded") {
+            resp = await this.postState("unload", { module: data.module, unloaded: true })
+          }
+        }
+        this.$message.success(resp?.info || "插件状态已更新")
+      } catch (error) {
         this.$message.error(error?.response?.data?.detail || error.message || "插件状态更新失败")
-      }).finally(() => {
+      } finally {
         this.$set(data, "switching", false)
-      })
+        await this.getPluginList()
+      }
     },
     openSetting(data) {
       this.pluginModule = data.module
@@ -253,6 +277,7 @@ export default {
     },
     switchLabel(data) {
       if (!data.allow_switch) return "不可切换"
+      if (data.parked) return "已停用"
       if (!data.status) return "关闭"
       return { GROUP: "群聊禁用", PRIVATE: "私聊禁用" }[data.block_type] || "开启"
     },
@@ -377,6 +402,10 @@ export default {
 .plugin-switch {
   flex-shrink: 0;
   cursor: default;
+}
+
+.plugin-switch .el-select {
+  width: 76px;
 }
 
 .card-module {

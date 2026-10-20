@@ -143,7 +143,12 @@
             <span>
               <el-tag size="mini" :type="effectiveType(item)">{{ effectiveLabel(item) }}</el-tag>
             </span>
-            <span><el-switch :value="isEnabled(item.module)" :disabled="saving" @change="setFeatureEnabled(item.module, $event)" /></span>
+            <span class="layer-cell">
+              <el-switch :value="isEnabled(item.module)" :disabled="saving" @change="setFeatureEnabled(item.module, $event)" />
+              <el-tooltip v-if="groupAccount && !editingPolicy" :content="isForced(item.module) ? '已被超管锁定，点击解除' : '超管锁定：本群禁用且群管理员无法开启'" placement="top">
+                <el-button type="text" size="mini" :icon="isForced(item.module) ? 'el-icon-lock' : 'el-icon-unlock'" :class="{ 'is-locked': isForced(item.module) }" :disabled="saving" @click="toggleLock(item.module)" />
+              </el-tooltip>
+            </span>
           </div>
           <div v-if="!filteredFeatures.length" class="empty-state">没有符合条件的功能</div>
           <div v-else-if="remainingCount" class="load-more">
@@ -223,8 +228,7 @@
         <el-table-column prop="group_id" label="群 / 场景" />
         <el-table-column prop="channel_id" label="频道" />
         <el-table-column prop="status" label="迁移状态" :formatter="(row) => migrationStatusName(row.status)" />
-        <el-table-column prop="reason" label="待核验原因" />
-        <el-table-column label="操作"><template slot-scope="scope"><el-button v-if="scope.row.status === 'pending'" size="mini" :disabled="transferBusy" @click="migrateScope(scope.row)">保留旧规则并迁移</el-button></template></el-table-column>
+        <el-table-column prop="reason" label="说明" />
       </el-table>
       <span slot="footer"><el-button :disabled="transferBusy" @click="transferVisible = false">关闭</el-button><el-button type="primary" :loading="transferBusy" @click="importTransfer">校验并导入</el-button></span>
     </el-dialog>
@@ -257,7 +261,7 @@ export default {
     editorTitle() { return this.editingPolicy ? this.editingPolicy.name : this.policyScope === "private" ? "所有私聊" : (this.groupAccount?.group_name || this.account?.nickname || this.account?.runtime_bot_id || "账号设置") },
     filteredAccounts() { const q = this.accountSearch.trim().toLowerCase(); return q ? this.accounts.filter((x) => `${x.nickname} ${x.bot_id} ${x.runtime_bot_id}`.toLowerCase().includes(q)) : this.accounts },
     currentFeatures() { const known = this.catalog[this.activeKind] || []; const target = this.groupAccount || this.privateAccount || this.account; const missing = target && !this.editingPolicy ? (this.activeKind === "plugins" ? target.missing_plugins : target.missing_tasks) || [] : []; return [...known, ...missing.filter((module) => !known.some((x) => x.module === module)).map((module) => ({ module, name: "已缺失模块", feature_type: "MISSING", load_status: false, global_status: false, missing: true }))] },
-    filteredFeatures() { const q = this.featureSearch.trim().toLowerCase(); return this.currentFeatures.filter((item) => { const matchText = !q || `${item.name} ${item.module} ${item.menu_type || ""}`.toLowerCase().includes(q); const enabled = this.isEnabled(item.module); const unavailable = !item.load_status || !item.global_status; const matchStatus = this.statusFilter === "all" || (this.statusFilter === "enabled" && enabled) || (this.statusFilter === "disabled" && !enabled) || (this.statusFilter === "unavailable" && unavailable); return matchText && matchStatus }) },
+    filteredFeatures() { const q = this.featureSearch.trim().toLowerCase(); return this.currentFeatures.filter((item) => { const matchText = !q || `${item.name} ${item.module} ${item.menu_type || ""}`.toLowerCase().includes(q); const enabled = this.isEnabled(item.module); const unavailable = this.globallyUnavailable(item); const matchStatus = this.statusFilter === "all" || (this.statusFilter === "enabled" && enabled) || (this.statusFilter === "disabled" && !enabled) || (this.statusFilter === "unavailable" && unavailable); return matchText && matchStatus }) },
     visibleFeatures() { return this.filteredFeatures.slice(0, this.visibleCount) },
     remainingCount() { return Math.max(this.filteredFeatures.length - this.visibleCount, 0) },
     allFilteredSelected() { return this.filteredFeatures.length > 0 && this.filteredFeatures.every((x) => this.selectedModules.includes(x.module)) },
@@ -282,7 +286,7 @@ export default {
       return names[scope] || scope
     },
     migrationStatusName(status) {
-      return { migrated: "已迁移", pending: "待迁移", needs_review: "需人工核验" }[status] || status
+      return { migrated: "已迁移", pending: "待写入", unlinked: "未关联 Bot" }[status] || status
     },
     async openTransfer() {
       this.transferVisible = true
@@ -313,16 +317,6 @@ export default {
         await this.loadAll()
         await this.loadTransfer()
       } catch (error) { if (error !== "cancel" && error !== "close") this.$message.error(error?.response?.status === 409 ? "策略已变化，导入草稿保留，请核对后重新读取。" : apiErrorDetail(error, "导入失败")) }
-      finally { this.transferBusy = false }
-    },
-    async migrateScope(row) {
-      this.transferBusy = true
-      try {
-        const response = await this.postRequest(`${this.$root.prefix}/plugin-policy/migration/apply`, { ...row, expected_revision: row.revision }, { suppressErrorToast: true })
-        if (!response.suc) throw new Error(response.info || "迁移失败")
-        await this.loadTransfer()
-        await this.loadAll()
-      } catch (error) { this.$message.error(error?.response?.status === 409 ? "策略已变化，请重新读取迁移预览。" : apiErrorDetail(error, "迁移失败")) }
       finally { this.transferBusy = false }
     },
     navigate(query) {
@@ -411,6 +405,41 @@ export default {
     accountLabel(item) { return `${item.nickname || item.runtime_bot_id} (${item.bot_id})` },
     boundAccountNames(policy) { return policy.bound_bot_ids.map((id) => this.accounts.find((item) => item.bot_id === id)?.nickname || id).join("、") },
     isEnabled(module) { return !this.draft[this.activeKind].includes(module) },
+    /**
+     * 当前群是否已由超管锁定该功能
+     */
+    isForced(module) { return (this.groupAccount?.[`forced_${this.activeKind}`] || []).includes(module) },
+    /**
+     * 功能在当前作用域是否因未加载或全局开关而不可用
+     */
+    globallyUnavailable(item) {
+      if (!item.load_status) return true
+      const target = this.groupAccount || this.privateAccount || (!this.editingPolicy && this.account)
+      const decision = target?.effective?.[this.activeKind]?.find(row => row.module === item.module)
+      if (decision) return (decision.blocked_by || []).some(reason => reason.startsWith("global_"))
+      return !item.global_status
+    },
+    /**
+     * 切换当前群对该功能的超管锁定
+     */
+    async toggleLock(module) {
+      const target = this.groupAccount
+      if (this.saving || !target) return
+      const field = `forced_${this.activeKind}`
+      const values = new Set(target[field] || [])
+      if (values.has(module)) values.delete(module)
+      else values.add(module)
+      this.saving = true
+      try {
+        const resp = await this.putRequest(this.groupUrl(target), { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks, [field]: sorted(values) }, { suppressErrorToast: true })
+        if (this.destroyed || !resp.suc) return
+        this.$message.success(resp.info)
+        this.groupAccount = resp.data
+        this.setDraft(resp.data)
+      } catch (error) {
+        if (error?.response?.status === 409) { this.$message.warning("设置已被其他操作修改，已重新读取最新设置"); this.reloadTarget() } else this.$message.error(apiErrorDetail(error, "保存失败"))
+      } finally { this.saving = false }
+    },
     setFeatureEnabled(module, enabled) { this.applyModules([module], enabled) },
     setSelectedEnabled(enabled) { const modules = this.selectedModules; this.selectedModules = []; this.applyModules(modules, enabled) },
     async applyModules(modules, enabled) {
@@ -441,15 +470,21 @@ export default {
       const scoped = this.groupAccount || this.privateAccount
       const target = scoped || (!this.editingPolicy && this.account)
       if (target?.publication_pending) return "已保存，运行态待重新核验"
-      const labels = { not_loaded: "未加载", global_disabled: "全局关闭", global_group_disabled: "全局群聊关闭", global_private_disabled: "全局私聊关闭", account_disabled: scoped ? "账号禁用（本层开启不能解除）" : "账号禁用", administrator_disabled: "管理员禁用（本层开启不能解除）", group_disabled: "本群禁用", private_disabled: "全部私聊禁用" }
+      const labels = { not_loaded: "未加载", global_disabled: "全局关闭", global_group_disabled: "全局群聊关闭", global_private_disabled: "全局私聊关闭", account_disabled: scoped ? "账号禁用（本层开启不能解除）" : "账号禁用", administrator_disabled: "超管锁定", group_disabled: "本群禁用", private_disabled: "全部私聊禁用" }
+      const limited = { GROUP: "仅私聊可用", PRIVATE: "仅群聊可用" }[item.block_type]
       const decision = target?.effective?.[this.activeKind]?.find(row => row.module === item.module)
       if (decision) {
         const reasons = decision.blocked_by || []
         if (reasons.length) return reasons.map(reason => labels[reason] || reason).join("；")
-      } else if (!item.global_status && !["GROUP", "PRIVATE"].includes(item.block_type)) return "全局关闭"
-      return this.isEnabled(item.module) ? "当前启用" : (this.editingPolicy ? "策略禁用" : scoped ? "本层禁用" : "账号禁用")
+      } else if (!item.global_status && !limited) return "全局关闭"
+      if (!this.isEnabled(item.module)) return this.editingPolicy ? "策略禁用" : scoped ? "本层禁用" : "账号禁用"
+      return !scoped && limited ? limited : "当前启用"
     },
-    effectiveType(item) { if (!item.load_status || !item.global_status) return "info"; return ["可用", "当前启用"].includes(this.effectiveLabel(item)) ? "success" : "danger" },
+    effectiveType(item) {
+      if (!item.load_status || !item.global_status) return "info"
+      const label = this.effectiveLabel(item)
+      return label === "当前启用" ? "success" : label.startsWith("仅") ? "warning" : "danger"
+    },
     async saveTarget() {
       const target = this.groupAccount || this.privateAccount || (this.policyScope === "account" ? this.account : null)
       if (!target) return false
@@ -577,7 +612,7 @@ export default {
 .editor-pane { min-width: 0; padding: 20px 22px 24px; }.editor-heading { min-height: 46px; justify-content: space-between; gap: 12px; }.editor-heading > div:first-child { min-width: 0; }.back-button { width: 34px; height: 34px; margin-right: 10px; border: 0; border-radius: 4px; color: var(--text-color); background: var(--bg-color-hover); cursor: pointer; }.editor-status { flex: none; }
 .policy-meta-form { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr); gap: 12px; margin-top: 16px; }.policy-meta-form .el-form-item { margin-bottom: 0; }
 .feature-sticky { position: sticky; top: 0; z-index: 5; margin-top: 8px; padding-top: 10px; background: var(--bg-color-secondary); }.feature-toolbar { gap: 10px; }.feature-toolbar .el-input { max-width: 330px; margin-left: auto; }.feature-toolbar .el-select { width: 150px; }.batch-toolbar { min-height: 48px; gap: 10px; margin-top: 12px; border-top: 1px solid var(--border-color-light); border-bottom: 1px solid var(--border-color-light); }.batch-toolbar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
-.feature-table { min-width: 680px; }.feature-row { display: grid; min-height: 64px; grid-template-columns: 34px minmax(210px, 1fr) 110px 110px 90px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-color-light); }.feature-head { min-height: 42px; color: var(--text-color-secondary); font-size: 12px; }.feature-name { display: flex; min-width: 0; flex-direction: column; gap: 5px; }.feature-name strong, .feature-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.feature-name small { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 11px; }.load-more { display: flex; justify-content: center; padding: 16px 0 4px; }.empty-state, .empty-editor { display: grid; min-height: 140px; place-items: center; color: var(--text-color-secondary); }
+.feature-table { min-width: 680px; }.feature-row { display: grid; min-height: 64px; grid-template-columns: 34px minmax(210px, 1fr) 110px 110px 110px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-color-light); }.feature-head { min-height: 42px; color: var(--text-color-secondary); font-size: 12px; }.feature-name { display: flex; min-width: 0; flex-direction: column; gap: 5px; }.feature-name strong, .feature-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.feature-name small { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 11px; }.layer-cell { display: flex; align-items: center; gap: 6px; }.layer-cell .el-button { padding: 0; color: var(--text-color-secondary); font-size: 15px; }.layer-cell .el-button.is-locked { color: var(--danger-color); }.load-more { display: flex; justify-content: center; padding: 16px 0 4px; }.empty-state, .empty-editor { display: grid; min-height: 140px; place-items: center; color: var(--text-color-secondary); }
 .policy-list { border-top: 1px solid var(--border-color-light); }.policy-list-row { min-height: 70px; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-color-light); }.policy-list-row > div { gap: 6px; flex: none; }.dialog-copy, .impact-line { color: var(--text-color-secondary); font-size: 13px; }.impact-line { margin-top: 14px; padding: 10px 12px; border-left: 3px solid var(--warning-color); background: var(--bg-color-hover); }.full-control { width: 100%; }.mobile-account-select { display: none; margin-bottom: 10px; }.mobile-account-select .el-select { width: 100%; }
 .impact-list { max-height: 190px; margin-top: 10px; overflow-y: auto; border-top: 1px solid var(--border-color-light); }.impact-list > div { display: flex; flex-direction: column; gap: 3px; padding: 8px 2px; border-bottom: 1px solid var(--border-color-light); font-size: 12px; }.impact-list span { color: var(--text-color-secondary); }
 @media (max-width: 820px) { .policy-page { padding: 12px; }.page-header { align-items: flex-start; flex-direction: column; }.header-actions { width: 100%; justify-content: flex-start; }.mobile-account-select { display: block; }.policy-workbench { min-height: 560px; grid-template-columns: 1fr; }.account-pane { display: none; }.editor-pane { padding: 16px 14px 20px; overflow-x: clip; }.policy-meta-form { grid-template-columns: 1fr; }.feature-toolbar { align-items: stretch; flex-direction: column; }.feature-toolbar .el-input, .feature-toolbar .el-select { width: 100%; max-width: none; margin-left: 0; }.batch-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 8px 0; }.batch-toolbar span { width: calc(100% - 130px); }.feature-table { min-width: 0; }.feature-head { display: none; }.feature-row:not(.feature-head) { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px; padding: 10px 0; }.feature-row:not(.feature-head) > .el-checkbox { grid-row: 1 / 3; }.feature-row:not(.feature-head) > span:nth-child(3) { grid-column: 2; }.feature-row:not(.feature-head) > span:nth-child(4) { grid-column: 3; grid-row: 2; }.feature-row:not(.feature-head) > span:nth-child(5) { grid-column: 3; grid-row: 1; }.policy-list-row { align-items: flex-start; flex-direction: column; padding: 12px 0; }.policy-list-row > div { flex-wrap: wrap; } }

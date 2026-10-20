@@ -49,10 +49,14 @@
       <el-tab-pane label="插件配置" name="simple">
         <div class="plugin-config-workbench">
           <aside class="config-groups">
-            <el-input v-model="groupSearch" clearable prefix-icon="el-icon-search" placeholder="搜索配置组" size="small" />
-            <button v-for="group in filteredGroups" :key="group.module" :class="{ active: selectedGroup === group.module }" @click="selectedGroup = group.module; selectedOrphan = ''">
-              <strong>{{ group.name }}</strong><span>{{ group.module }}</span>
-            </button>
+            <el-input v-model="groupSearch" clearable prefix-icon="el-icon-search" placeholder="搜索插件、配置项或说明" size="small" />
+            <template v-for="part in groupSections">
+              <h4 :key="`title-${part.key}`" class="group-category">{{ part.title }} · {{ part.groups.length }}</h4>
+              <button v-for="group in part.groups" :key="group.module" :class="{ active: selectedGroup === group.module }" @click="selectedGroup = group.module; selectedOrphan = ''">
+                <strong>{{ group.name }}<i v-if="simpleChanges[group.module]" class="unsaved-dot" title="有未保存修改"></i></strong>
+                <span>{{ group.module }} · {{ group.fields.length }} 项<template v-if="(group.plugins || []).length > 1"> · {{ group.plugins.length }} 个插件共用</template></span>
+              </button>
+            </template>
             <el-collapse v-if="orphanGroups.length" v-model="orphanPanel" class="orphan-groups">
               <el-collapse-item name="orphaned"><template slot="title">孤立配置 · {{ orphanGroups.length }} 组</template>
                 <button v-for="group in filteredOrphanGroups" :key="`orphan-${group.module}`" :class="{ active: selectedOrphan === group.module }" @click="selectOrphan(group)">
@@ -60,21 +64,15 @@
                 </button>
               </el-collapse-item>
             </el-collapse>
-            <div v-if="!filteredGroups.length" class="group-empty">没有匹配的配置组</div>
+            <div v-if="!groupSections.length" class="group-empty">没有匹配的配置组</div>
           </aside>
           <section v-if="currentGroup" class="current-config-group">
-            <header class="group-heading"><div><h3>{{ currentGroup.name }}</h3><p>{{ currentGroup.module }} · {{ currentGroup.fields.length }} 个配置项</p></div><el-button size="small" @click="resetCurrentGroup">恢复本组默认值</el-button></header>
             <div class="config-form-scroll">
-              <div v-for="field in currentManagedFields" :key="field.key">
-                <el-alert :title="field.help" type="info" :closable="false" />
-                <pre>{{ field.key }}: {{ JSON.stringify(field.file_value === undefined ? field.value : field.file_value, null, 2) }}</pre>
-                <el-button type="text" @click="$router.push('/plugin-policy')">打开插件策略</el-button>
-              </div>
-              <SchemaForm :key="selectedGroup" :value="currentGroupValue" :schema="currentGroupSchema" :field-ui="currentGroupUi" :issues="pluginIssues" @input="updateCurrentGroup" @validity-change="pluginInvalidPaths = $event" />
+              <ConfigGroupEditor :key="selectedGroup" :group="currentGroup" :issues="pluginIssues" @change="pluginIssues = []" @validity-change="setInvalid" />
             </div>
             <div class="action-bar config-action-bar">
               <span>{{ Object.keys(simpleChanges).length ? `${Object.keys(simpleChanges).length} 个配置组有未保存修改` : "未知配置组和字段会原样保留" }}</span>
-              <el-button type="primary" icon="el-icon-check" :loading="saving === 'simple'" :disabled="pluginInvalidPaths.length > 0 || !Object.keys(simpleChanges).length" @click="saveSimple">保存配置</el-button>
+              <el-button type="primary" icon="el-icon-check" :loading="saving === 'simple'" :disabled="pluginInvalidCount > 0 || !Object.keys(simpleChanges).length" @click="saveSimple">保存配置</el-button>
             </div>
           </section>
           <section v-else-if="selectedOrphanGroup" class="current-config-group orphan-config-panel">
@@ -117,9 +115,10 @@
 <script>
 import SettingsLayout from "@/components/config/SettingsLayout.vue"
 import { environmentCategories } from "@/components/config/settings-ui"
-import SchemaForm from "@/components/config/SchemaForm.vue"
+import ConfigGroupEditor from "@/components/config/ConfigGroupEditor.vue"
 import SchemaField from "@/components/config/SchemaField.vue"
-import { fieldMatches, resolveReference, valueType, validateField } from "@/components/config/schema-utils"
+import { fieldMatches, validateField } from "@/components/config/schema-utils"
+import { changeIssues, collectChanges, groupMatches, markSaved, normalizeGroups, saveSimpleConfig } from "@/components/config/simple-config"
 import NetworkStatus from "@/components/system/NetworkStatus.vue"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
@@ -127,12 +126,12 @@ import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 
 export default {
   name: "ConfigurationCenter",
-  components: { SchemaForm, SchemaField, NetworkStatus, SettingsLayout },
+  components: { ConfigGroupEditor, SchemaField, NetworkStatus, SettingsLayout },
   data() {
     return {
       envCategory: "access", networkStatus: {}, rawLoading: false, envSearch: "", envIssues: [],
-      loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], simpleChanges: {}, groupSearch: "", selectedGroup: "", launcherManaged: false,
-      rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalidPaths: [], pluginIssues: [], orphanPanel: [], selectedOrphan: "",
+      loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], groupSearch: "", selectedGroup: "", launcherManaged: false,
+      rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalid: {}, pluginIssues: [], orphanPanel: [], selectedOrphan: "",
       envFieldDefinitions: [
         { key: 'CACHE_MODE', databasePage: true, label: '缓存模式', options: [{value:'NONE',label:'关闭缓存'},{value:'MEMORY',label:'内存缓存'},{value:'REDIS',label:'Redis'}], help: '本体缓存的存储方式。' },
         { key: 'REDIS_HOST', databasePage: true, label: 'Redis 地址', help: 'Redis 服务的主机名或 IP 地址。' },
@@ -183,30 +182,19 @@ export default {
       return this.launcherManaged ? "包含启动期配置，保存后可确认重启" : "包含启动期配置，保存后需要手动重启"
     },
     rawReady() { return Boolean(this.rawLoaded[this.rawFile] && /^[a-f0-9]{64}$/.test(this.rawRevision)) },
-    filteredGroups() {
-      const keyword = this.groupSearch.trim().toLowerCase()
-      return this.activeGroups.filter((group) => !keyword || `${group.name} ${group.module} ${group.fields.map((field) => field.key).join(" ")}`.toLowerCase().includes(keyword))
+    groupSections() {
+      const titles = { plugin: "插件", builtin: "内置功能", core: "本体" }
+      return Object.entries(titles)
+        .map(([key, title]) => ({ key, title, groups: this.activeGroups.filter(group => (group.category || "plugin") === key && groupMatches(group, this.groupSearch)).sort((left, right) => left.name.localeCompare(right.name, "zh-CN")) }))
+        .filter(part => part.groups.length)
     },
-    filteredOrphanGroups() {
-      const keyword = this.groupSearch.trim().toLowerCase()
-      return this.orphanGroups.filter((group) => !keyword || `${group.name} ${group.module} ${group.fields.map((field) => field.key).join(" ")}`.toLowerCase().includes(keyword))
-    },
+    filteredOrphanGroups() { return this.orphanGroups.filter(group => groupMatches(group, this.groupSearch)) },
     activeGroups() { return this.groups.filter((group) => group.registered !== false && group.source_status !== "orphaned") },
     orphanGroups() { return this.groups.filter((group) => group.registered === false || group.source_status === "orphaned") },
     selectedOrphanGroup() { return this.orphanGroups.find((group) => group.module === this.selectedOrphan) || null },
     currentGroup() { return this.activeGroups.find((group) => group.module === this.selectedGroup) || null },
-    editableCurrentFields() { return this.currentGroup ? this.currentGroup.fields.filter((field) => field.authority !== 'database') : [] },
-    currentManagedFields() { return this.currentGroup ? this.currentGroup.fields.filter(field => field.authority === 'database') : [] },
-    currentGroupValue() { return Object.fromEntries(this.editableCurrentFields.map((field) => [field.key, field.value])) },
-    currentGroupSchema() {
-      const result = { type: "object", properties: {}, $defs: {}, definitions: {} }
-      this.editableCurrentFields.forEach((field) => {
-        const schema = field.schema || { type: "string" }
-        result.properties[field.key] = { ...schema, "x-root-schema": schema }
-      })
-      return result
-    },
-    currentGroupUi() { return Object.fromEntries(this.editableCurrentFields.map((field) => [field.key, { label: field.ui?.label || field.key, ...(field.ui || {}), description: field.help }])) },
+    simpleChanges() { return collectChanges(this.activeGroups) },
+    pluginInvalidCount() { return Object.values(this.pluginInvalid).reduce((sum, paths) => sum + paths.length, 0) },
   },
   mounted() { this.loadSummary() },
   beforeDestroy() { clearDirtyState("plugin-configuration"); clearDirtyState("environment-configuration"); clearDirtyState("raw-configuration") },
@@ -256,9 +244,6 @@ export default {
     normalizeCustomEnv(items) {
       return (items || []).map((item) => ({ ...item, clientId: `env-${++this.customEnvSequence}`, value: item.value || "", deleted: false, isNew: false }))
     },
-    normalizeGroups(groups) {
-      return (groups || []).map((group) => ({ ...group, fields: group.fields.map((field) => ({ ...field, originalValue: JSON.stringify(field.value) })) }))
-    },
     async confirmDiscard(message) {
       try { await this.$confirm(message, "放弃未保存修改？", { type: "warning", customClass: "configuration-confirm", confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); return true } catch (_) { return false }
     },
@@ -287,32 +272,17 @@ export default {
         }
         if (scope === "all" || scope === "simple") {
         this.simpleRevision = response.data.simple.revision
-        this.groups = this.normalizeGroups(response.data.simple.groups)
-        if (!this.activeGroups.some((group) => group.module === this.selectedGroup)) this.selectedGroup = this.activeGroups[0]?.module || ""
+        this.groups = normalizeGroups(response.data.simple.groups)
+        if (!this.activeGroups.some((group) => group.module === this.selectedGroup)) this.selectedGroup = this.groupSections[0]?.groups[0]?.module || ""
         if (!this.orphanGroups.some((group) => group.module === this.selectedOrphan)) this.selectedOrphan = ""
-        this.pluginInvalidPaths = []; this.pluginIssues = []
-        this.simpleChanges = {}
+        this.pluginInvalid = {}; this.pluginIssues = []
         clearDirtyState("plugin-configuration")
         }
         this.launcherManaged = response.data.launcher_managed
       } catch (error) { this.$message.error(error.message || "配置摘要加载失败") }
       finally { this.loading = false }
     },
-    async updateCurrentGroup(value) {
-      if (!this.currentGroup) return
-      this.editableCurrentFields.forEach((field) => { field.value = value[field.key] })
-      const changed = Object.fromEntries(this.editableCurrentFields.filter(field => JSON.stringify(field.value) !== field.originalValue).map(field => [field.key, field.value]))
-      if (Object.keys(changed).length) this.$set(this.simpleChanges, this.currentGroup.module, changed)
-      else this.$delete(this.simpleChanges, this.currentGroup.module)
-      this.pluginIssues = []
-      setDirtyState("plugin-configuration", Boolean(Object.keys(this.simpleChanges).length))
-    },
-    resetCurrentGroup() {
-      if (!this.currentGroup) return
-      const values = {}
-      this.editableCurrentFields.forEach((field) => { field.value = field.default_value == null ? field.default_value : JSON.parse(JSON.stringify(field.default_value)); values[field.key] = field.value })
-      this.updateCurrentGroup(values)
-    },
+    setInvalid(module, paths) { if (paths.length) this.$set(this.pluginInvalid, module, paths); else this.$delete(this.pluginInvalid, module) },
     setEnvField(key, value) { if (value === undefined) this.$delete(this.envFields, key); else this.$set(this.envFields, key, value); this.envIssues = this.envIssues.filter(issue => issue.path !== key && !String(issue.path).startsWith(key + ".")); this.markEnvDirty() },
     selectOrphan(group) { this.selectedOrphan = group.module; this.selectedGroup = "" },
     changedEnvFields() {
@@ -364,28 +334,21 @@ export default {
     },
     async saveSimple() {
       if (this.saving) return
-      if (!Object.keys(this.simpleChanges).length) return this.$message.info("没有需要保存的插件配置。")
-      const invalidGroup = this.groups.filter(group => this.simpleChanges[group.module]).map(group => ({ module: group.module, issues: group.fields.filter(field => field.authority !== "database").flatMap(field => validateField(field.value, field.schema || {}, field.schema?.["x-root-schema"] || field.schema || {}, field.key)) })).find(group => group.issues.length)
-      this.pluginIssues = invalidGroup?.issues || []
-      if (invalidGroup) { this.selectedGroup = invalidGroup.module; this.focusIssue(); return this.$message.warning("请修正插件配置中的错误") }
+      const changes = this.simpleChanges
+      if (!Object.keys(changes).length) return this.$message.info("没有需要保存的插件配置。")
+      this.pluginIssues = changeIssues(this.groups, changes)
+      if (this.pluginIssues.length) {
+        const group = this.activeGroups.find(item => String(this.pluginIssues[0].path).startsWith(`${item.module}.`))
+        if (group) this.selectedGroup = group.module
+        this.focusIssue()
+        return this.$message.warning("请修正插件配置中的错误")
+      }
       this.saving = "simple"
-      const submitted = Object.fromEntries(Object.entries(this.simpleChanges).map(([module, fields]) => [module, Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value === undefined ? undefined : JSON.parse(JSON.stringify(value))]))]))
       try {
-        const response = await this.putRequest(`${this.$root.prefix}/system/configuration/files/simple`, { expected_revision: this.simpleRevision, fields: this.simpleChanges, unset_fields: Object.entries(this.simpleChanges).flatMap(([module, fields]) => Object.keys(fields).filter(key => fields[key] === undefined).map(key => [module, key])) })
-        if (!response.suc) throw new Error(response.info)
+        const response = await saveSimpleConfig(this, this.simpleRevision, changes)
         if (response.data?.apply_mode !== "failed") {
           this.simpleRevision = response.data.revision
-          this.groups.forEach(group => {
-            const saved = submitted[group.module]
-            if (!saved) return
-            group.fields.forEach(field => {
-              if (Object.prototype.hasOwnProperty.call(saved, field.key)) field.originalValue = JSON.stringify(saved[field.key])
-            })
-            const changed = Object.fromEntries(group.fields.filter(field => field.authority !== "database" && JSON.stringify(field.value) !== field.originalValue).map(field => [field.key, field.value]))
-            if (Object.keys(changed).length) this.$set(this.simpleChanges, group.module, changed)
-            else this.$delete(this.simpleChanges, group.module)
-          })
-          setDirtyState("plugin-configuration", Boolean(Object.keys(this.simpleChanges).length))
+          markSaved(this.groups, changes)
         }
         await handleApplyResult(this, response, {
           returnRoute: "/system",
@@ -432,7 +395,7 @@ export default {
   },
   watch: {
     section(value) { if (value === "raw" && !this.rawLoaded[this.rawFile]) this.loadRaw(this.rawFile) },
-    selectedGroup() { this.pluginInvalidPaths = [] },
+    simpleChanges(value) { setDirtyState("plugin-configuration", Boolean(Object.keys(value).length)) },
     envFields: { deep: true, handler() { this.markEnvDirty() } },
     customEnv: { deep: true, handler() { this.markEnvDirty() } },
     rawContent(value) { setDirtyState("raw-configuration", Boolean(this.rawReady && value !== this.rawOriginal)) },
@@ -469,6 +432,8 @@ export default {
 .plugin-config-workbench { height:auto; min-height:360px; overflow:visible; }
 .config-groups { max-height:70vh; }
 .current-config-group { padding-bottom:16px; }
+.group-category { margin:10px 4px 2px; color:var(--text-color-secondary); font-size:12px; font-weight:500; }
+.unsaved-dot { display:inline-block; width:6px; height:6px; margin-left:6px; border-radius:50%; background:var(--primary-color); vertical-align:middle; }
 .current-config-group pre { max-width:100%; white-space:pre-wrap; overflow-wrap:anywhere; }
 
 

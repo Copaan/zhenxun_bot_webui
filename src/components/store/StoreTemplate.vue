@@ -238,7 +238,7 @@ export default {
         if ((plugin.reload_reasons || []).includes("dependency_missing")) return "缺少依赖已停用，安装依赖后重启"
         return plugin.reload_support === "hot_reloadable" ? "加载失败已停用，修复后可热重载" : "加载失败已停用，修复后需重启生效"
       }
-      if (plugin.parked) return "已全局关闭（已卸载）"
+      if (plugin.parked) return "已停用（已卸载）"
       if (plugin.reload_support === "hot_reloadable") return "支持热加载"
       if ((plugin.reload_reasons || []).includes("not_loaded")) return "尚未加载"
       return "变更后需要重启"
@@ -248,7 +248,7 @@ export default {
       try {
         const response = await this.getRequest(`${this.$root.prefix}/plugin/get_plugin`, { module })
         if (!response.suc) throw new Error(response.info || "插件配置读取失败")
-        if (!response.data?.config_list?.length) {
+        if (!response.data?.config_groups?.length) {
           this.$message.info("该插件无需额外配置。")
           return
         }

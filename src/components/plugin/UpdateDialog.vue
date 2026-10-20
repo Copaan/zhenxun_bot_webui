@@ -5,7 +5,7 @@
     @closed="handleClosed"
     :class="{
       'neko-dialog': true,
-      'limit-width': !updateData.config_list || !updateData.config_list.length,
+      'limit-width': !configGroups.length,
     }"
     width="80%"
     top="5vh"
@@ -39,8 +39,12 @@
 
     <!-- 内容区域 -->
     <div class="plugin-content">
+      <el-tabs v-if="configGroups.length" v-model="activeTab" class="plugin-tabs">
+        <el-tab-pane label="基础设置" name="basic" />
+        <el-tab-pane :label="`插件配置 · ${configFieldCount} 项`" name="config" />
+      </el-tabs>
       <!-- 基础配置区域 -->
-      <div class="settings-container">
+      <div v-show="activeTab === 'basic'" class="settings-container">
         <div class="settings-section">
           <div class="section-header">
             <i class="el-icon-setting"></i>
@@ -72,7 +76,7 @@
                   <i class="el-icon-user"></i>
                 </div>
                 <div class="setting-content">
-                  <div class="setting-label">限制超级用户</div>
+                  <div class="setting-label" title="开启后超级用户同样受全局、群聊和私聊开关限制；关闭时只受账号禁用限制">限制超级用户</div>
                   <div class="setting-control">
                     <el-switch v-model="updateData.limit_superuser" />
                   </div>
@@ -163,25 +167,13 @@
             </div>
           </el-form>
         </div>
+      </div>
 
-        <!-- 配置项区域 -->
-        <div
-          class="settings-section config-section"
-          v-if="updateData.config_list && updateData.config_list.length"
-        >
-          <div class="section-header">
-            <i class="el-icon-edit-outline"></i>
-            <h3>配置项</h3>
-          </div>
-
-          <div class="config-table-wrapper">
-            <el-input v-model="configSearch" clearable prefix-icon="el-icon-search" placeholder="搜索配置项、说明或嵌套路径" />
-            <section v-for="(row, index) in updateData.config_list" v-show="matchesConfig(row)" :key="row.key" class="plugin-config-row">
-              <SchemaField :ref="'autoComponent_' + index" v-model="row.value" :schema="row.schema || {}" :root-schema="row.schema || {}" :label="row.key" :path="row.key" :query="configSearch" :issues="configIssues" :ui="{ description: row.help }" />
-              <details class="default-value"><summary>默认值：{{ summary(row.default_value) }}</summary><pre>{{ formatDefault(row.default_value) }}</pre></details>
-            </section>
-          </div>
-        </div>
+      <!-- 插件配置区域 -->
+      <div v-if="configGroups.length" v-show="activeTab === 'config'" class="config-panel">
+        <el-input v-if="configFieldCount > 6" v-model="configSearch" clearable prefix-icon="el-icon-search" placeholder="搜索配置项或说明" class="config-search" />
+        <ConfigGroupEditor v-for="group in configGroups" v-show="groupMatches(group, configSearch)" :key="group.module" :group="group" :hide-title="configGroups.length === 1 && group.module === updateData.module" :issues="configIssues" :query="fieldQuery(group)" @change="configIssues = []" />
+        <div v-if="!configGroups.some(group => groupMatches(group, configSearch))" class="config-empty">没有匹配的配置项</div>
       </div>
     </div>
 
@@ -211,8 +203,8 @@
 </template>
 
 <script>
-import SchemaField from "@/components/config/SchemaField.vue"
-import { fieldMatches, valueSummary, validateField } from "@/components/config/schema-utils"
+import ConfigGroupEditor from "@/components/config/ConfigGroupEditor.vue"
+import { changeIssues, collectChanges, groupMatches, markSaved, normalizeGroups, saveSimpleConfig } from "@/components/config/simple-config"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
@@ -225,7 +217,7 @@ export default {
     module: String,
   },
   components: {
-    SchemaField,
+    ConfigGroupEditor,
     "neon-input": NeonInput,
   },
   data() {
@@ -239,7 +231,7 @@ export default {
       callback()
     }
     return {
-      dialogWidth: "1300px", configSearch: "", configIssues: [],
+      activeTab: "basic", configSearch: "", configIssues: [], configGroups: [], configRevision: "",
       visible: false,
       menuTypeList: [],
       menuTypeOptions: [],
@@ -264,7 +256,6 @@ export default {
         menu_type: "normal",
         level: 0,
         block_type: null,
-        config_list: [],
       },
       initialData: "",
       dirtySource: `plugin-config-${this._uid}`,
@@ -281,15 +272,8 @@ export default {
     clearDirtyState(this.dirtySource)
   },
   watch: {
-    updateData: {
-      deep: true,
-      handler(value) {
-        setDirtyState(
-          this.dirtySource,
-          Boolean(this.initialData) && JSON.stringify(value) !== this.initialData
-        )
-      },
-    },
+    updateData: { deep: true, handler() { setDirtyState(this.dirtySource, this.isDirty()) } },
+    configChanges() { setDirtyState(this.dirtySource, this.isDirty()) },
   },
   computed: {
     canUninstall() {
@@ -297,11 +281,14 @@ export default {
         this.updateData.management_source
       ) && this.updateData.uninstall_supported && !this.updateData.is_builtin
     },
+    configChanges() { return collectChanges(this.configGroups) },
+    configFieldCount() { return this.configGroups.reduce((sum, group) => sum + group.fields.length, 0) },
   },
   methods: {
-    summary: valueSummary,
-    formatDefault(value) { return value === undefined ? "未设置" : JSON.stringify(value, null, 2) },
-    matchesConfig(row) { return fieldMatches(this.configSearch, `${row.key} ${row.help || ""}`, row.schema || {}, row.value, row.schema || {}) || this.configIssues.some(issue => String(issue.path || "").includes(row.key)) },
+    groupMatches,
+    fieldQuery(group) { return groupMatches({ ...group, fields: [] }, this.configSearch) ? "" : this.configSearch },
+    baseChanged() { return Boolean(this.initialData) && JSON.stringify(this.updateData) !== this.initialData },
+    isDirty() { return this.baseChanged() || Object.keys(this.configChanges).length > 0 },
     async close() {
       if (!(await this.confirmDiscard())) return
       clearDirtyState(this.dirtySource)
@@ -314,12 +301,7 @@ export default {
       this.$emit("close")
     },
     async confirmDiscard() {
-      if (
-        !this.initialData ||
-        JSON.stringify(this.updateData) === this.initialData
-      ) {
-        return true
-      }
+      if (!this.isDirty()) return true
       try {
         await this.$confirm(
           "插件配置尚未保存，确定放弃修改吗？",
@@ -352,12 +334,12 @@ export default {
         module: this.module,
       }).then((resp) => {
         if (resp.suc && !resp.warning) {
-          this.updateData = resp.data
-          this.initialData = JSON.stringify(resp.data)
+          const { config_groups: groups, config_revision: revision, ...plugin } = resp.data
+          this.updateData = plugin
+          this.initialData = JSON.stringify(plugin)
+          this.configGroups = normalizeGroups(groups)
+          this.configRevision = revision
           clearDirtyState(this.dirtySource)
-          if (!resp.data.config_list || !resp.data.config_list.length) {
-            this.dialogWidth = "700px"
-          }
           this.visible = true
         } else {
           this.$message.warning(resp.warning || resp.info)
@@ -396,59 +378,66 @@ export default {
       }
       return icons[type] || "menu-default"
     },
-    commit() {
-      this.configIssues = (this.updateData.config_list || []).flatMap(row => validateField(row.value, row.schema || {}, row.schema?.["x-root-schema"] || row.schema || {}, row.key))
-      if (this.configIssues.length) { this.$nextTick(() => this.$el.querySelector(".field-error")?.scrollIntoView({ block: "center" })); return this.$message.warning("请修正配置项中的错误") }
-      this.$refs["form"].validate((valid) => {
-        if (valid) {
+    validateForm() {
+      return new Promise(resolve => this.$refs.form.validate(valid => resolve(valid)))
+    },
+    focusConfigIssue() {
+      this.activeTab = "config"
+      this.$nextTick(() => this.$el.querySelector(".field-error")?.scrollIntoView({ block: "center" }))
+    },
+    async commit() {
+      const changes = this.configChanges
+      const baseChanged = this.baseChanged()
+      if (!baseChanged && !Object.keys(changes).length) {
+        clearDirtyState(this.dirtySource)
+        this.$emit("close")
+        return
+      }
+      this.configIssues = changeIssues(this.configGroups, changes)
+      if (this.configIssues.length) {
+        this.focusConfigIssue()
+        return this.$message.warning("请修正配置项中的错误")
+      }
+      if (baseChanged && !(await this.validateForm())) {
+        this.activeTab = "basic"
+        return
+      }
+      const loading = this.getLoading(".el-dialog")
+      let configResponse = null
+      let baseResponse = null
+      try {
+        if (Object.keys(changes).length) {
+          configResponse = await saveSimpleConfig(this, this.configRevision, changes)
+          if (configResponse.data?.apply_mode === "failed") {
+            await handleApplyResult(this, configResponse)
+            return
+          }
+          this.configRevision = configResponse.data.revision
+          markSaved(this.configGroups, changes)
+        }
+        if (baseChanged) {
           const data = JSON.parse(JSON.stringify(this.updateData))
           data.expected_revision = data.policy_revision
-          if (this.updateData.config_list && this.updateData.config_list.length) {
-            const configs = {}
-            data.unset_configs = []
-            const original = JSON.parse(this.initialData).config_list || []
-            this.updateData.config_list.forEach((e) => {
-              if (JSON.stringify(e.value) === JSON.stringify(original.find(row => row.key === e.key)?.value)) return
-              if (e.value === undefined) data.unset_configs.push(e.key)
-              else configs[e.key] = e.value
-            })
-            data.configs = configs
-            data.config_list = null
-          }
-
           data.block_type = data.block_type || null
-          const loading = this.getLoading(".el-dialog")
-
-          this.postRequest(
-            `${this.$root.prefix}/plugin/update_plugin`,
-            data
-          ).then(async (resp) => {
-            if (resp.suc) {
-              if (resp.warning) {
-                this.$message.warning(resp.warning)
-              } else {
-                this.initialData = JSON.stringify(this.updateData)
-                clearDirtyState(this.dirtySource)
-                await handleApplyResult(this, resp, {
-                  restartPrompt: "插件配置已保存，需要重启后生效。",
-                  returnRoute: this.$route.path,
-                })
-                this.$emit("close", true)
-              }
-            } else {
-              this.$message.error(resp.info)
-            }
-            loading.close()
-          }).catch(error => {
-            loading.close()
-            this.configIssues = apiErrorIssues(error)
-            this.$message.error(apiErrorDetail(error, "配置保存失败"))
-            this.$nextTick(() => this.$el.querySelector(".field-error")?.scrollIntoView({ block: "center" }))
-          })
-        } else {
-          return false
+          baseResponse = await this.postRequest(`${this.$root.prefix}/plugin/update_plugin`, data)
+          if (!baseResponse.suc || baseResponse.warning) throw new Error(baseResponse.warning || baseResponse.info)
+          this.initialData = JSON.stringify(this.updateData)
         }
+      } catch (error) {
+        this.configIssues = apiErrorIssues(error)
+        const prefix = configResponse ? "插件配置已保存，但基础设置保存失败：" : ""
+        this.$message.error(prefix + apiErrorDetail(error, "保存失败"))
+        if (this.configIssues.length) this.focusConfigIssue()
+        return
+      } finally {
+        loading.close()
+      }
+      clearDirtyState(this.dirtySource)
+      await handleApplyResult(this, configResponse || baseResponse, {
+        restartPrompt: "插件配置已保存，需要重启后生效。",
+        returnRoute: this.$route.path,
       })
+      this.$emit("close", true)
     },
   },
 }
@@ -825,45 +814,6 @@ $bg-color-overlay: var(--el-bg-color-overlay, #ffffff);
     }
   }
 
-  // 配置表格
-  .config-section {
-    .config-table-wrapper {
-      padding: 15px;
-      min-width: 0;
-    }
-
-    .config-table {
-      ::v-deep .el-table {
-        border-radius: 10px;
-        overflow: hidden;
-
-        &::before {
-          display: none;
-        }
-
-        .el-table__header-wrapper {
-          th {
-            background: $primary-lightest;
-            color: $primary;
-            font-weight: 600;
-            padding: 12px 0;
-          }
-        }
-
-        .el-table__row {
-          td {
-            padding: 10px 0;
-            transition: all 0.3s;
-          }
-
-          &:hover td {
-            background-color: $primary-lightest;
-          }
-        }
-      }
-    }
-  }
-
   // 底部操作区
   .dialog-footer {
     padding: 20px 30px;
@@ -971,11 +921,10 @@ $bg-color-overlay: var(--el-bg-color-overlay, #ffffff);
 </style>
 
 <style scoped>
-.config-table-wrapper { overflow:visible; min-width:0; }
-.plugin-config-row { padding:14px 0; border-bottom:1px solid var(--border-color-light); min-width:0; }
-.default-value { margin-top:10px; font-size:12px; color:var(--text-color-secondary); overflow-wrap:anywhere; }
-.default-value summary { cursor:pointer; }
-.default-value pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.plugin-tabs ::v-deep .el-tabs__header { margin-bottom:16px; }
+.config-panel { display:flex; flex-direction:column; gap:28px; min-width:0; }
+.config-search { max-width:420px; }
+.config-empty { padding:40px 0; color:var(--text-color-secondary); text-align:center; font-size:13px; }
 .neko-dialog ::v-deep .el-dialog { max-width:1400px; }
 @media(max-width:760px) { .neko-dialog ::v-deep .el-dialog { width:calc(100% - 16px) !important; margin:8px auto !important; } .neko-dialog ::v-deep .el-dialog__body { padding:12px; } .dialog-footer { position:sticky; bottom:0; background:var(--bg-color-secondary); z-index:4; } }
 </style>

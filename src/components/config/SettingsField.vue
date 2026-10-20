@@ -46,14 +46,14 @@
           <el-dropdown-menu slot="dropdown">
             <el-dropdown-item v-if="hasDefault" command="default">恢复默认值</el-dropdown-item>
             <el-dropdown-item v-if="!required" command="unset">恢复未设置</el-dropdown-item>
-            <el-dropdown-item v-if="nullable" command="null">设为 null</el-dropdown-item>
-            <el-dropdown-item v-for="(option, index) in variants" :key="`variant-${index}`" :command="`variant:${index}`">切换为 {{ option.title || option.type || `类型 ${index + 1}` }}</el-dropdown-item>
+            <el-dropdown-item v-if="nullable" command="null">清空（设为 null）</el-dropdown-item>
+            <el-dropdown-item v-for="(option, index) in variantSwitchable ? variants : []" :key="`variant-${index}`" :command="`variant:${index}`">切换为 {{ option.title || option.type || `类型 ${index + 1}` }}</el-dropdown-item>
             <el-dropdown-item v-for="choice in untyped ? ['string', 'number', 'boolean', 'object', 'array', 'null'] : []" :key="choice" :command="`type:${choice}`">切换为 {{ choice }}</el-dropdown-item>
           </el-dropdown-menu>
         </el-dropdown>
       </div>
       <div v-if="value === undefined && !readonly" class="setting-hint">未设置{{ hasDefault ? ' · 使用默认值' : '' }}</div>
-      <div v-else-if="value === null && type !== 'null'" class="setting-hint">当前配置为 null，操作控件后才替换</div>
+      <div v-else-if="value === null && type !== 'null'" class="setting-hint">当前为空（null），填写后替换</div>
       <slot name="status" />
       <div v-if="error" class="field-error" role="alert">{{ error }}</div>
     </div>
@@ -107,6 +107,7 @@ export default {
       const editable = this.variants.map((item, index) => item.type !== 'null' ? index : -1).filter(index => index >= 0)
       return editable.length === 1 ? editable[0] : undefined
     },
+    variantSwitchable() { return this.variants.filter(item => item.type !== 'null').length > 1 },
     ambiguous() { return this.variants.length > 0 && this.variant === undefined },
     resolved() { const { anyOf, oneOf, ...base } = this.base; return this.variants.length ? { ...base, ...(this.variants[this.variant] || {}) } : base },
     type() { return this.selectedType || (typeof this.resolved.type === 'string' ? this.resolved.type : null) || (this.resolved.properties ? 'object' : valueType(this.value)) },
@@ -117,7 +118,7 @@ export default {
     nullable() { return this.base.type === 'null' || this.variants.some(item => item.type === 'null') || this.untyped },
     hasDefault() { return !this.base.writeOnly && Object.prototype.hasOwnProperty.call(this.base, 'default') },
     displayValue() { return this.value === undefined && this.hasDefault ? this.base.default : this.value },
-    placeholder() { return this.value === null ? 'null' : this.hasDefault ? `默认：${valueSummary(this.base.default)}` : this.ui.placeholder || '未设置' },
+    placeholder() { return this.value === null ? '空' : this.hasDefault ? `默认：${valueSummary(this.base.default)}` : this.ui.placeholder || '未设置' },
     description() { return this.ui.description || this.resolved.description || '' },
     options() { return (this.ui.options || this.resolved.enum || []).map(item => item && typeof item === 'object' ? item : { label: String(item), value: item }) },
     matches() { return fieldMatches(this.query, `${this.path} ${this.label} ${this.description}`, this.schema, this.value, this.root) },
