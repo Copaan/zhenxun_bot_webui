@@ -161,11 +161,23 @@ export default {
         notes.push({ type: "error", text: `插件依赖层安装失败，商店插件与恢复的依赖都未生效：${reasonText(layer.error_code)}${layer.detail ? `（${layer.detail}）` : ""}。请在插件商店查看依赖事务后处理。` })
       } else if (layer.state === "pending") {
         notes.push({ type: "info", text: "插件依赖正在安装或等待启动验证。" })
+      } else if (layer.warnings?.length) {
+        notes.push({ type: "warning", text: `插件依赖已安装，但有以下问题未解决：${layer.warnings.join("；")}` })
       }
       const nearby = Object.entries(report.nearby || {})
       if (nearby.length) {
-        notes.push({ type: "info", text: `以下依赖备份时的版本不可用，已改装相近版本：${nearby.map(([name, [from, to]]) => `${name} ${from} → ${to}`).join("、")}` })
+        notes.push({ type: "info", text: `以下依赖备份时的版本不可用，已改装其他版本：${nearby.map(([name, [from, to]]) => `${name} ${from} → ${to}`).join("、")}` })
       }
+      const implied = Object.entries(report.implied || {})
+      if (implied.length) {
+        notes.push({ type: "info", text: `以下依赖作为其他依赖的子依赖处理，按当前平台决定是否安装：${implied.map(([name, owner]) => `${name}（${owner}）`).join("、")}` })
+      }
+      const platformOnly = Object.entries(report.platform_only || {})
+      if (platformOnly.length) {
+        notes.push({ type: "info", text: `以下依赖仅适用于其他平台，已忽略：${platformOnly.map(([name, marker]) => `${name}（${marker}）`).join("、")}` })
+      }
+      const devTools = report.dev_tools || []
+      if (devTools.length) notes.push({ type: "info", text: `以下开发工具恢复时不安装：${devTools.join("、")}` })
       const skipped = [...(report.skipped_plugins || []), ...(report.skipped_requirements || [])]
       if (skipped.length) {
         const reasons = report.skip_reasons || {}

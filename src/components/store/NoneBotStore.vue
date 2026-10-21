@@ -269,19 +269,15 @@
 
               <section class="analysis-section">
                 <h3>插件与依赖变更</h3>
-                <p class="dependency-note">优先保留现有版本，仅调整本次插件所需依赖；已有待应用变更会单独标注。</p>
+                <p class="dependency-note">优先保留现有版本；为满足依赖要求而调整的其他包会标注为连带变化，已有待应用变更会单独标注。</p>
                 <div v-if="!allChanges.length" class="muted">{{ sharedChanges.length ? "仅有下方共享依赖变更。" : "不会增加或修改 Python 包。" }}</div>
                 <div v-for="item in allChanges" :key="`${item.kind}-${item.name}`" class="dependency-change">
                   <div><code>{{ item.name }}</code><div class="dependency-note">{{ dependencySource(item.name) }}</div></div>
                   <span v-if="item.kind === 'added'">新增 {{ item.version }}</span>
                   <span v-else-if="item.kind === 'changed'">{{ item.from }} → {{ item.to }}</span>
-                  <span v-else>{{ item.reason === 'released' ? '释放依赖' : '移除插件包' }} {{ item.version }}</span>
+                  <span v-else>移除插件包 {{ item.version }}</span>
                 </div>
-                <div v-for="item in importedRetained" :key="`imported-${item.name}`" class="dependency-change">
-                  <div><code>{{ item.name }}</code><div class="dependency-note">{{ item.files.join('、') }}</div></div>
-                  <span>保留 {{ item.version }}：{{ item.owners.join('、') }}</span>
-                </div>
-                <p v-if="analysis.action === 'uninstall'" class="dependency-note">卸载会移除插件分发包，并释放不再被其他插件、手动依赖或核心依赖需要的依赖；仍被源码插件导入的依赖会保留。</p>
+                <p v-if="analysis.action === 'uninstall'" class="dependency-note">卸载只移除插件分发包，插件的依赖会保留，以免影响其他共用这些依赖的插件。</p>
               </section>
 
               <section v-if="sharedChanges.length" class="analysis-section shared-changes">
@@ -423,9 +419,6 @@ export default {
         ...(changes.removed || []).map((item) => ({ ...item, kind: "removed" })),
       ].filter((item) => !shared.has(item.name))
     },
-    importedRetained() {
-      return (this.analysis?.plan?.retained || []).filter((item) => Array.isArray(item.imported_modules))
-    },
     canApply() {
       return this.analysis?.status === 'ready' && !this.applying && !this.readsPaused && !this.authExpired
     },
@@ -516,6 +509,7 @@ export default {
       if (source?.kind === "requested_plugin") return "本次选择的插件"
       if (source?.kind === "candidate_dependency") return `依赖来源：${source.required_by}`
       if (source?.kind === "pending_transaction") return "已有待应用事务"
+      if (source?.kind === "linked_change") return "连带变化：满足其他依赖的版本要求"
       return this.analysis?.action === "uninstall" ? "本次卸载" : "依赖变更"
     },
     formatTime(value) { try { return new Date(value).toLocaleString("zh-CN", { hour12: false }) } catch (_) { return value } },
