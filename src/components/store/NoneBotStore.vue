@@ -316,7 +316,7 @@
 
               <div class="confirmations">
                 <p>点击下方按钮即确认以上插件代码、依赖和构建范围。</p>
-                <p>已安装的 ORM 和数据库驱动版本保持不变；插件需要的新 ORM 包会随依赖安装。</p>
+                <p>已安装的 ORM 包（nonebot-plugin-orm、SQLAlchemy、Alembic）版本保持不变；插件需要的新 ORM 包会随依赖安装。</p>
               </div>
             </template>
           </template>

@@ -12,7 +12,7 @@ export const reasonLabels = {
   plugin_dependency_invalid: "插件自身的依赖声明无法得到一致解。",
   dependency_layer_state_mismatch: "依赖层记录与实际安装内容不一致，请先“预览依赖修复”，按记录重建依赖层后再操作。",
   current_environment_dependency_conflict: "本次操作涉及的依赖存在实际冲突，请查看具体包和使用者。",
-  orm_dependency_console_required: "会改变已安装的 ORM 或数据库驱动版本，请在控制台调整后重试；新增的 ORM 包可以直接安装。",
+  orm_dependency_console_required: "会改变已安装的 ORM 包（nonebot-plugin-orm、SQLAlchemy、Alembic）版本，请在控制台调整后重试；新增的 ORM 包可以直接安装。",
   environment_drift: "当前运行环境与 uv.lock 不一致，请先同步项目依赖。",
   interpreter_mismatch: "当前解释器与实例绑定的虚拟环境不一致，请从该环境通过 uv run zx run 启动。",
   project_dependency_conflict: "插件依赖超出真寻声明的兼容范围。",

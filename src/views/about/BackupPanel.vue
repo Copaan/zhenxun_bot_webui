@@ -176,8 +176,6 @@ export default {
       if (platformOnly.length) {
         notes.push({ type: "info", text: `以下依赖仅适用于其他平台，已忽略：${platformOnly.map(([name, marker]) => `${name}（${marker}）`).join("、")}` })
       }
-      const devTools = report.dev_tools || []
-      if (devTools.length) notes.push({ type: "info", text: `以下开发工具恢复时不安装：${devTools.join("、")}` })
       const skipped = [...(report.skipped_plugins || []), ...(report.skipped_requirements || [])]
       if (skipped.length) {
         const reasons = report.skip_reasons || {}
