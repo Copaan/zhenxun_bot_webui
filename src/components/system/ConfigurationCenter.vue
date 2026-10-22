@@ -14,7 +14,7 @@
     </div>
     <el-tabs v-model="section">
       <el-tab-pane label="环境配置" name="env">
-        <p class="environment-source">配置来源 <code>{{ envSourceFile }}</code> · 本体与插件环境项均保存在此文件，按归属分类展示</p>
+        <p class="environment-source">配置来源 <code>{{ envSourceFile }}</code> · 真寻与插件环境项均保存在此文件，按归属分类展示</p>
         <SettingsLayout v-model="envCategory" :query="envSearch" :groups="envCategories" @search="envSearch = $event">
           <section v-for="group in envCategories.filter(item => item.key !== 'custom')" v-show="envSearch.trim() ? group.count > 0 : envCategory === group.key" :key="group.key">
             <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-button v-if="group.key === 'storage'" type="text" icon="el-icon-position" @click="$router.push('/database', () => {}, (error) => $message.error(error.message))">前往数据与缓存</el-button><el-tag size="mini" type="info">{{ group.count }} 项</el-tag></header>
@@ -133,7 +133,7 @@ export default {
       loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], groupSearch: "", selectedGroup: "", launcherManaged: false,
       rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalid: {}, pluginIssues: [], orphanPanel: [], selectedOrphan: "",
       envFieldDefinitions: [
-        { key: 'CACHE_MODE', databasePage: true, label: '缓存模式', options: [{value:'NONE',label:'关闭缓存'},{value:'MEMORY',label:'内存缓存'},{value:'REDIS',label:'Redis'}], help: '本体缓存的存储方式。' },
+        { key: 'CACHE_MODE', databasePage: true, label: '缓存模式', options: [{value:'NONE',label:'关闭缓存'},{value:'MEMORY',label:'内存缓存'},{value:'REDIS',label:'Redis'}], help: '真寻缓存的存储方式。' },
         { key: 'REDIS_HOST', databasePage: true, label: 'Redis 地址', help: 'Redis 服务的主机名或 IP 地址。' },
         { key: 'REDIS_PORT', databasePage: true, label: 'Redis 端口', help: 'Redis 服务监听的端口。' },
         { key: 'REDIS_PASSWORD', databasePage: true, label: 'Redis 密码', help: '用于连接 Redis。' },
@@ -183,7 +183,7 @@ export default {
     },
     rawReady() { return Boolean(this.rawLoaded[this.rawFile] && /^[a-f0-9]{64}$/.test(this.rawRevision)) },
     groupSections() {
-      const titles = { plugin: "插件", builtin: "内置功能", core: "本体" }
+      const titles = { plugin: "插件", builtin: "内置功能", core: "真寻" }
       return Object.entries(titles)
         .map(([key, title]) => ({ key, title, groups: this.activeGroups.filter(group => (group.category || "plugin") === key && groupMatches(group, this.groupSearch)).sort((left, right) => left.name.localeCompare(right.name, "zh-CN")) }))
         .filter(part => part.groups.length)
@@ -200,7 +200,7 @@ export default {
   beforeDestroy() { clearDirtyState("plugin-configuration"); clearDirtyState("environment-configuration"); clearDirtyState("raw-configuration") },
   methods: {
     envFieldUi(field) { return { ...this.envMeta(field), description: this.envHelp(field) || (field.category === 'plugins' ? '插件未提供字段说明；请查看下方来源。' : '') } },
-    envFieldSource(field) { return (field.source_labels || field.schema_sources || []).map(item => typeof item === 'string' ? item : item.source || item.model || item.module || '注册模型').join('、') || '本体配置' },
+    envFieldSource(field) { return (field.source_labels || field.schema_sources || []).map(item => typeof item === 'string' ? item : item.source || item.model || item.module || '注册模型').join('、') || '真寻配置' },
     envFieldChanged(key) { return JSON.stringify(this.envFields[key]) !== JSON.stringify(this.originalEnvFields[key]) },
     envStateText(field) { return { restart_pending: '已保存，重启 Bot 后生效', applying: '正在应用', unknown: '运行状态未确认' }[field.apply_state] || '' },
     customMatches(item) { return !this.envSearch.trim() || `${item.key} 自定义变量`.toLowerCase().includes(this.envSearch.trim().toLowerCase()) },

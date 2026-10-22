@@ -121,7 +121,7 @@ export function aiSectionGroups(section, sectionSchema, rootSchema, draft) {
 
 export function advancedSettingGroups(schema, draft) {
   const groups = [
-    { key: 'client_settings', title: '请求与重试', icon: 'el-icon-timer', description: '平衡请求等待与恢复次数，适用于本体托管的 AI 客户端。' },
+    { key: 'client_settings', title: '请求与重试', icon: 'el-icon-timer', description: '平衡请求等待与恢复次数，适用于真寻托管的 AI 客户端。' },
     { key: 'provider_settings', title: '厂商参数', icon: 'el-icon-connection', description: '按厂商设置特有行为，未知参数会原样保留。' },
     { key: 'debug_log', title: '调试日志', icon: 'el-icon-document', description: '只控制调试日志展示的内容，不改变模型回答。' },
   ]

@@ -27,6 +27,7 @@
 </template>
 
 <script>
+import { dismissPluginOperation } from "@/utils/plugin-operation"
 import { requestRestartWithRecovery } from "@/utils/restart-flow"
 
 export default {
@@ -67,7 +68,8 @@ export default {
     },
     close(done) {
       if (this.operation.active) return
-      if (!['restart_pending', 'restart_requested', 'preparing', 'verifying', 'unknown', 'recovery_required'].includes(this.operation.applyMode)) sessionStorage.removeItem("zhenxun_plugin_operation")
+      if (this.operation.applyMode === 'restart_pending') dismissPluginOperation()
+      else if (!['restart_requested', 'preparing', 'verifying', 'unknown', 'recovery_required'].includes(this.operation.applyMode)) sessionStorage.removeItem("zhenxun_plugin_operation")
       this.$store.commit("CLEAR_PLUGIN_OPERATION")
       if (typeof done === "function") done()
     },

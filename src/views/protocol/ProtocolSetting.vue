@@ -23,7 +23,7 @@
       </div>
       <div v-if="endpoint.certificate_candidates && endpoint.certificate_candidates.length" class="endpoint-section">
         <h3>证书域名候选</h3>
-        <p class="field-help">DNS、网络及客户端信任未验证。域名需在协议端解析到本体；直接使用 WSS，不依赖 308。</p>
+        <p class="field-help">DNS、网络及客户端信任未验证。域名需在协议端解析到本机；直接使用 WSS，不依赖 308。</p>
         <div v-for="candidate in endpoint.certificate_candidates" :key="candidate.url" class="candidate-row">
           <code>{{ candidate.url }}</code>
           <div class="candidate-actions"><el-button size="small" icon="el-icon-document-copy" :disabled="!candidate.certificate_valid_now || !candidate.certificate_name_match" @click="copyText(candidate.url)">复制</el-button><el-button size="small" icon="el-icon-edit" :disabled="saving" @click="onebotHost = candidate.connection_host">选入草稿</el-button></div>
@@ -37,7 +37,7 @@
       <el-form class="form-grid" label-position="top" :disabled="saving">
         <el-form-item label="反向连接主机（保存后重启生效）" class="span-2"><el-input v-model="onebotHost" placeholder="留空使用当前页面主机；仅主机名或 IP" maxlength="253" /><span v-if="protocolDirty" class="field-help">未保存修改</span></el-form-item>
         <el-form-item label="Access Token" class="span-2">
-          <el-input v-model="onebotToken" autocomplete="new-password" placeholder="建议设置 Token；留空表示不校验" show-password />
+          <el-input v-model="onebotToken" autocomplete="new-password" placeholder="留空时只接受本机与局域网连接；公网或内网穿透接入必须设置" show-password />
           <div class="field-actions"><span>协议端必须填写相同 Token，保存后重启生效。</span></div>
         </el-form-item>
       </el-form>
@@ -198,7 +198,7 @@ export default {
     canCopyEndpoint() { return Boolean(this.endpoint.url && ['tls_not_enabled', 'tls_certificate_identity_ok'].includes(this.endpoint.code)) },
     endpointSource() { return !this.statusConfirmed ? '运行状态未确认' : this.endpoint.host_source === 'configured' ? '来源：当前生效的反向连接主机' : '来源：页面访问主机，协议与端口取自本次启动' },
     onebotWebSocketUrl() { return this.endpoint.url || "连接地址暂不可用" },
-    onebotEndpointWarning() { if (!this.statusConfirmed) return '运行状态尚未确认，请刷新状态；已保存配置不代表当前可连接。'; const messages = { connection_host_invalid: '无法生成连接地址，请填写有效的主机名或 IP。', tls_certificate_name_mismatch: "连接主机不在证书名称中，协议端会拒绝 TLS 连接。请设置匹配证书的域名。", tls_certificate_time_invalid: "证书尚未生效或已过期，请更换有效证书。", tls_certificate_unavailable: "无法检查证书，请核对本体证书配置。", tls_not_enabled: "当前连接未加密，Token 将明文传输。" }; return messages[this.endpoint.code] || "" },
+    onebotEndpointWarning() { if (!this.statusConfirmed) return '运行状态尚未确认，请刷新状态；已保存配置不代表当前可连接。'; const messages = { connection_host_invalid: '无法生成连接地址，请填写有效的主机名或 IP。', tls_certificate_name_mismatch: "连接主机不在证书名称中，协议端会拒绝 TLS 连接。请设置匹配证书的域名。", tls_certificate_time_invalid: "证书尚未生效或已过期，请更换有效证书。", tls_certificate_unavailable: "无法检查证书，请核对真寻证书配置。", tls_not_enabled: "当前连接未加密，Token 将明文传输。" }; return messages[this.endpoint.code] || "" },
     hasAnyConnection() { return this.status.connections.length > 0 },
     hasWebhookBots() { return this.qqForm.bots.some((bot) => !bot.use_websocket) },
     configuredBotRows() {

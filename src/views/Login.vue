@@ -296,6 +296,9 @@ export default {
             })
 
             establishSession(`${response.data.token_type} ${response.data.access_token}`)
+            if (response.data.transport_warning) {
+              this.$message.warning({ message: response.data.transport_warning, duration: 8000, showClose: true })
+            }
 
             const requestedPath = String(this.$route.query.redirect || "")
             const path = requestedPath.startsWith("/") && !requestedPath.startsWith("//")

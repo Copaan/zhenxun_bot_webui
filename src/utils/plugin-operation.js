@@ -76,6 +76,16 @@ export function rememberPluginOperation(operationId, action, pluginName, store) 
   sessionStorage.setItem("zhenxun_plugin_operation", JSON.stringify({ operationId, action, pluginName, store }))
 }
 
+/**
+ * 标记用户已关闭当前插件操作的待重启结果，页面恢复时不再重复弹出
+ */
+export function dismissPluginOperation() {
+  let saved
+  try { saved = JSON.parse(sessionStorage.getItem("zhenxun_plugin_operation") || "null") } catch (error) { saved = null }
+  if (saved?.operationId) sessionStorage.setItem("zhenxun_plugin_operation", JSON.stringify({ ...saved, dismissed: true }))
+  else sessionStorage.removeItem("zhenxun_plugin_operation")
+}
+
 export function storeOperationResult(response, fallback, action) {
   const data = response.data || {}
   const mode = data.apply_mode
@@ -111,15 +121,17 @@ export function pluginOperationResult(entry, restartAvailable = false, store = "
   const canceled = (result.reason_codes || []).includes('transaction_canceled') || result.reason === 'transaction_canceled'
   const applied = !recovery && !failed && (canceled || ['applied', 'hot_reloaded', 'no_change'].includes(mode))
   const rolledBack = mode === 'rolled_back'
+  const skipped = applied && Boolean(result.load_failed)
   const pendingMessage = store === 'zhenxun' ? '插件变更已暂存，重启后应用。' : '依赖已准备，重启验证后生效。'
   let message = canceled ? '待应用的插件变更已相互抵消，当前运行版本保持不变。' : pending ? pendingMessage : applied ? '插件变更已经生效。' : rolledBack ? '本次操作已回滚，原环境已恢复。' : recovery ? '回滚尚未确认，请保留事务记录并处理诊断。' : failed ? '操作未完成，请查看失败阶段和诊断。' : '操作结果待确认，正在继续查询原任务。'
   if (manualMigration) message = '外部数据库需要手工迁移，当前运行版本未切换。完成数据库迁移后再重启验证。'
   if (applied && result.remaining_conflicts?.length) message = `所选修复已生效；仍有 ${result.remaining_conflicts.length} 项依赖问题待处理。`
+  if (skipped) message = '插件已安装，但未能加载，已跳过该插件。补全配置或资源后重启即可加载。'
   if (result.cleanup_error && applied) message += ' 清理待重试，不影响已确认的生效结果。'
   if (result.diagnostic) message += `\n${result.diagnostic}`
   return {
-    status: applied ? 'success' : pending ? 'pending' : 'error',
-    title: manualMigration ? '等待手工数据库迁移' : pending ? '插件事务等待重启' : canceled ? '插件变更已抵消' : applied ? '插件操作完成' : rolledBack ? '插件操作已回滚' : recovery ? '事务需要恢复处理' : failed ? '插件操作未完成' : '操作结果待确认',
+    status: skipped ? 'pending' : applied ? 'success' : pending ? 'pending' : 'error',
+    title: manualMigration ? '等待手工数据库迁移' : pending ? '插件事务等待重启' : canceled ? '插件变更已抵消' : skipped ? '插件已安装但未加载' : applied ? '插件操作完成' : rolledBack ? '插件操作已回滚' : recovery ? '事务需要恢复处理' : failed ? '插件操作未完成' : '操作结果待确认',
     message, applyMode: mode || 'unknown',
     restartAvailable: pending && !manualMigration && (result.restart_available ?? restartAvailable),
     accessUrls: result.access_urls || [], accessTargets: result.access_targets || [],

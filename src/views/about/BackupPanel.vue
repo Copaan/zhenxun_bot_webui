@@ -183,6 +183,11 @@ export default {
       }
       const unsupported = report.unsupported_requirements || []
       if (unsupported.length) notes.push({ type: "warning", text: `以下依赖无法由恢复自动安装，请在控制台手动安装：${unsupported.join("、")}` })
+      const unrestorable = this.restore.unrestorable_files || []
+      if (unrestorable.length) {
+        const names = unrestorable.slice(0, 10).join("、") + (unrestorable.length > 10 ? ` 等 ${unrestorable.length} 个文件` : "")
+        notes.push({ type: "warning", text: `以下文件的文件名在当前系统上无效，未恢复：${names}` })
+      }
       const tables = this.restore.report?.skipped_tables
       const lost = tables && !Array.isArray(tables) ? Object.entries(tables).filter(([, rows]) => rows > 0) : []
       if (lost.length) {

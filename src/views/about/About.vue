@@ -6,7 +6,7 @@
         <div>
           <p class="eyebrow">ZHENXUN BOT</p>
           <h1>更新与维护</h1>
-          <p>查看运行版本，并从官方仓库检查本体、资源和 WebUI 更新。</p>
+          <p>查看运行版本，并从官方仓库检查真寻、资源和 WebUI 更新。</p>
         </div>
       </div>
       <div class="about-actions">
@@ -82,7 +82,7 @@
             {{ officialSourceUnavailable ? "无法读取远端版本清单，暂不允许更新 WebUI。" : "远端尚无版本清单，只显示 dist 提交摘要，暂不允许更新 WebUI。" }}
           </div>
           <div v-else-if="component.key === 'webui' && !component.compatible" class="compatibility-note">
-            远端 WebUI 与当前本体 API 版本不兼容，已阻止更新。
+            远端 WebUI 与当前真寻 API 版本不兼容，已阻止更新。
           </div>
           <div v-else-if="component.blocked" class="compatibility-note blocked-note">
             {{ component.blockReason || "该版本存在已知兼容性问题，已禁止更新。" }}
@@ -110,7 +110,7 @@
       <article>
         <h2>项目介绍</h2>
         <p>真寻 Bot 是面向群聊场景的 NoneBot 应用。本 WebUI 提供运行状态、协议、插件、数据和系统配置的统一管理入口。</p>
-        <a href="https://github.com/zhenxun-org/zhenxun_bot" target="_blank" rel="noopener noreferrer">查看本体仓库 <i class="el-icon-top-right"></i></a>
+        <a href="https://github.com/zhenxun-org/zhenxun_bot" target="_blank" rel="noopener noreferrer">查看真寻仓库 <i class="el-icon-top-right"></i></a>
       </article>
       <article>
         <h2>联系与反馈</h2>
@@ -122,7 +122,7 @@
       </article>
       <article>
         <h2>开源协议</h2>
-        <p>本体和 WebUI 遵循各自仓库声明的开源协议。部署或再分发前请阅读对应 LICENSE。</p>
+        <p>真寻和 WebUI 遵循各自仓库声明的开源协议。部署或再分发前请阅读对应 LICENSE。</p>
         <a href="https://github.com/zhenxun-org/zhenxun_bot/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">AGPL-3.0 License <i class="el-icon-top-right"></i></a>
       </article>
     </section>
@@ -139,7 +139,7 @@ import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restar
 import BackupPanel from "./BackupPanel.vue"
 
 const COMPONENT_META = {
-  bot: { name: "真寻本体", icon: "el-icon-cpu" },
+  bot: { name: "真寻", icon: "el-icon-cpu" },
   resource: { name: "RES 资源", icon: "el-icon-folder-opened" },
   webui: { name: "WebUI", icon: "el-icon-monitor" },
 }
@@ -185,7 +185,7 @@ const UPDATE_ERROR_LABELS = {
   archive_root_invalid: "更新包目录结构无效",
   staged_package_incomplete: "更新包内容不完整",
   webui_manifest_invalid: "WebUI 版本清单无效",
-  webui_api_incompatible: "WebUI 与当前本体 API 版本不兼容",
+  webui_api_incompatible: "WebUI 与当前真寻 API 版本不兼容",
   webui_assets_incomplete: "WebUI 文件不完整",
   dependency_tool_unavailable: "找不到 uv，无法同步依赖",
   dependency_sync_failed: "依赖同步失败",
@@ -204,7 +204,7 @@ const UPDATE_ERROR_LABELS = {
   resource_path_conflict: "资源路径冲突",
   resource_font_missing: "资源包缺少字体文件",
   resource_theme_missing: "资源包缺少主题文件",
-  resource_version_incompatible: "资源版本与当前本体不兼容",
+  resource_version_incompatible: "资源版本与当前真寻不兼容",
   resource_metadata_invalid: "资源元数据无效",
   resource_overwrite_confirmation_required: "本地资源有改动，需要确认覆盖",
   resource_target_changed: "资源文件在更新期间被修改",

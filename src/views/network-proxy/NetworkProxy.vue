@@ -1,14 +1,14 @@
 <template>
   <main class="zx-page proxy-page" v-loading="loading">
     <header class="zx-page-header">
-      <div><h1>网络代理</h1><p>为本体和插件的外网请求配置 HTTP、HTTPS 或 SOCKS5 代理。</p></div>
+      <div><h1>网络代理</h1><p>为真寻和插件的外网请求配置 HTTP、HTTPS 或 SOCKS5 代理。</p></div>
       <div class="zx-page-actions">
         <el-tag v-if="dirty" type="warning" size="small">未保存修改</el-tag>
         <el-button icon="el-icon-refresh" size="small" :disabled="busy" @click="reload">重新加载</el-button>
       </div>
     </header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
-    <el-alert v-if="saved.mode === 'legacy'" title="旧代理配置：当前继续沿用原有行为。下方草稿默认为“关闭本体代理”，请选择新的代理模式后再保存。" type="warning" :closable="false" show-icon />
+    <el-alert v-if="saved.mode === 'legacy'" title="旧代理配置：当前继续沿用原有行为。下方草稿默认为“关闭真寻代理”，请选择新的代理模式后再保存。" type="warning" :closable="false" show-icon />
     <section class="zx-panel proxy-runtime" aria-label="当前生效状态">
       <div class="zx-section-heading"><h2>当前生效状态</h2><el-tooltip content="刷新运行状态" placement="top"><el-button icon="el-icon-refresh" size="small" aria-label="刷新运行状态" :loading="statusLoading" :disabled="busy" @click="refreshStatus" /></el-tooltip></div>
       <dl><div><dt>模式</dt><dd>{{ runtime.current ? modeName(runtime.current.mode) : '未确认' }}</dd></div><div><dt>代理服务器</dt><dd>{{ runtime.current && runtime.current.url || '未配置' }}</dd></div><div><dt>活动请求引用 / 排空池</dt><dd>{{ runtime.active_requests || 0 }} / {{ runtime.retired_pools || 0 }}</dd></div></dl>
@@ -19,7 +19,7 @@
         <div class="zx-section-heading"><div><h2>代理策略</h2><p>选择代理生效范围并填写代理服务器。</p></div></div>
         <el-form-item label="模式">
           <el-radio-group v-model="draft.mode" class="mode-control">
-            <el-radio-button label="disabled">关闭本体代理</el-radio-button>
+            <el-radio-button label="disabled">关闭真寻代理</el-radio-button>
             <el-radio-button label="global">全局强制代理</el-radio-button>
             <el-radio-button label="selected">指定插件代理</el-radio-button>
           </el-radio-group>
@@ -33,7 +33,7 @@
         <div class="auth-status"><span>更换代理服务器后会清空原用户名和密码，需要时请重新填写</span></div>
       </section>
       <section v-if="draft.mode === 'selected'" class="zx-panel">
-        <div class="zx-section-heading"><h2>插件范围</h2><el-switch v-model="draft.core_enabled" active-text="本体受管请求走代理" /></div>
+        <div class="zx-section-heading"><h2>插件范围</h2><el-switch v-model="draft.core_enabled" active-text="真寻受管请求走代理" /></div>
         <div class="plugin-toolbar"><el-input v-model="search" clearable prefix-icon="el-icon-search" placeholder="筛选插件名称或模块" /><el-button size="small" @click="selectVisible(true)">选择筛选结果</el-button><el-button size="small" @click="selectVisible(false)">取消筛选结果</el-button><span>已选 {{ draft.plugins.length }}</span></div>
         <div class="plugin-list" role="group" aria-label="代理插件">
           <label v-for="plugin in filteredPlugins" :key="plugin.module" class="plugin-row">
@@ -72,14 +72,14 @@ const errors = {
   proxy_origin_forbidden: "请求来源不匹配，请从当前 WebUI 入口操作。",
   proxy_probe_busy: "已有探测正在执行或等待清理，请稍后重试。",
   proxy_probe_cleanup_unresolved: "探测资源尚未确认释放，请查看运行状态。",
-  proxy_cleanup_budget_exhausted: "清理预算已耗尽，资源仍由本体跟踪。",
+  proxy_cleanup_budget_exhausted: "清理预算已耗尽，资源仍由真寻跟踪。",
   proxy_legacy_confirmation_required: "旧代理配置迁移需要确认，请重新保存并确认。",
   proxy_configuration_invalid: "代理配置无效，请检查各项设置。",
   proxy_configuration_unavailable: "代理配置暂不可用，请稍后重试。",
   proxy_mode_invalid: "代理模式无效。",
   proxy_plugin_invalid: "插件范围包含无效的插件模块。",
   proxy_list_invalid: "插件或排除地址列表格式无效。",
-  proxy_core_flag_invalid: "“本体受管请求走代理”设置无效。",
+  proxy_core_flag_invalid: "“真寻受管请求走代理”设置无效。",
   proxy_runtime_stopping: "真寻正在停止，暂时无法修改代理。",
   proxy_tls_verification_required: "代理请求不允许关闭 TLS 证书校验。",
   proxy_request_failed: "请求失败，请检查网络或稍后重试。",
@@ -119,7 +119,7 @@ export default {
         bypassText: String(draft.bypassText || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean).join("\n"),
       })
     },
-    modeName(mode) { return { disabled: "关闭本体代理", global: "全局强制代理", selected: "指定插件代理", legacy: "旧代理配置" }[mode] || "未确认" },
+    modeName(mode) { return { disabled: "关闭真寻代理", global: "全局强制代理", selected: "指定插件代理", legacy: "旧代理配置" }[mode] || "未确认" },
     errorText(code) { return errors[code] || code || "请求失败" },
     capture(error) {
       const detail = error?.response?.data?.detail
@@ -173,7 +173,7 @@ export default {
       const seq = ++this.sequence
       try {
         const payload = this.payload()
-        if (this.saved.mode === "legacy") { try { await this.$confirm(payload.mode === "disabled" ? "将关闭本体代理，原有代理配置不再生效。" : `将旧配置改为“${this.modeName(payload.mode)}”，仅作用于受管请求。`, "确认迁移代理策略", { type: "warning" }) } catch (_) { return } payload.confirm_legacy = true }
+        if (this.saved.mode === "legacy") { try { await this.$confirm(payload.mode === "disabled" ? "将关闭真寻代理，原有代理配置不再生效。" : `将旧配置改为“${this.modeName(payload.mode)}”，仅作用于受管请求。`, "确认迁移代理策略", { type: "warning" }) } catch (_) { return } payload.confirm_legacy = true }
         const response = await this.putRequest(`${this.$root.prefix}/network-proxy/configuration`, payload, { suppressErrorToast: true })
         if (seq !== this.sequence) return
         if (!response.suc || response.data?.apply_mode === "failed") throw new Error()

@@ -73,6 +73,9 @@ export default {
           }
           this.clearSetupState()
           establishSession(`${payload.token_type} ${payload.access_token}`)
+          if (payload.transport_warning) {
+            this.$message.warning({ message: payload.transport_warning, duration: 8000, showClose: true })
+          }
           await this.$router.replace("/configure")
           return
         }
@@ -83,6 +86,9 @@ export default {
           }
           this.clearSetupState()
           establishSession(`${payload.token_type} ${payload.access_token}`)
+          if (payload.transport_warning) {
+            this.$message.warning({ message: payload.transport_warning, duration: 8000, showClose: true })
+          }
           await this.$router.replace("/home")
           this.$message.success(response.info || "连接成功")
           return

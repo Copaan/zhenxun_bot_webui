@@ -67,7 +67,7 @@
       <span>最近依赖事务：</span>
       <el-tag v-if="environment.candidate_built" type="info" size="small">候选已构建，等待重启验证</el-tag>
       <el-tag v-if="environment.startup_verification?.dependency_verification" :type="environment.startup_verification.dependency_verification.state === 'passed' ? 'success' : 'warning'" size="small">{{ environment.startup_verification.dependency_verification.state === 'passed' ? '依赖核验通过' : environment.startup_verification.dependency_verification.state === 'partial' ? '所选依赖已核验，仍有冲突' : '依赖核验未通过' }}</el-tag>
-      <el-tag v-if="environment.startup_verification?.plugin_verification" :type="environment.startup_verification.plugin_verification === 'passed' ? 'success' : 'danger'" size="small">{{ environment.startup_verification.plugin_verification === 'passed' ? '插件加载通过' : '插件加载失败' }}</el-tag>
+      <el-tag v-if="environment.startup_verification?.plugin_verification" :title="(environment.startup_verification.failed || []).map(item => `${item.module_name || item.store_key}：${item.detail || (item.paths || []).join('、') || item.code}`).join('\n')" :type="environment.startup_verification.plugin_verification === 'passed' ? 'success' : 'danger'" size="small">{{ environment.startup_verification.plugin_verification === 'passed' ? '插件加载通过' : '插件加载失败' }}</el-tag>
     </div>
     <details v-if="environmentIssues.length" class="environment-details">
       <summary>核心依赖详情（{{ environmentIssues.length }} 项）</summary>
@@ -88,7 +88,7 @@
         <el-checkbox v-model="repairSelected" :label="group.id" :disabled="group.status !== 'repairable'">{{ group.roots.join('、') }}</el-checkbox>
         <el-tag size="mini" :type="group.status === 'repairable' ? 'success' : 'danger'">{{ group.status === 'repairable' ? '可定向修复' : '需要处理约束或环境问题' }}</el-tag>
         <div v-for="item in group.changes" :key="item.name" class="dependency-change"><code>{{ item.name }}</code><span>{{ item.from || '缺失' }} → {{ item.to }}</span></div>
-        <details v-if="group.issues.length"><summary>约束来源</summary><p v-for="(item, index) in group.issues" :key="index">{{ item.owner || '本体' }}：{{ item.requirement }}；实际 {{ item.actual || '缺失' }}</p></details>
+        <details v-if="group.issues.length"><summary>约束来源</summary><p v-for="(item, index) in group.issues" :key="index">{{ item.owner || '真寻' }}：{{ item.requirement }}；实际 {{ item.actual || '缺失' }}</p></details>
         <pre v-if="group.diagnostic">{{ group.diagnostic }}</pre>
         <p v-if="group.source_build_required">此项需要源码构建；确认准备同时确认本摘要中的构建与包变更。</p>
       </div>
@@ -311,7 +311,7 @@
                 <p v-else>插件与依赖均为纯 Python 且不改动已加载的包，将直接在运行中生效；加载失败会回滚依赖层并恢复原插件。若构建后发现原生扩展或不可热加载的代码，则改为等待重启。</p>
               </el-alert>
               <el-alert v-else title="需要重启生效" type="info" :closable="false" show-icon>
-                <p>依赖层将先准备好，由你点击重启并通过启动验证后生效。</p>
+                <p>依赖层将先准备好，由你点击重启并通过启动验证后生效。新装插件若因缺少配置等原因无法加载，会保留安装并跳过该插件，结束时提示原因。</p>
               </el-alert>
 
               <div class="confirmations">
@@ -399,11 +399,11 @@ export default {
     environmentTone() { return this.coreSummary.status === "incompatible" ? "danger" : this.coreSummary.status === "healthy" ? "info" : "warning" },
     environmentIcon() { return this.environmentTone === "danger" ? "el-icon-warning-outline" : this.environmentTone === "warning" ? "el-icon-info" : "el-icon-circle-check" },
     environmentTitle() {
-      const labels = { healthy: "本体核心依赖检查通过", incompatible: "本体核心依赖存在问题", unconfirmed: "核心依赖状态未确认" }
+      const labels = { healthy: "真寻核心依赖检查通过", incompatible: "真寻核心依赖存在问题", unconfirmed: "核心依赖状态未确认" }
       return labels[this.coreSummary.status] || labels.unconfirmed
     },
     environmentDescription() {
-      if (this.coreSummary.status === "healthy") return `已核对 ${this.coreSummary.checked_count || 0} 个本体核心依赖；安装插件时会进一步检查整体兼容性。`
+      if (this.coreSummary.status === "healthy") return `已核对 ${this.coreSummary.checked_count || 0} 个真寻核心依赖；安装插件时会进一步检查整体兼容性。`
       if (this.coreSummary.status === "incompatible") return "请展开核心依赖详情核对版本和来源；此检查不会自动修改环境。"
       return "尚未确认核心依赖的版本或来源，请查看详情或重新加载。此状态不代表检查通过。"
     },
@@ -502,7 +502,7 @@ export default {
       if (labels[item.kind]) return labels[item.kind]
       if (item.kind === "requires_python") return `${item.owner} 要求 ${item.requirement}，当前 Python 不满足此要求。`
       const layer = item.layer === "active_generation" ? "活动依赖层" : item.layer === "base" ? "基础环境" : "来源未确认"
-      return `${item.owner || "本体"} 要求 ${item.requirement || item.expected}；实际 ${item.actual || "缺失"}（${layer}）`
+      return `${item.owner || "真寻"} 要求 ${item.requirement || item.expected}；实际 ${item.actual || "缺失"}（${layer}）`
     },
     dependencySource(name) {
       const source = this.analysis?.plan?.change_sources?.[name]
@@ -525,6 +525,7 @@ export default {
     },
     stateTag(plugin) {
       if (plugin.apply_mode === "restart_pending") return { label: "等待重启", type: "warning" }
+      if (plugin.load_failed) return { label: "未加载", type: "danger" }
       const states = {
         not_installed: { label: "未安装", type: "info" }, managed: { label: "已安装", type: "success" },
         update_available: { label: "可更新", type: "warning" }, external: { label: "外部安装", type: "info" },
@@ -536,7 +537,7 @@ export default {
     warningTag(warning) { return { registry_plugin_invalid: "未通过官方测试", registry_plugin_untested: "官方未测试", adapter_incompatible: "适配器不匹配" }[warning?.code] || "提示" },
     reasonDetail(reason) { const label = reasonLabels[reason?.code]; return label && reason?.message && reason.message !== label ? reason.message : "" },
     driftDescription(item) {
-      if (item.requirement) return `${item.owner || '本体'} 要求 ${item.requirement} · 实际 ${item.actual || '未安装'} · ${item.layer === 'active_generation' ? '活动依赖层' : '基础环境'}`
+      if (item.requirement) return `${item.owner || '真寻'} 要求 ${item.requirement} · 实际 ${item.actual || '未安装'} · ${item.layer === 'active_generation' ? '活动依赖层' : '基础环境'}`
       if (Object.prototype.hasOwnProperty.call(item, 'recorded')) return `记录 ${item.recorded || '无'} · 实际 ${item.actual || '未安装'} · 代际 ${item.generation ?? '无'}`
       if (item.kind === "constraint_conflict") return `插件要求 ${item.expected || item.requirement || "-"} · 当前 ${item.actual || "未安装"}`
       const relation = { missing: "缺失", older: "版本偏低", newer: "版本偏高", version_mismatch: "版本不一致" }[item.kind] || "不一致"

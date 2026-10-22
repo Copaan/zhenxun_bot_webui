@@ -902,8 +902,10 @@ export default {
             this.schedulePluginOperation()
             return
           }
+          const result = pluginOperationResult(entry, this.restartAvailable, saved.store)
+          if (saved.dismissed && result.applyMode === 'restart_pending') return
           this.$store.commit("START_PLUGIN_OPERATION", { ...context, title: "插件操作结果", message: "正在恢复上次操作结果。" })
-          this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult(entry, this.restartAvailable, saved.store))
+          this.$store.commit("FINISH_PLUGIN_OPERATION", result)
           return
         }
         const pendingResponse = await this.getRequest(`${this.$root.prefix}/store/transactions/pending`, {}, options)
@@ -912,6 +914,7 @@ export default {
         const transaction = store && pendingResponse.data[store]
         if (transaction) {
           const mode = { pending_restart: 'restart_pending', migration_blocked: 'restart_pending', verification_pending: 'verifying', building: 'preparing', committed: 'applied', cleanup_pending: 'applied', recovery_required: 'recovery_required', failed: transaction.rollback_confirmed ? 'rolled_back' : 'failed' }[transaction.state]
+          if (saved.dismissed && mode === 'restart_pending') return
           this.$store.commit("START_PLUGIN_OPERATION", { ...context, ...this.pluginTransactionNotice(transaction) })
           if (['verifying', 'preparing'].includes(mode)) this.schedulePluginOperation()
           else this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({ status: transaction.state, result: { apply_mode: mode, transaction_state: transaction.state, cleanup_error: transaction.cleanup_error } }, this.restartAvailable, store))
@@ -920,6 +923,7 @@ export default {
       } catch (error) {
         if (!current()) return
       }
+      if (saved.dismissed) return
       this.$store.commit("START_PLUGIN_OPERATION", context)
       this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({}, this.restartAvailable, saved.store))
       this.schedulePluginOperation()

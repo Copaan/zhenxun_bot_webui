@@ -190,9 +190,15 @@
               >
                 <el-option
                   v-for="n in data.task"
-                  :label="n.zh_name"
+                  :label="
+                    n.is_super_block
+                      ? `${n.zh_name}(超级用户禁用，仅超级用户可解除)`
+                      : n.zh_name
+                  "
                   :value="n.name"
                   :key="n.name"
+                  :disabled="n.is_super_block"
+                  :title="n.is_super_block ? '仅超级用户可解除' : ''"
                 >
                 </el-option>
               </el-select>
@@ -300,14 +306,18 @@ export default {
       })
     },
     commit() {
+      const origin = this.data.origin
+      const minus = (a, b) => a.filter((e) => !b.includes(e))
       const data = {
         group_id: this.data.group_id,
         bot_id: this.data.bot_id || this.botId,
         expected_revision: this.data.policy_revision,
-        status: this.data.status,
-        level: this.data.level,
-        task: this.data.task_status,
-        close_plugins: this.data.plugin_status,
+        status: this.data.status === origin.status ? null : this.data.status,
+        level: this.data.level === origin.level ? null : this.data.level,
+        enable_tasks: minus(this.data.task_status, origin.task_status),
+        disable_tasks: minus(origin.task_status, this.data.task_status),
+        enable_plugins: minus(origin.plugin_status, this.data.plugin_status),
+        disable_plugins: minus(this.data.plugin_status, origin.plugin_status),
       }
       const loading = this.getLoading(".detail-info")
 
@@ -375,6 +385,12 @@ export default {
     processGroupData(data) {
       data.task_status = data.task.filter((e) => e.status).map((e) => e.name)
       data.plugin_status = data.close_plugins.map((e) => e.module)
+      data.origin = {
+        status: data.status,
+        level: data.level,
+        task_status: [...data.task_status],
+        plugin_status: [...data.plugin_status],
+      }
       const sbList = data.close_plugins
         .filter((e) => e.is_super_block)
         .map((e) => e.module)

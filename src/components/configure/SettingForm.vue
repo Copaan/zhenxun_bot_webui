@@ -7,7 +7,7 @@
           <div>
             <p class="brand-kicker">ZHENXUN BOT</p>
             <h1>首次配置</h1>
-            <p>完成本体运行所需的基础设置</p>
+            <p>完成真寻运行所需的基础设置</p>
           </div>
         </div>
         <div class="setup-header-actions">
