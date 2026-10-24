@@ -308,16 +308,16 @@ export default {
           this.$message.error("端口必须是 1 到 65535 之间的整数")
           return
         }
-        if (!this.apiUrl.startsWith("http")) {
-          this.apiUrl = "http://" + this.apiUrl
-        }
-        this.apiUrl = this.apiUrl.replace(/[\\/]+$/, "")
+        this.apiUrl = this.withScheme(this.apiUrl).replace(/[\\/]+$/, "")
         clearAuthenticationState()
         setBaseApiUrl(this.apiUrl)
         setPort(String(port))
         this.$message.success("地址已保存，正在跳转")
         window.location.replace(`${this.apiUrl}:${port}/#/`)
       }, 600)
+    },
+    withScheme(url) {
+      return /^https?:\/\//i.test(url) ? url : `${window.location.protocol}//${url}`
     },
     inpOnfocus() {
       this.rightShow = true
@@ -345,11 +345,7 @@ export default {
 
       this.testing = "loading"
       try {
-        let testUrl = this.apiUrl
-        if (!testUrl.startsWith("http")) {
-          testUrl = "http://" + testUrl
-        }
-        testUrl = `${testUrl}:${this.port}${this.$root.prefix}/system/ping`
+        const testUrl = `${this.withScheme(this.apiUrl)}:${this.port}${this.$root.prefix}/system/ping`
         const resp = await this.getRequest(testUrl)
         if (resp.suc) {
           this.$message.success("连接成功！")

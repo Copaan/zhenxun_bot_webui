@@ -11,10 +11,6 @@ export function normalizeGroups(groups) {
   return (groups || []).map(group => ({ ...group, fields: (group.fields || []).map(field => ({ ...field, originalValue: JSON.stringify(field.value) })) }))
 }
 
-export function editableFields(group) {
-  return (group?.fields || []).filter(field => field.authority !== "database")
-}
-
 /**
  * 计算配置组中被修改的字段
  * @param {object[]} groups 配置组
@@ -23,7 +19,7 @@ export function editableFields(group) {
 export function collectChanges(groups) {
   const changes = {}
   for (const group of groups || []) {
-    const changed = editableFields(group).filter(field => JSON.stringify(field.value) !== field.originalValue)
+    const changed = (group.fields || []).filter(field => JSON.stringify(field.value) !== field.originalValue)
     if (changed.length) changes[group.module] = Object.fromEntries(changed.map(field => [field.key, field.value]))
   }
   return changes
@@ -36,7 +32,7 @@ export function collectChanges(groups) {
  * @returns {object[]} 校验问题，path 为“配置组.配置键”
  */
 export function changeIssues(groups, changes) {
-  return (groups || []).filter(group => changes[group.module]).flatMap(group => editableFields(group)
+  return (groups || []).filter(group => changes[group.module]).flatMap(group => (group.fields || [])
     .filter(field => Object.prototype.hasOwnProperty.call(changes[group.module], field.key))
     .flatMap(field => validateField(field.value, field.schema || {}, field.schema?.["x-root-schema"] || field.schema || {}, field.key)
       .map(issue => ({ ...issue, path: `${group.module}.${issue.path}` }))))

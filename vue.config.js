@@ -24,8 +24,10 @@ module.exports = defineConfig({
     port: Number(process.env.WEBUI_DEV_PORT || 8081),
     proxy: {
       "/zhenxun": {
+        // 后端开启 HTTPS 时设为 https://127.0.0.1:8080，开发代理接受自签证书
         target: process.env.WEBUI_DEV_BACKEND || "http://127.0.0.1:8080",
         changeOrigin: false,
+        secure: false,
         ws: true,
       },
     },

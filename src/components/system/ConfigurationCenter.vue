@@ -14,26 +14,26 @@
     </div>
     <el-tabs v-model="section">
       <el-tab-pane label="环境配置" name="env">
-        <p class="environment-source">配置来源 <code>{{ envSourceFile }}</code> · 真寻与插件环境项均保存在此文件，按归属分类展示</p>
+        <p class="environment-source">配置来源 <code>{{ envSourceFile }}</code> · 机器人连接在「机器人接入」、数据库与缓存在「数据与缓存」页面设置，插件变量在「自定义变量」中维护</p>
         <SettingsLayout v-model="envCategory" :query="envSearch" :groups="envCategories" @search="envSearch = $event">
           <section v-for="group in envCategories.filter(item => item.key !== 'custom')" v-show="envSearch.trim() ? group.count > 0 : envCategory === group.key" :key="group.key">
-            <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-button v-if="group.key === 'storage'" type="text" icon="el-icon-position" @click="$router.push('/database', () => {}, (error) => $message.error(error.message))">前往数据与缓存</el-button><el-tag size="mini" type="info">{{ group.count }} 项</el-tag></header>
+            <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-tag size="mini" type="info">{{ group.count }} 项</el-tag></header>
             <div v-if="!group.fields.length" class="category-empty">此分类暂无配置项</div>
-            <template v-for="(field, fieldIndex) in group.fields"><h4 v-if="group.key === 'plugins' && envMatches(field) && !group.fields.slice(0, fieldIndex).some(item => envMatches(item) && envFieldSource(item) === envFieldSource(field))" :key="field.key + '-source'" class="environment-owner">{{ envFieldSource(field) }}</h4><SchemaField v-show="envMatches(field)" :key="field.key" presentation="settings" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema" :label="envLabel(field)" :path="field.key" :ui="envFieldUi(field)" :query="envSearch" :readonly-reason="field.readonly_reason || envDisabledReason(field)" :issues="envIssues" @input="setEnvField(field.key, $event)">
+            <template v-for="field in group.fields"><SchemaField v-show="envMatches(field)" :key="field.key" presentation="settings" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema" :label="envLabel(field)" :path="field.key" :ui="envFieldUi(field)" :query="envSearch" :readonly-reason="field.readonly_reason || envDisabledReason(field)" :issues="envIssues" @input="setEnvField(field.key, $event)">
               <template #meta><div v-if="envFieldChanged(field.key)" class="field-effect changed-indicator">未保存修改</div></template>
               <template #details><div>生效方式：{{ effectMeta(field.apply_effect).label }}</div><div v-if="field.schema_sources && field.schema_sources.length">来源：{{ field.schema_sources.join('、') }}</div><div v-if="field.external_environment_present">启动环境也声明了此变量，重启时请核对外部环境设置。</div></template>
-              <template #status><div class="setting-runtime"><span>当前运行</span><code>{{ field.runtime_available === false ? "未取得" : formatRuntimeValue(field.effective_value) }}</code></div><p v-if="field.overridden" class="setting-status-note">当前运行值与启动环境变量一致，和文件设置不同。重启时请同时核对启动环境。</p><p v-else-if="!envFieldChanged(field.key) && envStateText(field)" class="setting-status-note" :class="{ neutral: field.apply_state === 'unknown' }">{{ envStateText(field) }}</p></template>
+              <template #status><div class="setting-runtime"><span>当前运行</span><code>{{ runtimeText(field) }}</code></div><p v-if="field.overridden" class="setting-status-note">当前运行值与启动环境变量一致，和文件设置不同。重启时请同时核对启动环境。</p><p v-else-if="!envFieldChanged(field.key) && envStateText(field)" class="setting-status-note" :class="{ neutral: field.apply_state === 'unknown' }">{{ envStateText(field) }}</p></template>
             </SchemaField></template>
           </section>
           <section v-show="envSearch.trim() ? customSearchCount > 0 : envCategory === 'custom'" class="custom-env-section">
             <header class="settings-group-heading">
-              <div><h3>自定义环境变量</h3><p>用于第三方插件或外部服务。未知变量保存后需要重启生效。</p></div>
+              <div><h3>自定义环境变量</h3><p>第三方插件或外部服务使用的变量。插件声明过的变量保存时会按声明类型校验，保存后需要重启生效。</p></div>
               <el-button size="small" icon="el-icon-plus" @click="addCustomEnv">添加变量</el-button>
             </header>
             <div v-if="customEnv.length" class="custom-env-list">
               <div v-for="(item, index) in customEnv" :key="item.clientId" v-show="customMatches(item)" class="custom-env-row" :class="{ deleted: item.deleted }">
                 <el-input v-model="item.key" placeholder="变量名称" :disabled="!item.isNew || item.deleted" @input="markEnvDirty" />
-                <el-input v-model="item.value" placeholder="变量值" :disabled="item.deleted" @input="markEnvDirty" />
+                <el-input v-model="item.value" placeholder="变量值" :type="isSecretPath(item.key) ? 'password' : 'text'" :show-password="isSecretPath(item.key)" :disabled="item.deleted" @input="markEnvDirty" />
                 <el-tag size="mini" type="warning">需要重启</el-tag>
                 <el-button v-if="item.deleted" size="small" @click="restoreCustomEnv(item)">撤销</el-button>
                 <el-button v-else type="danger" plain size="small" icon="el-icon-delete" @click="removeCustomEnv(item, index)">删除</el-button>
@@ -46,10 +46,11 @@
         </SettingsLayout>
       </el-tab-pane>
 
-      <el-tab-pane label="插件配置" name="simple">
+      <el-tab-pane label="其他配置" name="simple">
+        <p class="environment-source">插件的配置请在「插件列表」中打开插件详情修改，这里只列出不属于插件列表中插件的配置组。<el-button type="text" @click="$router.push('/plugin', () => {}, (error) => $message.error(error.message))">前往插件列表</el-button></p>
         <div class="plugin-config-workbench">
           <aside class="config-groups">
-            <el-input v-model="groupSearch" clearable prefix-icon="el-icon-search" placeholder="搜索插件、配置项或说明" size="small" />
+            <el-input v-model="groupSearch" clearable prefix-icon="el-icon-search" placeholder="搜索配置组或配置项" size="small" />
             <template v-for="part in groupSections">
               <h4 :key="`title-${part.key}`" class="group-category">{{ part.title }} · {{ part.groups.length }}</h4>
               <button v-for="group in part.groups" :key="group.module" :class="{ active: selectedGroup === group.module }" @click="selectedGroup = group.module; selectedOrphan = ''">
@@ -117,7 +118,7 @@ import SettingsLayout from "@/components/config/SettingsLayout.vue"
 import { environmentCategories } from "@/components/config/settings-ui"
 import ConfigGroupEditor from "@/components/config/ConfigGroupEditor.vue"
 import SchemaField from "@/components/config/SchemaField.vue"
-import { fieldMatches, validateField } from "@/components/config/schema-utils"
+import { fieldMatches, isSecretPath, validateField } from "@/components/config/schema-utils"
 import { changeIssues, collectChanges, groupMatches, markSaved, normalizeGroups, saveSimpleConfig } from "@/components/config/simple-config"
 import NetworkStatus from "@/components/system/NetworkStatus.vue"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
@@ -133,18 +134,13 @@ export default {
       loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], groupSearch: "", selectedGroup: "", launcherManaged: false,
       rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalid: {}, pluginIssues: [], orphanPanel: [], selectedOrphan: "",
       envFieldDefinitions: [
-        { key: 'CACHE_MODE', databasePage: true, label: '缓存模式', options: [{value:'NONE',label:'关闭缓存'},{value:'MEMORY',label:'内存缓存'},{value:'REDIS',label:'Redis'}], help: '真寻缓存的存储方式。' },
-        { key: 'REDIS_HOST', databasePage: true, label: 'Redis 地址', help: 'Redis 服务的主机名或 IP 地址。' },
-        { key: 'REDIS_PORT', databasePage: true, label: 'Redis 端口', help: 'Redis 服务监听的端口。' },
-        { key: 'REDIS_PASSWORD', databasePage: true, label: 'Redis 密码', help: '用于连接 Redis。' },
-        { key: 'DB_URL', databasePage: true, label: '数据库连接', help: '数据库连接地址，修改后需要重启。' },
         { key: "HOST", label: "监听地址", placeholder: "0.0.0.0", help: "0.0.0.0 允许局域网与公网访问，127.0.0.1 仅本机访问。" },
         { key: "PORT", label: "监听端口", type: "number", placeholder: "8080", help: "WebUI 与适配器共享的本地服务端口；启用 HTTPS 后该端口提供 HTTPS。" },
-        { key: "WEBUI_HTTPS_ENABLED", label: "启用 HTTPS", type: "switch", help: "使用用户提供的可信 PEM 证书和私钥，需要重启生效。" },
+        { key: "WEBUI_HTTPS_ENABLED", label: "启用 HTTPS", type: "switch", help: "使用用户提供的可信 PEM 证书和私钥，需要重启生效。开启后 OneBot 协议端必须改用 wss:// 连接并信任证书，ws:// 与 HTTP 兼容入口都无法接入。" },
         { key: "WEBUI_TLS_CERTFILE", label: "TLS 证书路径", placeholder: "C:\\certs\\fullchain.pem", dependsOn: "WEBUI_HTTPS_ENABLED", help: "证书 PEM 的绝对路径，保存时会检查有效期及密钥匹配。" },
         { key: "WEBUI_TLS_KEYFILE", label: "TLS 私钥路径", placeholder: "C:\\certs\\privkey.pem", dependsOn: "WEBUI_HTTPS_ENABLED", help: "未加密私钥 PEM 的绝对路径。" },
-        { key: "WEBUI_HTTP_MODE", label: "HTTP兼容入口", type: "http-mode", dependsOn: "WEBUI_HTTPS_ENABLED", launcherOnly: true, options: [{ value: "serve", label: "完整访问" }, { value: "redirect", label: "跳转HTTPS" }, { value: "disabled", label: "关闭" }], help: "完整访问由launcher边车代理API、静态资源和WebSocket；边车异常不会中断HTTPS和Bot。" },
-        { key: "WEBUI_HTTP_REDIRECT_PORT", label: "HTTP兼容端口", type: "number", dependsOn: "WEBUI_HTTPS_ENABLED", httpModeRequired: true, launcherOnly: true, placeholder: "80", help: "默认80；端口冲突时HTTPS继续运行，HTTP入口进入降级并自动重试。" },
+        { key: "WEBUI_HTTP_MODE", label: "HTTP兼容入口", type: "http-mode", dependsOn: "WEBUI_HTTPS_ENABLED", options: [{ value: "serve", label: "完整访问" }, { value: "redirect", label: "跳转HTTPS" }, { value: "disabled", label: "关闭" }], help: "完整访问以明文提供 WebUI 页面、接口和实时连接，不开放适配器等其他服务；跳转HTTPS 把请求 308 跳转到 HTTPS 端口。需要重启生效。" },
+        { key: "WEBUI_HTTP_REDIRECT_PORT", label: "HTTP兼容端口", type: "number", dependsOn: "WEBUI_HTTPS_ENABLED", httpModeRequired: true, placeholder: "80", help: "默认80，不能与监听端口相同；端口被占用时HTTPS继续运行，HTTP入口进入降级并自动重试。" },
         { key: "LOG_LEVEL", label: "日志等级", placeholder: "INFO", help: "常用值为 DEBUG、INFO、WARNING。" },
         { key: "API_TIMEOUT", label: "接口超时", unit: "秒", help: "适配器 API 调用的等待时间上限。" },
         { key: "NICKNAME", label: "机器人昵称", placeholder: "[\"真寻\"]", help: "使用 dotenv 支持的列表格式。" },
@@ -161,7 +157,7 @@ export default {
     }
   },
   computed: {
-    envCategories() { return environmentCategories(this.envDescriptors, this.envMatches, this.envFieldSource, this.customSearchCount) },
+    envCategories() { return environmentCategories(this.envDescriptors, this.envMatches, this.customSearchCount) },
     customSearchCount() { return this.customEnv.filter(this.customMatches).length },
     envChangeCount() { return Object.keys(this.changedEnvFields()).length + this.unsetEnvFields().length + this.customEnv.filter(item => item.isNew || item.deleted || this.originalCustomEnv.find(old => old.key === item.key)?.value !== item.value).length },
     customOperations() {
@@ -199,27 +195,35 @@ export default {
   mounted() { this.loadSummary() },
   beforeDestroy() { clearDirtyState("plugin-configuration"); clearDirtyState("environment-configuration"); clearDirtyState("raw-configuration") },
   methods: {
-    envFieldUi(field) { return { ...this.envMeta(field), description: this.envHelp(field) || (field.category === 'plugins' ? '插件未提供字段说明；请查看下方来源。' : '') } },
-    envFieldSource(field) { return (field.source_labels || field.schema_sources || []).map(item => typeof item === 'string' ? item : item.source || item.model || item.module || '注册模型').join('、') || '真寻配置' },
+    isSecretPath,
+    envFieldUi(field) { return { ...this.envMeta(field), description: this.envHelp(field) } },
     envFieldChanged(key) { return JSON.stringify(this.envFields[key]) !== JSON.stringify(this.originalEnvFields[key]) },
     envStateText(field) { return { restart_pending: '已保存，重启 Bot 后生效', applying: '正在应用', unknown: '运行状态未确认' }[field.apply_state] || '' },
     customMatches(item) { return !this.envSearch.trim() || `${item.key} 自定义变量`.toLowerCase().includes(this.envSearch.trim().toLowerCase()) },
     resetEnvironment() { this.envFields = JSON.parse(JSON.stringify(this.originalEnvFields)); this.customEnv = this.originalCustomEnv.map(item => ({ ...item })); this.envIssues = []; this.markEnvDirty() },
-    focusEnvironmentIssue() { const issue = this.envIssues[0]; if (!issue) return; const group = this.envCategories.find(item => item.fields?.some(field => issue.path === field.key || String(issue.path).startsWith(field.key + '.'))); if (group) this.envCategory = group.key; this.envSearch = ''; this.focusIssue() },
+    focusEnvironmentIssue() { const issue = this.envIssues[0]; if (!issue) return; const group = this.envCategories.find(item => item.fields?.some(field => issue.path === field.key || String(issue.path).startsWith(field.key + '.'))); this.envCategory = group ? group.key : 'custom'; this.envSearch = ''; this.focusIssue() },
     envMeta(field) { return this.envFieldDefinitions.find((item) => item.key === field.key) || {} },
     envLabel(field) { return this.envMeta(field).label || field.key },
     envDisabledReason(field) {
       const meta = this.envMeta(field)
       if (meta.dependsOn && !this.envFields[meta.dependsOn]) return "需先启用 HTTPS"
       if (meta.httpModeRequired && this.envFields.WEBUI_HTTP_MODE === "disabled") return "HTTP兼容入口已关闭"
-      if (meta.launcherOnly && !this.launcherManaged) return "仅 launcher 托管模式可用"
-      if (meta.databasePage) return "请在「数据与缓存」页面修改并测试连接"
       return ""
     },
     envHelp(field) { return this.envMeta(field).help || field.schema?.description || "" },
     envMatches(field) {
       const meta = this.envMeta(field)
       return fieldMatches(this.envSearch, `${field.key} ${meta.label || ""} ${meta.help || ""}`, field.schema, this.envFields[field.key], field.schema["x-root-schema"] || field.schema) || this.envIssues.some(issue => String(issue.path || "").startsWith(field.key))
+    },
+    /**
+     * 生成字段“当前运行”一栏的文字，密钥类字段只显示是否已设置
+     * @param {object} field 环境配置字段
+     * @returns {string} 展示文字
+     */
+    runtimeText(field) {
+      if (field.runtime_available === false) return "未取得"
+      if (isSecretPath(field.key)) return field.effective_value === null || field.effective_value === "" ? "未设置" : "已设置（已隐藏）"
+      return this.formatRuntimeValue(field.effective_value)
     },
     formatRuntimeValue(value) {
       if (value === undefined) return "未取得"
@@ -249,7 +253,7 @@ export default {
     },
     async reloadSummary() {
       if (this.saving || this.loading) return
-      if ((this.envChangeCount || Object.keys(this.simpleChanges).length) && !await this.confirmDiscard("环境及插件配置草稿将重新读取；配置原文草稿保持不变。")) return
+      if ((this.envChangeCount || Object.keys(this.simpleChanges).length) && !await this.confirmDiscard("环境配置与其他配置的草稿将重新读取；配置原文草稿保持不变。")) return
       await this.loadSummary()
     },
     async loadSummary(scope = "all") {
@@ -335,13 +339,13 @@ export default {
     async saveSimple() {
       if (this.saving) return
       const changes = this.simpleChanges
-      if (!Object.keys(changes).length) return this.$message.info("没有需要保存的插件配置。")
+      if (!Object.keys(changes).length) return this.$message.info("没有需要保存的配置。")
       this.pluginIssues = changeIssues(this.groups, changes)
       if (this.pluginIssues.length) {
         const group = this.activeGroups.find(item => String(this.pluginIssues[0].path).startsWith(`${item.module}.`))
         if (group) this.selectedGroup = group.module
         this.focusIssue()
-        return this.$message.warning("请修正插件配置中的错误")
+        return this.$message.warning("请修正配置中的错误")
       }
       this.saving = "simple"
       try {
@@ -432,7 +436,7 @@ export default {
 .plugin-config-workbench { height:auto; min-height:360px; overflow:visible; }
 .config-groups { max-height:70vh; }
 .current-config-group { padding-bottom:16px; }
-.group-category { margin:10px 4px 2px; color:var(--text-color-secondary); font-size:12px; font-weight:500; }
+.group-category, .orphan-groups, .group-empty { grid-column:1 / -1; }.group-category { margin:10px 4px 2px; color:var(--text-color-secondary); font-size:12px; font-weight:500; }
 .unsaved-dot { display:inline-block; width:6px; height:6px; margin-left:6px; border-radius:50%; background:var(--primary-color); vertical-align:middle; }
 .current-config-group pre { max-width:100%; white-space:pre-wrap; overflow-wrap:anywhere; }
 
@@ -463,7 +467,7 @@ export default {
 </style>
 
 <style scoped>
-.setting-status-note.neutral { color:var(--text-color-secondary); }.environment-owner { font-size:13px; margin:20px 0 0; overflow-wrap:anywhere; color:var(--text-color-secondary); }
+.setting-status-note.neutral { color:var(--text-color-secondary); }
 @media (max-width: 767px) {
   .configuration-center { padding:0; border-radius:0; background:transparent; }
   .configuration-center ::v-deep .settings-workspace { padding:12px; }

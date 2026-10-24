@@ -174,64 +174,18 @@
             </div>
           </div>
 
-          <!-- 真寻特有设置 -->
-          <template v-if="this.$store.state.botType == 'zhenxun'">
-            <div class="mb-4">
-              <div class="flex items-center justify-between mb-2">
-                <span :style="{ color: 'var(--el-text-color-regular)' }"
-                  >被动状态:</span
-                >
-              </div>
-              <el-select
-                v-model="data.task_status"
-                class="w-full"
-                multiple
-                popper-class="theme-select"
-              >
-                <el-option
-                  v-for="n in data.task"
-                  :label="
-                    n.is_super_block
-                      ? `${n.zh_name}(超级用户禁用，仅超级用户可解除)`
-                      : n.zh_name
-                  "
-                  :value="n.name"
-                  :key="n.name"
-                  :disabled="n.is_super_block"
-                  :title="n.is_super_block ? '仅超级用户可解除' : ''"
-                >
-                </el-option>
-              </el-select>
-            </div>
-          </template>
-
-          <!-- 插件设置 -->
-          <div class="mb-6">
-            <div class="flex items-center justify-between mb-2">
-              <span :style="{ color: 'var(--el-text-color-regular)' }"
-                >禁用插件:</span
-              >
-            </div>
-            <el-select
-              v-model="data.plugin_status"
-              multiple
-              class="w-full"
-              popper-class="theme-select"
-              @remove-tag="restoreSuperBlock"
+          <div class="flex items-center justify-between mb-6">
+            <span :style="{ color: 'var(--el-text-color-regular)' }"
+              >插件与被动:</span
             >
-              <el-option
-                v-for="n in tmpAllPluginList"
-                :label="n.plugin_name"
-                :value="n.module"
-                :key="n.module"
-                :disabled="n.superBlock"
-                :title="n.superBlock ? '仅超级用户可解除' : ''"
-              >
-              </el-option>
-            </el-select>
+            <el-button
+              type="text"
+              title="在插件策略中设置本群的插件与被动技能"
+              @click="openPolicy"
+              >前往插件策略</el-button
+            >
           </div>
 
-          <!-- 应用按钮 -->
           <div class="flex justify-end">
             <CuteButton type="primary" @click="commit">应用设置</CuteButton>
           </div>
@@ -276,9 +230,6 @@ export default {
       data: {},
       botId: null,
       detailType: null,
-      allPluginList: [],
-      tmpAllPluginList: [],
-      superBlockList: [],
       likePluginChart: null,
       destroyed: false,
     }
@@ -294,30 +245,18 @@ export default {
     handleResize() {
       this.sizeMana.avaSize = 100
     },
-    getAllPluginList() {
-      return this.getRequest(`${this.$root.prefix}/plugin/get_plugin_list`, {
-        plugin_type: ["NORMAL", "ADMIN"],
-      }).then((resp) => {
-        if (resp.suc) {
-          this.allPluginList = resp.data
-        } else {
-          this.$message.error(resp.info)
-        }
-      })
+    /**
+     * 打开插件策略页面并定位到当前群
+     */
+    openPolicy() {
+      this.$router.push({ path: "/plugin-policy", query: { bot_id: this.data.bot_id || this.botId, group_id: this.data.group_id } })
     },
     commit() {
       const origin = this.data.origin
-      const minus = (a, b) => a.filter((e) => !b.includes(e))
       const data = {
         group_id: this.data.group_id,
-        bot_id: this.data.bot_id || this.botId,
-        expected_revision: this.data.policy_revision,
         status: this.data.status === origin.status ? null : this.data.status,
         level: this.data.level === origin.level ? null : this.data.level,
-        enable_tasks: minus(this.data.task_status, origin.task_status),
-        disable_tasks: minus(origin.task_status, this.data.task_status),
-        enable_plugins: minus(origin.plugin_status, this.data.plugin_status),
-        disable_plugins: minus(this.data.plugin_status, origin.plugin_status),
       }
       const loading = this.getLoading(".detail-info")
 
@@ -347,12 +286,8 @@ export default {
         }
       }).finally(() => loading.close())
     },
-    async getGroup(group_id) {
+    getGroup(group_id) {
       if (!this.botId) return
-      if (!this.allPluginList.length) {
-        await this.getAllPluginList()
-      }
-
       const loading = this.getLoading(".detail-info")
 
       this.getRequest(`${this.$root.prefix}/manage/get_group_detail`, {
@@ -366,15 +301,6 @@ export default {
         }
       }).finally(() => loading.close())
     },
-    /**
-     * 阻止移除超级用户禁用的插件标签
-     * @param {string} module 被移除的插件模块名
-     */
-    restoreSuperBlock(module) {
-      if (!this.superBlockList.includes(module)) return
-      this.data.plugin_status.push(module)
-      this.$message.warning("该插件由超级用户禁用，仅超级用户可解除")
-    },
     processFriendData(data) {
       data.name = data.remark || data.nickname
       this.data = data
@@ -383,26 +309,7 @@ export default {
       this.$emit("startChat", this.data)
     },
     processGroupData(data) {
-      data.task_status = data.task.filter((e) => e.status).map((e) => e.name)
-      data.plugin_status = data.close_plugins.map((e) => e.module)
-      data.origin = {
-        status: data.status,
-        level: data.level,
-        task_status: [...data.task_status],
-        plugin_status: [...data.plugin_status],
-      }
-      const sbList = data.close_plugins
-        .filter((e) => e.is_super_block)
-        .map((e) => e.module)
-      this.superBlockList = sbList
-      this.tmpAllPluginList = this.allPluginList.map((e) => ({
-        ...e,
-        superBlock: sbList.includes(e.module),
-        plugin_name: sbList.includes(e.module)
-          ? `${e.plugin_name}(超级用户禁用，仅超级用户可解除)`
-          : e.plugin_name,
-      }))
-
+      data.origin = { status: data.status, level: data.level }
       this.data = data
       this.detailType = "group"
       this.initChart(data.like_plugin)

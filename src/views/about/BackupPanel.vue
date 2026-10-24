@@ -91,7 +91,6 @@
 
 <script>
 import { getBaseUrl } from "@/utils/api"
-import { getAuthToken } from "@/utils/auth-token"
 import { reasonLabels, reasonText } from "@/utils/plugin-operation"
 import { startRestartRecovery } from "@/utils/restart-recovery"
 import { formatBytes } from "@/utils/utils"
@@ -326,17 +325,13 @@ export default {
     async download(item) {
       this.downloading = item.name
       try {
-        const file = window.showSaveFilePicker ? await window.showSaveFilePicker({ suggestedName: item.name }) : null
-        const url = `${getBaseUrl()}${this.api(`/download/${encodeURIComponent(item.name)}`)}`
-        const response = await fetch(url, { headers: { Authorization: getAuthToken() }, cache: "no-store" })
-        if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || "下载失败")
-        if (file) { await response.body.pipeTo(await file.createWritable()); return }
-        if (item.size > 512 * 1024 * 1024) { await response.body.cancel(); throw new Error("大文件下载需要支持流式保存的浏览器，请使用 Edge 或 Chrome") }
+        const name = encodeURIComponent(item.name)
+        const response = await this.postRequest(this.api(`/download/${name}`))
+        if (!response?.suc) { this.$message.error(response?.info || "下载失败"); return }
         const link = document.createElement("a")
-        link.href = URL.createObjectURL(await response.blob()); link.download = item.name; link.click()
-        setTimeout(() => URL.revokeObjectURL(link.href), 30000)
-      } catch (error) {
-        if (error.name !== "AbortError") this.$message.error(error.message || "下载失败")
+        link.href = `${getBaseUrl()}${this.api(`/file/${encodeURIComponent(response.data)}/${name}`)}`
+        link.download = item.name
+        link.click()
       } finally { this.downloading = "" }
     },
     async remove(item) {

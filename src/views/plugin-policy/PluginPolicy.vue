@@ -43,6 +43,7 @@
             <span>
               <strong>{{ item.nickname || item.runtime_bot_id }}</strong>
               <small>{{ item.bot_id }}</small>
+              <small v-if="item.bot_enabled === false" class="bot-off">全局开关已关闭</small>
             </span>
             <em>{{ item.policy ? item.policy.name : "独立" }}</em>
           </button>
@@ -84,6 +85,7 @@
             <el-tag v-else size="small" type="info">独立设置</el-tag>
           </div>
         </div>
+        <el-alert v-if="botDisabled" class="bot-off-alert" type="warning" show-icon :closable="false" title="此账号的全局开关已关闭，功能暂停响应，超级用户的指令不受影响。在首页打开全局开关后恢复。" />
 
 
         <el-form
@@ -266,6 +268,7 @@ export default {
     remainingCount() { return Math.max(this.filteredFeatures.length - this.visibleCount, 0) },
     allFilteredSelected() { return this.filteredFeatures.length > 0 && this.filteredFeatures.every((x) => this.selectedModules.includes(x.module)) },
     someFilteredSelected() { const count = this.filteredFeatures.filter((x) => this.selectedModules.includes(x.module)).length; return count > 0 && count < this.filteredFeatures.length },
+    botDisabled() { return !this.editingPolicy && (this.groupAccount || this.privateAccount || this.account)?.bot_enabled === false },
     copyCandidates() { return this.accounts.filter((x) => x.bot_id !== this.selectedBotId) },
     bindCandidates() { return this.accounts.filter((x) => !this.bindingPolicy?.bound_bot_ids.includes(x.bot_id)) },
   },
@@ -328,7 +331,7 @@ export default {
     groupUrl(group) { return `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/groups/${encodeURIComponent(group.group_id)}?platform_scope=${encodeURIComponent(group.platform_scope)}&channel_id=${encodeURIComponent(group.channel_id || "")}` },
     setDraft(record) { this.draft = { plugins: sorted(record.block_plugins), tasks: sorted(record.block_tasks) }; this.selectedModules = [] },
     targetRevisions(botIds) { return Object.fromEntries(botIds.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])) },
-    async selectScope(scope) {
+    async selectScope(scope, groupId = "") {
       if (this.saving || scope === this.policyScope) return
       this.selectionRequest++; this.policyScope = scope; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""; this.setDraft(this.account)
       if (scope === "account") return
@@ -340,7 +343,8 @@ export default {
         if (request !== this.selectionRequest || this.destroyed) return
         if (!resp.suc) throw new Error(resp.info)
         this.groups = resp.data.groups || []
-        if (this.groups.length) await this.selectGroup(this.groupKey(this.groups[0]))
+        const group = this.groups.find((item) => item.group_id === groupId) || this.groups[0]
+        if (group) await this.selectGroup(this.groupKey(group))
       } catch (error) { if (request === this.selectionRequest) this.loadError = error.message || "群列表读取失败" }
       finally { if (!this.destroyed) this.loading = false }
     },
@@ -382,9 +386,10 @@ export default {
         if (request !== this.listRequest || this.destroyed) return
         if (!catalog.suc || !accounts.suc || !policies.suc) throw new Error("插件策略数据读取失败")
         this.catalog = catalog.data; this.accounts = accounts.data; this.policies = policies.data
-        const requested = this.$route.query.bot_id
+        const { bot_id: requested, group_id: groupId } = this.$route.query
         const next = this.accounts.some((x) => x.bot_id === requested) ? requested : (this.selectedBotId || this.accounts[0]?.bot_id || "")
         if (next) await this.loadAccount(next)
+        if (next && next === requested && groupId) await this.selectScope("group", groupId)
       } catch (error) { this.loadError = error?.response?.data?.detail?.message || error.message || "插件策略数据读取失败" }
       finally { this.loading = false }
     },
@@ -416,7 +421,7 @@ export default {
       if (!item.load_status) return true
       const target = this.groupAccount || this.privateAccount || (!this.editingPolicy && this.account)
       const decision = target?.effective?.[this.activeKind]?.find(row => row.module === item.module)
-      if (decision) return (decision.blocked_by || []).some(reason => reason.startsWith("global_"))
+      if (decision) return (decision.blocked_by || []).some(reason => reason.startsWith("global_") || reason === "bot_disabled")
       return !item.global_status
     },
     /**
@@ -470,11 +475,12 @@ export default {
       const scoped = this.groupAccount || this.privateAccount
       const target = scoped || (!this.editingPolicy && this.account)
       if (target?.publication_pending) return "已保存，运行态待重新核验"
-      const labels = { not_loaded: "未加载", global_disabled: "全局关闭", global_group_disabled: "全局群聊关闭", global_private_disabled: "全局私聊关闭", account_disabled: scoped ? "账号禁用（本层开启不能解除）" : "账号禁用", administrator_disabled: "超管锁定", group_disabled: "本群禁用", private_disabled: "全部私聊禁用" }
+      const labels = { not_loaded: "未加载", bot_disabled: "全局开关已关闭", global_disabled: "全局关闭", global_group_disabled: "全局群聊关闭", global_private_disabled: "全局私聊关闭", account_disabled: scoped ? "账号禁用（本层开启不能解除）" : "账号禁用", administrator_disabled: "超管锁定", group_disabled: "本群禁用", private_disabled: "全部私聊禁用" }
       const limited = { GROUP: "仅私聊可用", PRIVATE: "仅群聊可用" }[item.block_type]
       const decision = target?.effective?.[this.activeKind]?.find(row => row.module === item.module)
       if (decision) {
         const reasons = decision.blocked_by || []
+        if (reasons.includes("bot_disabled")) return labels.bot_disabled
         if (reasons.length) return reasons.map(reason => labels[reason] || reason).join("；")
       } else if (!item.global_status && !limited) return "全局关闭"
       if (!this.isEnabled(item.module)) return this.editingPolicy ? "策略禁用" : scoped ? "本层禁用" : "账号禁用"
@@ -608,14 +614,15 @@ export default {
 .header-actions { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .policy-workbench { display: grid; min-height: 680px; grid-template-columns: 280px minmax(0, 1fr); border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
 .account-pane { min-width: 0; padding: 16px; border-right: 1px solid var(--border-color); }.pane-heading { display: flex; justify-content: space-between; margin-bottom: 12px; }.pane-heading span { color: var(--text-color-secondary); }
-.account-list { display: flex; max-height: 610px; flex-direction: column; gap: 4px; margin-top: 10px; overflow-y: auto; }.account-list button { display: grid; width: 100%; min-height: 66px; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.account-list button:hover { background: var(--bg-color-hover); }.account-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.account-list span, .policy-list-row > span { display: flex; min-width: 0; flex-direction: column; gap: 4px; }.account-list strong, .account-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.account-list small, .account-list em, .policy-list-row small { color: var(--text-color-secondary); font-size: 11px; font-style: normal; }.connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-color-disabled); }.connection-dot.online { background: var(--success-color); }
-.editor-pane { min-width: 0; padding: 20px 22px 24px; }.editor-heading { min-height: 46px; justify-content: space-between; gap: 12px; }.editor-heading > div:first-child { min-width: 0; }.back-button { width: 34px; height: 34px; margin-right: 10px; border: 0; border-radius: 4px; color: var(--text-color); background: var(--bg-color-hover); cursor: pointer; }.editor-status { flex: none; }
+.account-list { display: flex; max-height: 610px; flex-direction: column; gap: 4px; margin-top: 10px; overflow-y: auto; }.account-list button { display: grid; width: 100%; min-height: 66px; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.account-list button:hover { background: var(--bg-color-hover); }.account-list .bot-off { color: var(--danger-color); }.bot-off-alert { margin-bottom: 12px; }.account-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.account-list span, .policy-list-row > span { display: flex; min-width: 0; flex-direction: column; gap: 4px; }.account-list strong, .account-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.account-list small, .account-list em, .policy-list-row small { color: var(--text-color-secondary); font-size: 11px; font-style: normal; }.connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-color-disabled); }.connection-dot.online { background: var(--success-color); }
+.editor-pane { min-width: 0; padding: 20px 22px 24px; container-type: inline-size; }.editor-heading { min-height: 46px; justify-content: space-between; gap: 12px; }.editor-heading > div:first-child { min-width: 0; }.back-button { width: 34px; height: 34px; margin-right: 10px; border: 0; border-radius: 4px; color: var(--text-color); background: var(--bg-color-hover); cursor: pointer; }.editor-status { flex: none; }
 .policy-meta-form { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr); gap: 12px; margin-top: 16px; }.policy-meta-form .el-form-item { margin-bottom: 0; }
 .feature-sticky { position: sticky; top: 0; z-index: 5; margin-top: 8px; padding-top: 10px; background: var(--bg-color-secondary); }.feature-toolbar { gap: 10px; }.feature-toolbar .el-input { max-width: 330px; margin-left: auto; }.feature-toolbar .el-select { width: 150px; }.batch-toolbar { min-height: 48px; gap: 10px; margin-top: 12px; border-top: 1px solid var(--border-color-light); border-bottom: 1px solid var(--border-color-light); }.batch-toolbar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
-.feature-table { min-width: 680px; }.feature-row { display: grid; min-height: 64px; grid-template-columns: 34px minmax(210px, 1fr) 110px 110px 110px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-color-light); }.feature-head { min-height: 42px; color: var(--text-color-secondary); font-size: 12px; }.feature-name { display: flex; min-width: 0; flex-direction: column; gap: 5px; }.feature-name strong, .feature-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.feature-name small { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 11px; }.layer-cell { display: flex; align-items: center; gap: 6px; }.layer-cell .el-button { padding: 0; color: var(--text-color-secondary); font-size: 15px; }.layer-cell .el-button.is-locked { color: var(--danger-color); }.load-more { display: flex; justify-content: center; padding: 16px 0 4px; }.empty-state, .empty-editor { display: grid; min-height: 140px; place-items: center; color: var(--text-color-secondary); }
+.feature-table { min-width: 560px; }.feature-row { display: grid; min-height: 64px; grid-template-columns: 34px minmax(160px, 1fr) 110px 110px 110px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-color-light); }.feature-head { min-height: 42px; color: var(--text-color-secondary); font-size: 12px; }.feature-name { display: flex; min-width: 0; flex-direction: column; gap: 5px; }.feature-name strong, .feature-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.feature-name small { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 11px; }.feature-row .el-tag { max-width: 100%; height: auto; line-height: 1.5; white-space: normal; }.layer-cell { display: flex; align-items: center; gap: 6px; }.layer-cell .el-button { padding: 0; color: var(--text-color-secondary); font-size: 15px; }.layer-cell .el-button.is-locked { color: var(--danger-color); }.load-more { display: flex; justify-content: center; padding: 16px 0 4px; }.empty-state, .empty-editor { display: grid; min-height: 140px; place-items: center; color: var(--text-color-secondary); }
 .policy-list { border-top: 1px solid var(--border-color-light); }.policy-list-row { min-height: 70px; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-color-light); }.policy-list-row > div { gap: 6px; flex: none; }.dialog-copy, .impact-line { color: var(--text-color-secondary); font-size: 13px; }.impact-line { margin-top: 14px; padding: 10px 12px; border-left: 3px solid var(--warning-color); background: var(--bg-color-hover); }.full-control { width: 100%; }.mobile-account-select { display: none; margin-bottom: 10px; }.mobile-account-select .el-select { width: 100%; }
 .impact-list { max-height: 190px; margin-top: 10px; overflow-y: auto; border-top: 1px solid var(--border-color-light); }.impact-list > div { display: flex; flex-direction: column; gap: 3px; padding: 8px 2px; border-bottom: 1px solid var(--border-color-light); font-size: 12px; }.impact-list span { color: var(--text-color-secondary); }
-@media (max-width: 820px) { .policy-page { padding: 12px; }.page-header { align-items: flex-start; flex-direction: column; }.header-actions { width: 100%; justify-content: flex-start; }.mobile-account-select { display: block; }.policy-workbench { min-height: 560px; grid-template-columns: 1fr; }.account-pane { display: none; }.editor-pane { padding: 16px 14px 20px; overflow-x: clip; }.policy-meta-form { grid-template-columns: 1fr; }.feature-toolbar { align-items: stretch; flex-direction: column; }.feature-toolbar .el-input, .feature-toolbar .el-select { width: 100%; max-width: none; margin-left: 0; }.batch-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 8px 0; }.batch-toolbar span { width: calc(100% - 130px); }.feature-table { min-width: 0; }.feature-head { display: none; }.feature-row:not(.feature-head) { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px; padding: 10px 0; }.feature-row:not(.feature-head) > .el-checkbox { grid-row: 1 / 3; }.feature-row:not(.feature-head) > span:nth-child(3) { grid-column: 2; }.feature-row:not(.feature-head) > span:nth-child(4) { grid-column: 3; grid-row: 2; }.feature-row:not(.feature-head) > span:nth-child(5) { grid-column: 3; grid-row: 1; }.policy-list-row { align-items: flex-start; flex-direction: column; padding: 12px 0; }.policy-list-row > div { flex-wrap: wrap; } }
+@container (max-width: 580px) { .feature-table { min-width: 0; }.feature-head { display: none; }.feature-row:not(.feature-head) { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px; padding: 10px 0; }.feature-row:not(.feature-head) > .el-checkbox { grid-row: 1 / 3; }.feature-row:not(.feature-head) > span:nth-child(3) { grid-column: 2; }.feature-row:not(.feature-head) > span:nth-child(4) { grid-column: 3; grid-row: 2; }.feature-row:not(.feature-head) > span:nth-child(5) { grid-column: 3; grid-row: 1; } }
+@media (max-width: 820px) { .policy-page { padding: 12px; }.page-header { align-items: flex-start; flex-direction: column; }.header-actions { width: 100%; justify-content: flex-start; }.mobile-account-select { display: block; }.policy-workbench { min-height: 560px; grid-template-columns: 1fr; }.account-pane { display: none; }.editor-pane { padding: 16px 14px 20px; overflow-x: clip; }.policy-meta-form { grid-template-columns: 1fr; }.feature-toolbar { align-items: stretch; flex-direction: column; }.feature-toolbar .el-input, .feature-toolbar .el-select { width: 100%; max-width: none; margin-left: 0; }.batch-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 8px 0; }.batch-toolbar span { width: calc(100% - 130px); }.policy-list-row { align-items: flex-start; flex-direction: column; padding: 12px 0; }.policy-list-row > div { flex-wrap: wrap; } }
 .dialog-note { margin: 0; color: var(--text-color-secondary); font-size: 12px; }
 @media (max-width: 767px) {
   .page-header { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }

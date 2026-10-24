@@ -20,6 +20,7 @@
         <div class="copy-field"><code>{{ onebotWebSocketUrl }}</code><el-button size="small" icon="el-icon-document-copy" :disabled="!canCopyEndpoint" @click="copyText(onebotWebSocketUrl)">复制</el-button></div>
         <p class="field-help">{{ endpointSource }} · DNS、网络及客户端信任未验证</p>
         <el-alert v-if="onebotEndpointWarning" :title="onebotEndpointWarning" type="warning" show-icon :closable="false" />
+        <p v-if="endpoint.scheme === 'wss'" class="field-help">已启用 HTTPS：协议端必须使用 wss:// 连接本端口，ws:// 与 HTTP 兼容入口都无法接入 OneBot。协议端需信任证书，自签或私有 CA 证书可为 NapCat 等 Node.js 协议端设置环境变量 NODE_EXTRA_CA_CERTS=CA 证书路径。</p>
       </div>
       <div v-if="endpoint.certificate_candidates && endpoint.certificate_candidates.length" class="endpoint-section">
         <h3>证书域名候选</h3>
@@ -59,9 +60,14 @@
         <h3>启用步骤</h3>
         <p class="field-help">1. 安装可选依赖</p>
         <div class="copy-field"><code>uv sync --locked --inexact --extra telegram</code><el-button size="small" icon="el-icon-document-copy" @click="copyText('uv sync --locked --inexact --extra telegram')">复制</el-button></div>
-        <p class="field-help">2. 在 .env 中开启适配器并填写 Bot Token，需要代理时填写 TELEGRAM_PROXY</p>
-        <div class="copy-field"><code>TELEGRAM_ADAPTER_LOAD=True<br />TELEGRAM_BOTS='[{"token": "你的 Bot Token", "is_webhook": false}]'</code></div>
-        <p class="field-help">3. 重启真寻。超级用户填写为 SUPERUSERS 中的 "telegram:用户id"，或 PLATFORM_SUPERUSERS 中的 "telegram" 列表。</p>
+        <p class="field-help">2. 在 .env 中填写 Bot Token，需要代理时填写 TELEGRAM_PROXY</p>
+        <div class="copy-field"><code>TELEGRAM_BOTS='[{"token": "你的 Bot Token", "is_webhook": false}]'</code></div>
+        <p class="field-help">3. 打开下方开关并保存，然后重启真寻。超级用户填写为 SUPERUSERS 中的 "telegram:用户id"，或 PLATFORM_SUPERUSERS 中的 "telegram" 列表。</p>
+      </div>
+      <div class="adapter-controls telegram-controls">
+        <span>{{ telegramEnabled ? "Telegram 适配器已启用" : "Telegram 适配器已停用" }}</span>
+        <el-switch v-model="telegramEnabled" />
+        <el-button size="small" type="primary" :loading="saving" :disabled="!configuration.revision" @click="saveConfiguration">保存状态</el-button>
       </div>
     </section>
 
@@ -74,6 +80,8 @@
         <div class="adapter-controls">
           <span>{{ qqForm.enabled ? "QQ 官方适配器已启用" : "QQ 官方适配器已停用" }}</span>
           <el-switch v-model="qqForm.enabled" />
+          <el-tooltip content="被动回复的次数或时限用尽后，改为发送主动消息，受 QQ 主动消息额度限制。" placement="bottom"><span class="proactive-label">主动消息兜底 <i class="el-icon-question"></i></span></el-tooltip>
+          <el-switch v-model="qqForm.proactive_fallback" />
           <el-button size="small" type="primary" :loading="saving" :disabled="!configuration.revision" @click="saveConfiguration">保存状态</el-button>
         </div>
       </div>
@@ -187,7 +195,8 @@ export default {
       status: { onebot_v11_connected: false, qq_official_enabled: false, qq_official_connected: false, telegram_enabled: false, telegram_connected: false, qq_webhook_mode: "external", qq_webhook_callback_url: null, connections: [], qq_bots: [], onebot_v11_reverse_ws_path: "/onebot/v11/ws", qq_webhook_path: "/qq/webhook" },
       configuration: { revision: "", launcher_managed: false, onebot: { access_token: "" }, qq: { bots: [] } },
       onebotToken: "", onebotHost: "", qqSetupMode: "scan", logoUrl, registration: emptyRegistration(), registrationTimer: null,
-      qqForm: { enabled: false, bots: [], webhook_mode: "external", public_base_url: "", listen_host: "0.0.0.0", listen_port: 443, tls_certfile: "", tls_keyfile: "" },
+      telegramEnabled: false,
+      qqForm: { enabled: false, proactive_fallback: true, bots: [], webhook_mode: "external", public_base_url: "", listen_host: "0.0.0.0", listen_port: 443, tls_certfile: "", tls_keyfile: "" },
       originalProtocol: "",
     }
   },
@@ -198,7 +207,7 @@ export default {
     canCopyEndpoint() { return Boolean(this.endpoint.url && ['tls_not_enabled', 'tls_certificate_identity_ok'].includes(this.endpoint.code)) },
     endpointSource() { return !this.statusConfirmed ? '运行状态未确认' : this.endpoint.host_source === 'configured' ? '来源：当前生效的反向连接主机' : '来源：页面访问主机，协议与端口取自本次启动' },
     onebotWebSocketUrl() { return this.endpoint.url || "连接地址暂不可用" },
-    onebotEndpointWarning() { if (!this.statusConfirmed) return '运行状态尚未确认，请刷新状态；已保存配置不代表当前可连接。'; const messages = { connection_host_invalid: '无法生成连接地址，请填写有效的主机名或 IP。', tls_certificate_name_mismatch: "连接主机不在证书名称中，协议端会拒绝 TLS 连接。请设置匹配证书的域名。", tls_certificate_time_invalid: "证书尚未生效或已过期，请更换有效证书。", tls_certificate_unavailable: "无法检查证书，请核对真寻证书配置。", tls_not_enabled: "当前连接未加密，Token 将明文传输。" }; return messages[this.endpoint.code] || "" },
+    onebotEndpointWarning() { if (!this.statusConfirmed) return '运行状态尚未确认，请刷新状态；已保存配置不代表当前可连接。'; const messages = { connection_host_invalid: '无法生成连接地址，请填写有效的主机名或 IP。', tls_certificate_name_mismatch: "连接主机不在证书名称中，协议端会拒绝 TLS 连接。请设置匹配证书的域名。", tls_certificate_time_invalid: "证书尚未生效或已过期，请更换有效证书。", tls_certificate_san_missing: "证书缺少 SAN（主题备用名称），协议端会拒绝 TLS 连接。请使用包含域名或 IP 的证书。", tls_certificate_unavailable: "无法检查证书，请核对真寻证书配置。", tls_not_enabled: "当前连接未加密，Token 将明文传输。" }; return messages[this.endpoint.code] || "" },
     hasAnyConnection() { return this.status.connections.length > 0 },
     hasWebhookBots() { return this.qqForm.bots.some((bot) => !bot.use_websocket) },
     configuredBotRows() {
@@ -233,13 +242,14 @@ export default {
     qqForm: { deep: true, handler() { this.updateDirtyState() } },
     onebotToken() { this.updateDirtyState() },
     onebotHost() { this.updateDirtyState() },
+    telegramEnabled() { this.updateDirtyState() },
   },
   methods: {
     async loadConfiguration() {
       const sequence = ++this.configurationSequence
       const snapshot = this.protocolSnapshot()
       this.loading = true
-      try { const response = await this.getRequest(`${this.$root.prefix}/protocol/configuration`, {}, { suppressErrorToast: true }); if (sequence !== this.configurationSequence || snapshot !== this.protocolSnapshot()) return; if (!response || !response.suc) throw new Error(response && response.info); this.configuration = response.data; this.onebotHost = response.data.onebot.reverse_ws_host || ""; this.onebotToken = response.data.onebot.access_token || ""; const qq = response.data.qq; this.qqForm = { enabled: qq.enabled, bots: (qq.bots || []).map((bot) => ({ ...emptyBot(), ...bot, saved: true, use_websocket: Boolean(qq.bot_modes?.[bot.id]) })), webhook_mode: qq.webhook_mode || "external", public_base_url: qq.public_base_url || "", listen_host: qq.listen_host || "0.0.0.0", listen_port: qq.listen_port || 443, tls_certfile: qq.tls_certfile || "", tls_keyfile: qq.tls_keyfile || "" }; this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration") }
+      try { const response = await this.getRequest(`${this.$root.prefix}/protocol/configuration`, {}, { suppressErrorToast: true }); if (sequence !== this.configurationSequence || snapshot !== this.protocolSnapshot()) return; if (!response || !response.suc) throw new Error(response && response.info); this.configuration = response.data; this.onebotHost = response.data.onebot.reverse_ws_host || ""; this.onebotToken = response.data.onebot.access_token || ""; this.telegramEnabled = Boolean(response.data.telegram?.enabled); const qq = response.data.qq; this.qqForm = { enabled: qq.enabled, proactive_fallback: qq.proactive_fallback !== false, bots: (qq.bots || []).map((bot) => ({ ...emptyBot(), ...bot, saved: true, use_websocket: Boolean(qq.bot_modes?.[bot.id]) })), webhook_mode: qq.webhook_mode || "external", public_base_url: qq.public_base_url || "", listen_host: qq.listen_host || "0.0.0.0", listen_port: qq.listen_port || 443, tls_certfile: qq.tls_certfile || "", tls_keyfile: qq.tls_keyfile || "" }; this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration") }
       catch (error) { if (sequence === this.configurationSequence) this.$message.error(apiErrorDetail(error, "机器人配置读取失败。")) } finally { if (sequence === this.configurationSequence) this.loading = false }
     },
     async loadStatus() {
@@ -255,7 +265,7 @@ export default {
         if (sequence === this.statusSequence) this.statusConfirmed = false
       } finally { if (sequence === this.statusSequence) this.statusLoading = false }
     },
-    protocolSnapshot() { return JSON.stringify({ onebotHost: this.onebotHost, onebotToken: this.onebotToken, qq: { ...this.qqForm, bots: this.qqForm.bots.map(({ probing, removing, probeResult, probeError, localKey, saved, ...bot }) => bot) } }) },
+    protocolSnapshot() { return JSON.stringify({ onebotHost: this.onebotHost, onebotToken: this.onebotToken, telegramEnabled: this.telegramEnabled, qq: { ...this.qqForm, bots: this.qqForm.bots.map(({ probing, removing, probeResult, probeError, localKey, saved, ...bot }) => bot) } }) },
     updateDirtyState() { if (this.originalProtocol) setDirtyState("protocol-configuration", this.protocolSnapshot() !== this.originalProtocol) },
     clearRegistrationTimer() { if (this.registrationTimer) window.clearTimeout(this.registrationTimer); this.registrationTimer = null },
     async startRegistration() {
@@ -375,6 +385,8 @@ export default {
           onebot_reverse_ws_host: this.onebotHost,
           onebot_access_token: this.onebotToken,
           qq_enabled: this.qqForm.enabled,
+          qq_proactive_fallback: this.qqForm.proactive_fallback,
+          telegram_enabled: this.telegramEnabled,
           qq_bots: this.qqForm.bots.map((bot) => ({ id: bot.id, secret: bot.secret, use_websocket: bot.use_websocket, intent: bot.intent, shard: bot.shard })),
           qq_webhook_mode: this.qqForm.webhook_mode,
           qq_webhook_public_base_url: this.qqForm.public_base_url,
@@ -428,7 +440,7 @@ export default {
 .platform-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }.platform-card { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 13px 15px; border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-color); background: var(--bg-color-secondary); cursor: pointer; text-align: left; transition: border-color .15s, box-shadow .15s; }.platform-card:hover { border-color: var(--primary-color-light-5); }.platform-card.active { border-color: var(--primary-color); box-shadow: 0 0 0 3px var(--primary-shadow); }.platform-card > span:nth-child(2) { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }.platform-card small { color: var(--text-color-secondary); }.platform-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 7px; color: #fff; font-weight: 700; background: #7564dd; }.platform-icon.qq_official { background: #0891b2; }.platform-icon.telegram { background: #229ed9; }
 .configuration-section, .scan-panel, .connected-list, .manual-settings { padding: 18px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.scan-panel { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 20px; }.scan-icon { display: grid; width: 58px; height: 58px; place-items: center; border-radius: 7px; color: #087f96; background: rgba(8,145,178,.1); font-size: 28px; }.scan-copy h2 { margin: 8px 0 6px; }.scan-copy p { margin: 0; color: var(--text-color-secondary); line-height: 1.6; }.scan-copy ul { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 10px 0 0; padding-left: 18px; color: var(--text-color-secondary); font-size: 12px; }
 .connected-list { margin-top: 14px; }.connection-row { display: grid; grid-template-columns: auto minmax(140px, auto) 1fr auto auto; align-items: center; gap: 10px; padding: 13px 0; border-top: 1px solid var(--border-color-light); }.connection-identity { display: flex; min-width: 0; flex-direction: column; gap: 2px; }.connection-identity small, .connection-row > span:nth-child(3) { color: var(--text-color-secondary); }.connection-error { grid-column: 2 / -1; width: 100%; }
-.qq-mode-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.adapter-controls { display: flex; align-items: center; gap: 10px; color: var(--text-color-secondary); font-size: 13px; }
+.qq-mode-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.adapter-controls { display: flex; align-items: center; gap: 10px; color: var(--text-color-secondary); font-size: 13px; }.proactive-label { margin-left: 8px; cursor: help; }.telegram-controls { justify-content: flex-end; margin-top: 16px; }
 .advanced-settings { margin-top: 14px; border: 0; }.advanced-title { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; }.advanced-settings ::v-deep .el-collapse-item__header { padding: 0 14px; border: 1px solid var(--border-color-light); color: var(--text-color); background: var(--bg-color-secondary); }.advanced-settings ::v-deep .el-collapse-item__wrap { border: 0; background: transparent; }.advanced-settings ::v-deep .el-collapse-item__content { padding: 12px 0 0; }
 .section-heading { padding-bottom: 18px; border-bottom: 1px solid var(--border-color-light); }.section-heading h2, .bot-list-heading h3, .section-heading h3 { margin: 0 0 5px; }.section-heading.compact { padding-bottom: 12px; }.switch-line { display: flex; align-items: center; gap: 10px; }.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; padding-top: 18px; }.span-2 { grid-column: span 2; }.copy-field { display: flex; gap: 8px; padding: 8px 8px 8px 12px; border: 1px solid var(--border-color-light); border-radius: 5px; background: var(--bg-color); }.copy-field code { min-width: 0; flex: 1; overflow-wrap: anywhere; }.field-actions, .probe-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; color: var(--text-color-secondary); font-size: 12px; }.danger-text { color: var(--danger-color, #e05260) !important; }.field-help { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 12px; }
 .bot-list-heading { align-items: center; margin-top: 16px; padding: 18px 0 12px; }.bot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }.bot-entry { min-width: 0; padding: 16px; border: 1px solid var(--border-color-light); border-radius: 7px; background: var(--bg-color); }.bot-entry header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }.bot-empty { display: flex; grid-column: 1 / -1; min-height: 150px; align-items: center; justify-content: center; flex-direction: column; gap: 8px; border: 1px dashed var(--border-color-light); border-radius: 7px; color: var(--text-color-secondary); }.bot-empty i { color: var(--primary-color); font-size: 30px; }.bot-empty strong { color: var(--text-color); }.probe-success { color: var(--success-color); }.probe-diagnostic { margin-top: 10px; }.muted { color: var(--text-color-secondary); }.builtin-settings { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-color-light); }.callback-panel { display: flex; align-items: center; gap: 14px; margin-top: 20px; padding: 16px; border: 1px solid rgba(214,158,46,.4); border-radius: 7px; background: rgba(214,158,46,.06); }.callback-panel.ready { border-color: rgba(56,161,105,.4); background: rgba(56,161,105,.06); }.callback-state { font-size: 27px; color: #c59027; }.callback-panel.ready .callback-state { color: var(--success-color); }.callback-panel > div:nth-child(2) { min-width: 0; flex: 1; }.callback-panel p { margin: 4px 0; color: var(--text-color-secondary); }.callback-panel code { overflow-wrap: anywhere; color: var(--text-color); }

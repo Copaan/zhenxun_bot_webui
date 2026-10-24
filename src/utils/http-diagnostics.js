@@ -12,4 +12,6 @@ export const httpErrorLabel = code => ({
   address_unavailable: "监听地址不可用",
   permission_denied: "监听权限不足",
   listener_bind_failed: "监听绑定失败",
+  listener_failed: "监听服务异常退出",
+  port_conflict: "与 WebUI 端口相同",
 }[code] || code || "监听未就绪")

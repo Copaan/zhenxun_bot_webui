@@ -70,9 +70,9 @@
             <div><dt>作者</dt><dd>{{ plugin.author || "未知" }}</dd></div>
             <div><dt>版本</dt><dd>v{{ plugin.version || "-" }}</dd></div>
             <div><dt>类型</dt><dd>{{ plugin.plugin_type || "其他" }}</dd></div>
-            <div><dt>来源</dt><dd>{{ plugin.source === "official" ? "官方" : "社区" }}</dd></div>
+            <div><dt>来源</dt><dd>{{ { official: "官方", community: "社区", local: "本地" }[plugin.source] || "社区" }}</dd></div>
           </dl>
-          <div v-if="plugin.installed" class="reload-diagnostic">
+          <div v-if="plugin.installed && !plugin.local" class="reload-diagnostic">
             <el-tag
               size="mini"
               :type="plugin.stopped ? 'warning' : plugin.reload_support === 'hot_reloadable' ? 'success' : 'info'"
@@ -109,7 +109,7 @@
                 <span><el-button type="primary" size="small" :disabled="plugin.catalog_status === 'missing' || Boolean(actionId) || pluginOperation.active" :loading="actionId === (plugin.store_key || plugin.id)" @click="runAction('install', plugin)">安装</el-button></span>
               </el-tooltip>
               <el-button v-if="plugin.installed && plugin.update_available" type="warning" size="small" :loading="actionId === (plugin.store_key || plugin.id) && actionType === 'update'" :disabled="Boolean(actionId) || pluginOperation.active" @click="runAction('update', plugin)">更新插件</el-button>
-              <el-dropdown v-if="plugin.installed" trigger="click" @command="runAction($event, plugin)">
+              <el-dropdown v-if="plugin.installed && !plugin.local" trigger="click" @command="runAction($event, plugin)">
                 <el-button size="small">已安装<i class="el-icon-arrow-down el-icon--right" /></el-button>
                 <el-dropdown-menu slot="dropdown"><el-dropdown-item command="remove">卸载</el-dropdown-item></el-dropdown-menu>
               </el-dropdown>
@@ -167,11 +167,26 @@ export default {
   data() {
     let source = "auto"
     try { source = localStorage.getItem("zhenxun_plugin_download_source") || "auto" } catch (_) { /* Storage may be disabled. */ }
-    return { chatSwitches: {}, switchRevision: "", switchSaving: false, switchLoading: false, switchSequence: 0, downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", filtersOpen: false, page: 1, pageSize: 18, actionId: null, actionType: "", pendingActionKey: "", drawerVisible: false, selectedPlugin: null, configModule: "" }
+    return { chatSwitches: {}, localChatPlugins: [], switchRevision: "", switchSaving: false, switchLoading: false, switchSequence: 0, downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", filtersOpen: false, page: 1, pageSize: 18, actionId: null, actionType: "", pendingActionKey: "", drawerVisible: false, selectedPlugin: null, configModule: "" }
   },
   computed: {
     pluginOperation() { return this.$store.state.pluginOperation },
-    catalogPlugins() { return this.capability ? this.plugins.filter((item) => (item.capabilities || []).includes(this.capability)) : this.plugins },
+    catalogPlugins() {
+      if (!this.capability) return this.plugins
+      const matched = this.plugins.filter((item) => (item.capabilities || []).includes(this.capability))
+      if (this.capability !== "ai_chat") return matched
+      return [...matched, ...this.localOnlyChatPlugins]
+    },
+    /**
+     * 已加载但不在插件商店中的 AI 聊天插件
+     * @returns {object[]} 按商店卡片字段整理的本地插件
+     */
+    localOnlyChatPlugins() {
+      const known = new Set(this.plugins.flatMap((item) => [item.module, item.runtime_module].filter(Boolean)))
+      return this.localChatPlugins
+        .filter((item) => !known.has(item.module) && !known.has(item.module_path))
+        .map((item) => ({ ...item, id: `local:${item.module}`, store_key: `local:${item.module}`, source: "local", local: true, installed: true, runtime_module: item.module_path, capabilities: ["ai_chat"] }))
+    },
     pluginTypes() { return [...new Set(this.catalogPlugins.map((item) => item.plugin_type).filter(Boolean))].sort() },
     filteredPlugins() {
       const keyword = this.search.toLowerCase()
@@ -209,7 +224,7 @@ export default {
         const response = await this.getRequest(`${this.$root.prefix}/ai/chat-plugins/switches`, {}, { authFailureMode: "local" })
         if (sequence !== this.switchSequence) return
         if (!response.suc) throw new Error(response.info)
-        this.chatSwitches = response.data.switches || {}; this.switchRevision = response.data.revision
+        this.chatSwitches = response.data.switches || {}; this.switchRevision = response.data.revision; this.localChatPlugins = response.data.chat_plugins || []
       } finally { if (sequence === this.switchSequence) this.switchLoading = false }
     },
     async setChatEnabled(plugin, enabled) {

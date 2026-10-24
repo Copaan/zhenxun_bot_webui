@@ -34,8 +34,8 @@
     </el-select>
     <el-tabs v-model="activeSection" class="ai-tabs">
       <el-tab-pane label="服务商与模型" name="providers">
-        <div class="provider-workbench">
-          <aside class="provider-sidebar">
+        <div class="provider-workbench" :class="{ 'no-sidebar': !providers.length }">
+          <aside v-if="providers.length" class="provider-sidebar">
             <div class="sidebar-heading"><strong>服务商</strong><el-button type="text" icon="el-icon-plus" @click="createProvider">添加</el-button></div>
             <el-input v-model="providerSearch" size="small" clearable prefix-icon="el-icon-search" placeholder="搜索服务商" />
             <el-select :value="selectedProviderName" class="mobile-provider-select" size="small" placeholder="选择服务商" @change="selectProvider">
@@ -43,87 +43,84 @@
             </el-select>
             <div class="provider-list">
               <button v-for="provider in filteredProviders" :key="provider.name" :class="{ active: selectedProviderName === provider.name }" @click="selectProvider(provider.name)">
-                <span><strong>{{ provider.name }}</strong><small>{{ provider.api_type }} · {{ provider.models.length }} 个模型</small></span>
+                <ProviderLogo :preset="provider.preset || ''" :label="provider.name" />
+                <span><strong>{{ provider.name }}</strong><small>{{ providerKind(provider) }} · {{ provider.models.length }} 个模型</small></span>
                 <el-tag size="mini" :type="providerStatus(provider).type">{{ providerStatus(provider).label }}</el-tag>
               </button>
-              <div v-if="!filteredProviders.length" class="empty-copy">暂无服务商</div>
+              <div v-if="!filteredProviders.length" class="empty-copy">没有匹配的服务商</div>
             </div>
           </aside>
 
           <main v-if="providerDraft" class="provider-main">
-            <div class="section-title">
-              <div><h2>{{ providerDraft.isNew ? "添加服务商" : providerDraft.name }}</h2><p>已保存的密钥默认隐藏，点击眼睛图标查看；删除某一行即删除该密钥。</p></div>
+            <div class="provider-header">
+              <ProviderLogo :preset="providerDraft.preset || ''" :label="providerDraft.name" size="40px" />
+              <div class="provider-title">
+                <h2>{{ providerDraft.isNew ? `添加服务商 · ${providerDraft.name || "未命名"}` : providerDraft.name }}</h2>
+                <p>{{ connectionSummary }}<a v-if="keyUrl" :href="keyUrl" target="_blank" rel="noopener noreferrer" class="external-link">控制台<i class="el-icon-top-right"></i></a></p>
+              </div>
               <div class="provider-heading-actions">
                 <el-tag size="small" :type="providerDraftStatus.type">{{ providerDraftStatus.label }}</el-tag>
-                <el-button v-if="!providerDraft.isNew" type="text" icon="el-icon-delete" class="danger-text" @click="removeProvider">删除服务商</el-button>
+                <el-button size="small" :icon="connectionOpen ? 'el-icon-arrow-up' : 'el-icon-edit-outline'" @click="connectionOpen = !connectionOpen">{{ connectionOpen ? "收起连接" : "编辑连接" }}</el-button>
+                <el-button v-if="!providerDraft.isNew" type="text" icon="el-icon-delete" class="danger-text" @click="removeProvider">删除</el-button>
               </div>
             </div>
-            <el-form label-position="top" class="provider-form">
-              <el-form-item label="服务商名称" :error="operationError('providers.name')"><el-input v-model="providerDraft.name" maxlength="80" @input="markProviderDirty" /></el-form-item>
-              <el-form-item label="API 类型"><el-select v-model="providerDraft.api_type" filterable class="full-control" @change="handleApiTypeChange"><el-option v-for="type in apiTypes" :key="type" :label="type" :value="type" /></el-select></el-form-item>
-              <el-form-item label="API Base" :error="operationError('providers.api_base')"><el-input v-model="providerDraft.api_base" placeholder="https://api.example.com" @input="markProviderDirty" /></el-form-item>
-              <el-form-item label="请求超时" :error="operationError('providers.timeout')"><el-input-number v-model="providerDraft.timeout" :min="1" :max="1800" controls-position="right" class="full-control" @change="markProviderDirty" /></el-form-item>
-            </el-form>
 
-            <section class="secret-section">
-              <div class="subheading"><div><h3>API Keys</h3><p>支持多密钥轮询。</p></div><el-button size="small" icon="el-icon-plus" @click="addKey">添加密钥</el-button></div>
-              <div v-for="(slot, index) in providerDraft.api_key_slots" :key="slot.clientId" class="secret-row">
-                <el-input v-model="slot.value" autocomplete="new-password" placeholder="输入 API Key" show-password @input="markProviderDirty" />
-                <el-button type="text" icon="el-icon-delete" class="danger-text" @click="removeKey(index)">删除</el-button>
+            <section v-show="connectionOpen" class="connection-panel">
+              <el-form label-position="top" class="provider-form">
+                <el-form-item label="服务商名称" :error="operationError('providers.name')"><el-input v-model="providerDraft.name" maxlength="80" @input="markProviderDirty" /></el-form-item>
+                <el-form-item label="厂商预设"><el-select :value="providerDraft.preset || ''" clearable filterable placeholder="自定义" class="full-control" @change="setProviderScope({ preset: $event || null })"><el-option v-for="(item, key) in presets" :key="key" :label="item.label" :value="key" /></el-select></el-form-item>
+                <el-form-item label="接口协议" :error="operationError('providers.protocol')"><el-select :value="providerDraft.protocol" class="full-control" @change="setProviderScope({ protocol: $event })"><el-option v-for="item in protocols" :key="item" :label="protocolLabel(item)" :value="item" /></el-select></el-form-item>
+                <el-form-item label="接口地址" :error="operationError('providers.base_url')"><el-input v-model="providerDraft.base_url" :placeholder="presetBaseUrl(providerDraft.preset, providerDraft.protocol) || 'https://api.example.com/v1'" @input="markProviderDirty" /></el-form-item>
+                <el-form-item label="请求超时（秒）" :error="operationError('providers.timeout')"><el-input-number v-model="providerDraft.timeout" :min="1" :max="1800" controls-position="right" class="full-control" @change="markProviderDirty" /></el-form-item>
+              </el-form>
+              <div class="secret-section">
+                <div class="subheading"><div><h3>API Keys<a v-if="keyUrl" :href="keyUrl" target="_blank" rel="noopener noreferrer" class="external-link">前往 {{ presets[providerDraft.preset].label }} 获取 API Key<i class="el-icon-top-right"></i></a></h3><p>支持多密钥轮询；已保存的密钥默认隐藏，删除某一行即删除该密钥。</p></div><el-button size="small" icon="el-icon-plus" @click="addKey">添加密钥</el-button></div>
+                <div v-for="(slot, index) in providerDraft.api_key_slots" :key="slot.clientId" class="secret-row">
+                  <el-input v-model="slot.value" autocomplete="new-password" placeholder="输入 API Key" show-password @input="markProviderDirty" />
+                  <el-button type="text" icon="el-icon-delete" class="danger-text" @click="removeKey(index)">删除</el-button>
+                </div>
+                <div v-if="operationError('api_key')" class="field-error" role="alert">{{ operationError("api_key") }}</div>
+                <p v-else-if="!providerHasKey" class="secret-hint"><i class="el-icon-info"></i> 未填写 API Key 也可以保存服务商和模型，但调用需要鉴权的服务时会失败。</p>
               </div>
-              <div v-if="operationError('api_key')" class="field-error" role="alert">{{ operationError("api_key") }}</div>
-              <p v-else-if="!providerHasKey" class="secret-hint"><i class="el-icon-info"></i> 未填写 API Key 也可以保存服务商和模型，但调用需要鉴权的服务时会失败。</p>
+              <el-collapse class="advanced-collapse">
+                <el-collapse-item title="服务商高级参数" name="advanced">
+                  <el-form label-position="top" class="advanced-grid">
+                    <el-form-item label="默认生成参数（JSON）" :error="jsonError(providerDraft.paramsText)"><el-input v-model="providerDraft.paramsText" type="textarea" :rows="4" placeholder='{"temperature": 0.7}' @input="markProviderDirty" /></el-form-item>
+                    <el-form-item label="附加请求头（JSON）" :error="jsonError(providerDraft.headersText)"><el-input v-model="providerDraft.headersText" type="textarea" :rows="4" placeholder='{"X-Title": "zhenxun"}' @input="markProviderDirty" /></el-form-item>
+                  </el-form>
+                  <p class="secret-hint">temperature、max_tokens 等通用参数会按协议转换，其他键原样合并进请求体；模型参数优先于服务商参数。</p>
+                </el-collapse-item>
+              </el-collapse>
             </section>
-
-            <el-collapse class="advanced-collapse">
-              <el-collapse-item title="服务商高级参数" name="advanced">
-                <el-form label-position="top" class="advanced-grid">
-                  <el-form-item label="默认温度"><el-input-number v-model="providerDraft.temperature" :min="0" :max="2" :step="0.1" controls-position="right" class="full-control" @change="markProviderDirty" /></el-form-item>
-                  <el-form-item label="默认最大输出 Token"><el-input-number v-model="providerDraft.max_output_tokens" :min="1" controls-position="right" class="full-control" @change="markProviderDirty" /></el-form-item>
-                </el-form>
-              </el-collapse-item>
-            </el-collapse>
-
-            <div class="provider-actions">
-              <el-tooltip :disabled="providerDraftStatus.code === 'ready'" :content="providerDraftStatus.reason" placement="top">
-                <span><el-button icon="el-icon-connection" :loading="discovering" :disabled="providerDraftStatus.code !== 'ready'" @click="discoverModels">测试连接并发现模型</el-button></span>
-              </el-tooltip>
-            </div>
-            <el-alert
-              v-if="selectedProbeResult"
-              class="provider-probe-result"
-              :type="selectedProbeResult.success ? 'success' : 'error'"
-              :closable="false"
-              show-icon
-              :title="selectedProbeResult.message"
-            />
 
             <section class="models-section">
-              <div class="subheading"><div><h3>模型</h3><p>增删或编辑模型后，与服务商参数一起保存。</p></div><el-button size="small" icon="el-icon-plus" @click="openModelEditor()">手动添加</el-button></div>
-              <el-input v-model="modelSearch" clearable prefix-icon="el-icon-search" placeholder="搜索模型" class="model-search" />
-              <div class="model-list">
-                <div v-for="model in filteredModels" :key="model.model_name" class="model-row">
-                  <div class="model-name"><strong>{{ model.model_name }}</strong><span><el-tag v-if="model.is_available" size="mini" type="success">启用</el-tag><el-tag v-else size="mini" type="info">停用</el-tag><el-tag v-for="tag in capabilityTags(model)" :key="tag" size="mini">{{ tag }}</el-tag></span></div>
-                  <div class="model-actions"><el-button type="text" icon="el-icon-connection" :loading="testingModelKey === modelTestKey(model)" :disabled="Boolean(testingModelKey)" @click="testModel(model)">测试</el-button><el-button type="text" icon="el-icon-edit" :disabled="Boolean(testingModelKey)" @click="openModelEditor(model, modelIndex(model))">编辑</el-button><el-button type="text" icon="el-icon-delete" class="danger-text" :disabled="Boolean(testingModelKey)" @click="deleteModel(model)">删除</el-button></div>
-                </div>
-                <div v-if="!filteredModels.length" class="empty-copy">没有匹配的模型</div>
+              <div class="models-toolbar">
+                <h3>模型 <small>{{ providerDraft.models.length }}</small></h3>
+                <el-input v-model="modelSearch" size="small" clearable prefix-icon="el-icon-search" placeholder="搜索模型" class="model-search" />
+                <el-tooltip :disabled="providerDraftStatus.code === 'ready'" :content="providerDraftStatus.reason" placement="top">
+                  <span><el-button size="small" type="primary" plain icon="el-icon-connection" :loading="discovering" :disabled="providerDraftStatus.code !== 'ready'" @click="discoverModels">发现模型</el-button></span>
+                </el-tooltip>
+                <el-button size="small" icon="el-icon-plus" @click="openEditor()">手动添加</el-button>
+                <el-button v-if="uncheckedModels.length" size="small" icon="el-icon-finished" :loading="batchChecking" :disabled="Boolean(testingModelKey) && !batchChecking" @click="checkUncheckedModels">核验未核验（{{ uncheckedModels.length }}）</el-button>
               </div>
+              <el-alert v-if="selectedProbeResult" class="provider-probe-result" :type="selectedProbeResult.success ? 'success' : 'error'" :closable="false" show-icon :title="selectedProbeResult.message" />
+              <p v-if="upstreamModels" class="upstream-summary">上游共 {{ upstreamModels.length }} 个模型（{{ formatTime(providerDraft.discovery.updated_at) }} 查询，每天自动刷新）<template v-if="missingModelCount">，{{ missingModelCount }} 个已配置模型上游已下线</template></p>
+              <ModelTable :models="filteredModels" :defaults="sectionDrafts.default_models || {}" :provider-name="selectedProviderName" :saved-names="savedModelNames" :upstream="upstreamModels" :busy="Boolean(testingModelKey)" :loading-name="testingModelName" :available="upstreamAvailable" :available-total="newUpstreamModels.length" :available-open.sync="upstreamOpen" @add="addUpstreamModels([$event])" @add-all="addUpstreamModels(upstreamAvailable.map((item) => item.name))" @edit="openEditor" @remove="deleteModel" @check="quickCheck" @test="testModel" @toggle="toggleModel" @set-default="setDefault">
+                <template #empty>{{ providerDraft.models.length ? "没有匹配的模型" : providerHasKey ? "点击“发现模型”从服务商获取模型列表，或手动添加" : "填写 API Key 后可发现模型，也可以手动添加" }}</template>
+              </ModelTable>
             </section>
-            <SectionAction :dirty="providerDirty || modelsDirty" :saving="saving === 'provider'" :invalid="!providerDraft.name.trim()" :effect="providerSaveEffect" reset-label="撤销修改" @reset="resetProvider" @save="saveProvider" />
+            <SectionAction :dirty="providerDirty || modelsDirty" :saving="saving === 'provider'" :invalid="providerInvalid" :effect="providerSaveEffect" reset-label="撤销修改" @reset="resetProvider" @save="saveProviderWithCheck" />
           </main>
-          <main v-else class="provider-empty"><i class="el-icon-connection"></i><p>选择或添加一个 AI 服务商</p></main>
+          <main v-else class="provider-main"><ProviderStarter :presets="presets" :first="!providers.length" @pick="startProvider" @cancel="cancelStarter" /></main>
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="默认模型" name="default_models">
-        <section class="settings-section"><div class="section-title"><div><h2>默认任务模型</h2><p>只显示适合对应任务的已配置模型，以及所含模型全部适合该任务的路由组。</p></div></div>
+      <el-tab-pane label="默认与路由" name="routing">
+        <section class="settings-section routing-defaults"><div class="section-title"><div><h2>默认任务模型</h2><p>只显示适合对应任务的已启用模型，以及所含模型全部适合该任务的路由组。</p></div></div>
           <el-form label-position="top" class="default-grid"><el-form-item v-for="task in defaultTasks" :key="task.key" :label="task.label" :error="operationError(`default_models.${task.key}`)"><el-select :value="sectionDrafts.default_models[task.key]" clearable filterable placeholder="未配置" class="full-control" @change="setDefaultModel(task.key, $event)"><el-option-group label="模型"><el-option v-for="model in modelsForTask(task.key)" :key="model.fullName" :label="model.fullName" :value="model.fullName" /></el-option-group><el-option-group label="路由组"><el-option v-for="group in groupsForTask(task.key)" :key="group" :label="group" :value="group" /></el-option-group></el-select></el-form-item></el-form>
-        </section><SectionAction :dirty="isSectionDirty('default_models')" :saving="saving === 'default_models'" effect="保存后立即热加载" @reset="resetSection('default_models')" @save="saveSection('default_models')" />
-      </el-tab-pane>
-
-      <el-tab-pane label="模型路由" name="model_groups">
+        </section>
         <section class="settings-section route-section">
-          <div class="section-title"><div><h2>模型路由组</h2><p>按主模型和后备顺序尝试；模型与路由组引用会分别校验。</p></div><el-button size="small" icon="el-icon-plus" @click="addGroup">添加路由组</el-button></div>
+          <div class="section-title"><div><h2>模型路由组</h2><p>按主模型和后备顺序尝试；路由组可以作为默认模型或其他路由组的目标。</p></div><el-button size="small" icon="el-icon-plus" @click="addGroup">添加路由组</el-button></div>
           <div class="route-workbench">
             <aside class="route-sidebar">
               <el-input v-model="routeSearch" size="small" clearable prefix-icon="el-icon-search" placeholder="搜索路由组" />
@@ -156,9 +153,10 @@
               <el-button icon="el-icon-plus" class="add-route-target" @click="addTarget">添加后备目标</el-button>
               <el-alert v-if="routingIssues.length" type="error" :closable="false" show-icon class="route-issues"><div v-for="issue in routingIssues" :key="`${issue.code}-${issue.path}`">{{ issue.message }}</div></el-alert>
             </main>
-            <main v-else class="provider-empty"><i class="el-icon-guide"></i><p>添加或选择一个路由组</p></main>
+            <main v-else class="provider-empty"><i class="el-icon-guide"></i><p>多个模型互为后备时，可添加路由组</p></main>
           </div>
-        </section><SectionAction :dirty="isSectionDirty('model_groups')" :saving="saving === 'model_groups'" :invalid="sectionInvalid('model_groups') || hasGroupErrors" effect="保存后立即热加载" @reset="resetSection('model_groups')" @save="saveGroups" />
+        </section>
+        <SectionAction :dirty="routingDirty" :saving="saving === 'model_groups'" :invalid="hasGroupErrors" effect="默认模型与路由组一起保存，保存后立即热加载" @reset="resetRouting" @save="saveGroups" />
       </el-tab-pane>
 
       <el-tab-pane label="AI人设" name="persona">
@@ -190,20 +188,26 @@
         <StoreTemplate ref="chatStore" capability="ai_chat" embedded @session-expired="sessionExpired = true; aiEpoch += 1" />
       </el-tab-pane>
 
-      <el-tab-pane v-for="tab in schemaTabs" :key="tab.name" :label="tab.label" :name="tab.name">
-        <SettingsLayout v-model="settingsCategory[tab.name]" :query="settingsSearch[tab.name]" :groups="settingGroups[tab.name]" @search="settingsSearch[tab.name] = $event">
-          <section v-for="group in settingGroups[tab.name]" v-show="settingsSearch[tab.name].trim() ? group.count > 0 : settingsCategory[tab.name] === group.key" :key="group.key">
-            <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-tag :type="group.restart ? 'warning' : 'success'" size="mini">{{ group.restart ? "部分设置需重启" : "保存后热加载" }}</el-tag></header>
-            <div v-for="(field, index) in group.fields" v-show="settingMatches(tab.name, field)" :key="field.path">
-              <h4 v-if="field.section && (index === 0 || group.fields[index - 1].section !== field.section)" class="advanced-provider-heading">{{ field.section }}</h4>
-              <SchemaField presentation="settings" :value="settingValue(tab.name, field)" :schema="field.schema" :root-schema="schema" :label="field.label" :path="field.path" :ui="settingUi(tab.name, field)" :query="settingsSearch[tab.name]" :issues="settingIssues(tab.name)" @input="updateSetting(tab.name, field, $event)">
-                <template #meta><el-tag v-if="field.ui.restart" size="mini" type="warning" class="setting-restart">重启后生效</el-tag><span v-if="settingChanged(tab.name, field)" class="advanced-modified">未保存修改</span></template>
-              </SchemaField>
-            </div>
-            <p v-if="group.key === 'client_settings'" class="advanced-proxy-note">代理由统一网络策略管理。<el-button type="text" @click="$router.push('/network-proxy')">打开网络代理设置</el-button></p>
-          </section>
-          <template #footer><div class="save-description"><strong>{{ settingChangeCount(tab.name) ? settingChangeCount(tab.name) + " 项未保存修改" : "没有未保存的修改" }}</strong><span v-if="settingChangeCount(tab.name)">保存本页全部分类，{{ tab.effect }}</span></div><el-button :disabled="!isSectionDirty(tab.name) || Boolean(saving)" @click="resetSettings(tab.name)">撤销修改</el-button><el-button type="primary" :disabled="!isSectionDirty(tab.name)" :loading="saving === tab.name" @click="saveSettings(tab.name)">{{ tab.saveLabel }}</el-button></template>
-        </SettingsLayout>
+      <el-tab-pane label="运行设置" name="settings">
+        <el-radio-group v-model="settingsTab" size="small" class="settings-switch">
+          <el-radio-button v-for="tab in schemaTabs" :key="tab.name" :label="tab.name">{{ tab.label }}<i v-if="isSectionDirty(tab.name)" class="dirty-dot" title="有未保存修改"></i></el-radio-button>
+        </el-radio-group>
+        <div v-for="tab in schemaTabs" v-show="settingsTab === tab.name" :key="tab.name" :ref="`settings-${tab.name}`">
+          <SettingsLayout v-model="settingsCategory[tab.name]" :query="settingsSearch[tab.name]" :groups="settingGroups[tab.name]" @search="settingsSearch[tab.name] = $event">
+            <section v-for="group in settingGroups[tab.name]" v-show="settingsSearch[tab.name].trim() ? group.count > 0 : settingsCategory[tab.name] === group.key" :key="group.key">
+              <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-tag :type="group.restart ? 'warning' : 'success'" size="mini">{{ group.restart ? "部分设置需重启" : "保存后热加载" }}</el-tag></header>
+              <div v-for="(field, index) in group.fields" v-show="settingMatches(tab.name, field)" :key="field.path">
+                <h4 v-if="field.section && (index === 0 || group.fields[index - 1].section !== field.section)" class="advanced-provider-heading">{{ field.section }}</h4>
+                <SchemaField presentation="settings" :value="settingValue(tab.name, field)" :schema="field.schema" :root-schema="schema" :label="field.label" :path="field.path" :ui="settingUi(tab.name, field)" :query="settingsSearch[tab.name]" :issues="settingIssues(tab.name)" @input="updateSetting(tab.name, field, $event)">
+                  <template #meta><el-tag v-if="field.ui.restart" size="mini" type="warning" class="setting-restart">重启后生效</el-tag><span v-if="settingChanged(tab.name, field)" class="advanced-modified">未保存修改</span></template>
+                </SchemaField>
+              </div>
+              <p v-if="group.key === 'client_settings'" class="advanced-proxy-note">代理由统一网络策略管理。<el-button type="text" @click="$router.push('/network-proxy')">打开网络代理设置</el-button></p>
+              <p v-if="group.key === 'client_settings'" class="advanced-proxy-note">模型能力库：{{ catalogText }}<el-button type="text" icon="el-icon-refresh" :loading="catalogUpdating" @click="refreshCatalog">立即更新</el-button></p>
+            </section>
+            <template #footer><div class="save-description"><strong>{{ settingChangeCount(tab.name) ? settingChangeCount(tab.name) + " 项未保存修改" : "没有未保存的修改" }}</strong><span v-if="settingChangeCount(tab.name)">保存本页全部分类，{{ tab.effect }}</span></div><el-button :disabled="!isSectionDirty(tab.name) || Boolean(saving)" @click="resetSettings(tab.name)">撤销修改</el-button><el-button type="primary" :disabled="!isSectionDirty(tab.name)" :loading="saving === tab.name" @click="saveSettings(tab.name)">{{ tab.saveLabel }}</el-button></template>
+          </SettingsLayout>
+        </div>
       </el-tab-pane>
     </el-tabs>
     </template>
@@ -215,16 +219,8 @@
       <span slot="footer"><el-button @click="repairVisible = false">取消</el-button><el-button type="primary" :loading="saving === 'repair'" :disabled="!(repairPreview.changes || []).length || Boolean(saving)" @click="applyRepair">确认修复</el-button></span>
     </el-dialog>
 
-    <el-dialog :title="modelEditIndex == null ? '添加模型' : '编辑模型'" :visible.sync="modelDialog" width="min(620px, 92vw)" append-to-body>
-      <el-form label-position="top" class="model-form"><el-form-item label="模型名称"><el-input v-model="modelDraft.model_name" /></el-form-item><el-form-item label="启用"><el-switch v-model="modelDraft.is_available" /></el-form-item><el-form-item label="任务类型"><el-select v-model="modelDraft.task_type" clearable class="full-control"><el-option label="自动识别" :value="null" /><el-option label="图像生成" value="image_generation" /><el-option label="Embedding" value="embedding" /><el-option label="Rerank" value="rerank" /><el-option label="TTS" value="tts" /></el-select></el-form-item><el-form-item label="最大输入 Token"><el-input-number v-model="modelDraft.max_input_tokens" :min="1" controls-position="right" class="full-control" /></el-form-item><el-form-item label="最大输出 Token"><el-input-number v-model="modelDraft.max_output_tokens" :min="1" controls-position="right" class="full-control" /></el-form-item><el-form-item label="推理强度"><el-select v-model="modelDraft.reasoning_effort" clearable class="full-control"><el-option v-for="item in ['none','low','medium','high','xhigh']" :key="item" :label="item" :value="item" /></el-select></el-form-item></el-form>
-      <span slot="footer"><el-button icon="el-icon-close" @click="modelDialog = false">取消</el-button><el-button type="primary" icon="el-icon-check" @click="confirmModel">确定</el-button></span>
-    </el-dialog>
+    <ModelEditor :visible.sync="editorVisible" :model="editorModel" :names="editorNames" :protocols="protocols" :can-check="!testingModelKey && Boolean(providerDraft && (providerDraft.name.trim() || selectedProviderName))" :checker="requestModelCheck" :presets="presets" :connection="editorConnection" @save="saveEditedModel" />
 
-    <el-dialog title="发现模型" :visible.sync="discoveryDialog" width="min(680px, 92vw)" append-to-body>
-      <el-input v-model="discoverySearch" clearable prefix-icon="el-icon-search" placeholder="筛选远端模型" />
-      <el-checkbox-group v-model="selectedDiscovered" class="discovery-list"><el-checkbox v-for="name in filteredDiscovered" :key="name" :label="name">{{ name }}</el-checkbox></el-checkbox-group>
-      <span slot="footer"><span class="dialog-note">发现 {{ discoveredModels.length }} 个模型</span><el-button icon="el-icon-close" @click="discoveryDialog = false">取消</el-button><el-button type="primary" icon="el-icon-plus" :disabled="!selectedDiscovered.length" @click="addDiscoveredModels">添加到模型列表</el-button></span>
-    </el-dialog>
   </div>
 </template>
 
@@ -239,13 +235,15 @@ import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 import { localLogin } from "@/utils/local-login"
 import { removeRoutingGroup, routingGroupsForModels } from "@/utils/ai-routing"
+import { CHECK_STATES, DEFAULT_CHECK_ITEMS, PROTOCOL_LABELS, PROTOCOL_SHORT, TASK_LABELS, briefDetail, checkState, checkSummary, clone, formatTokens, jsonError, jsonText, modelProfile, modelTask, parseJsonObject, uid } from "@/utils/ai-models"
+import ModelEditor from "./ModelEditor.vue"
+import ModelTable from "./ModelTable.vue"
+import ProviderLogo from "./ProviderLogo.vue"
+import ProviderStarter from "./ProviderStarter.vue"
 
-const clone = (value) => JSON.parse(JSON.stringify(value ?? null))
-const uid = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`
-const emptyModel = () => ({ model_name: "", is_available: true, temperature: null, max_output_tokens: null, api_type: null, endpoint: null, task_type: null, path_prefix: null, max_input_tokens: null, reasoning_effort: null })
-
-const TASK_TYPES = { embedding: ["embedding"], rerank: ["rerank"], image: ["image_generation"], tts: ["tts"] }
-const SECTION_KEYS = { context: "context_settings", agent: "agent_settings", sandbox: "sandbox" }
+const SECTION_KEYS = { context: "context_settings", agent: "agent_settings", sandbox: "sandbox", web_search: "web_search" }
+const CONNECTION_ERRORS = ["providers.name", "providers.protocol", "providers.base_url", "providers.timeout", "api_key"]
+const hostOf = (url) => { try { return new URL(url).host } catch (_) { return url || "" } }
 
 const SectionAction = {
   props: { dirty: Boolean, saving: Boolean, invalid: Boolean, effect: String, invalidText: { type: String, default: "请先修正表单错误" }, resetLabel: { type: String, default: "撤销本区修改" } },
@@ -260,19 +258,22 @@ const SectionAction = {
 
 export default {
   name: "AIConfiguration",
-  components: { SchemaField, SettingsLayout, StoreTemplate, SectionAction },
+  components: { ModelEditor, ModelTable, ProviderLogo, ProviderStarter, SchemaField, SettingsLayout, StoreTemplate, SectionAction },
   data() {
     return {
-      settingsCategory: { context: "llm_summary", agent: "loop", sandbox: "runtime", advanced: "client_settings" }, settingsSearch: { context: "", agent: "", sandbox: "", advanced: "" }, settingsLocalIssues: {}, repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
-      loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, apiTypes: [], defaultApiBases: {}, discoveryApiTypes: [], providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
-      providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, sandbox: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
-      discovering: false, discoveryDialog: false, discoveredModels: [], selectedDiscovered: [], discoverySearch: "", providerProbeResults: {}, modelDialog: false, modelDraft: emptyModel(), modelEditIndex: null, testingModelKey: "",
+      settingsCategory: { context: "llm_summary", agent: "loop", sandbox: "runtime", web_search: "search", advanced: "client_settings" }, settingsSearch: { context: "", agent: "", sandbox: "", web_search: "", advanced: "" }, settingsLocalIssues: {}, repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
+      loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, presets: {}, protocols: [], providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
+      providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, sandbox: {}, web_search: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
+      discovering: false, upstreamOpen: false, catalog: {}, catalogUpdating: false, providerProbeResults: {}, testingModelKey: "", batchChecking: false,
+      connectionOpen: false, editorVisible: false, editorModel: null, editorIndex: null, settingsTab: "context",
       personaLoading: false, personaSaving: false, personaAvailable: null, personaError: "", personaRevision: "", personaDraft: { name: "", prompt: "", style: "", enabled: true }, personaOriginal: null, personaToneText: "", personaDialogueText: "", personaDirty: false,
-      defaultTasks: [{ key: "chat", label: "对话" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
+      taskLabels: TASK_LABELS,
+      defaultTasks: [{ key: "chat", label: "对话" }, { key: "vision", label: "视觉（对话模型不支持图片时转述图片）" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
       schemaTabs: [
         { name: "context", label: "上下文", saveLabel: "保存上下文设置", effect: "保存后立即热加载" },
         { name: "agent", label: "Agent", saveLabel: "保存 Agent 设置", effect: "保存后立即热加载" },
         { name: "sandbox", label: "沙箱", saveLabel: "保存沙箱设置", effect: "部分设置在新会话或重启后生效" },
+        { name: "web_search", label: "联网搜索", saveLabel: "保存联网搜索设置", effect: "保存后立即热加载" },
         { name: "advanced", label: "高级设置", saveLabel: "保存高级设置", effect: "保存后立即热加载" },
       ],
     }
@@ -285,20 +286,68 @@ export default {
     sectionOptions() {
       return [
         { name: "providers", label: "服务商与模型" },
-        { name: "default_models", label: "默认模型" },
-        { name: "model_groups", label: "模型路由" },
+        { name: "routing", label: "默认与路由" },
         { name: "persona", label: "AI人设" },
         { name: "chat_plugins", label: "AI聊天" },
-        ...this.schemaTabs.map(({ name, label }) => ({ name, label })),
+        { name: "settings", label: "运行设置" },
       ]
     },
+    /**
+     * 模型编辑器所属服务商的连接信息，用于判断内置工具是否自动发送
+     * @returns {{ base_url: string, protocol: string, official: string|null }} 接口地址、协议与官方厂商
+     */
+    editorConnection() {
+      const draft = this.providerDraft || {}
+      const saved = this.savedProvider
+      return { base_url: draft.base_url || "", protocol: draft.protocol || "", preset: draft.preset || null, official: saved && saved.base_url === draft.base_url ? saved.official || null : null }
+    },
+    routingDirty() { return this.isSectionDirty("default_models") || this.isSectionDirty("model_groups") },
+    savedProvider() { return this.providers.find((item) => item.name === this.selectedProviderName) || null },
+    /**
+     * 已保存且启用的模型名称，只有这些模型可以直接设为默认
+     * @returns {string[]} 模型名称
+     */
+    savedModelNames() { return this.providerDraft?.isNew ? [] : (this.savedProvider?.models || []).filter((model) => model.enabled !== false).map((model) => model.name) },
+    testingModelName() { return (this.providerDraft?.models || []).find((model) => this.modelTestKey(model) === this.testingModelKey)?.name || "" },
+    editorNames() { return (this.providerDraft?.models || []).filter((_, index) => index !== this.editorIndex).map((model) => model.name) },
+    /**
+     * 收起连接设置时显示的一行摘要：厂商或协议、接口地址与密钥数量
+     * @returns {string} 摘要文本
+     */
+    connectionSummary() {
+      const draft = this.providerDraft
+      const keys = draft.api_key_slots.filter((slot) => String(slot.value || "").trim()).length
+      const base = draft.base_url || this.presetBaseUrl(draft.preset, draft.protocol)
+      return [this.presets[draft.preset]?.label || "自定义", this.protocolLabel(draft.protocol), hostOf(base) || "未填写接口地址", keys ? `${keys} 个密钥` : "未填写密钥"].join(" · ")
+    },
+    connectionError() { return CONNECTION_ERRORS.some((path) => this.operationError(path)) },
     dirtyCount() { return Number(this.providerDirty) + Number(this.modelsDirty) + Number(this.personaDirty) + Object.values(this.dirtySections).filter(Boolean).length },
-    filteredProviders() { const key = this.providerSearch.trim().toLowerCase(); return this.providers.filter((item) => `${item.name} ${item.api_type}`.toLowerCase().includes(key)) },
-    filteredModels() { const key = this.modelSearch.trim().toLowerCase(); return (this.providerDraft?.models || []).filter((item) => item.model_name.toLowerCase().includes(key)) },
-    allModels() { return this.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.name, fullName: `${provider.name}/${model.model_name}` }))) },
+    filteredProviders() { const key = this.providerSearch.trim().toLowerCase(); return this.providers.filter((item) => `${item.name} ${item.preset || ""} ${item.protocol}`.toLowerCase().includes(key)) },
+    filteredModels() { const key = this.modelSearch.trim().toLowerCase(); return (this.providerDraft?.models || []).filter((item) => item.name.toLowerCase().includes(key)) },
+    allModels() { return this.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.name, fullName: `${provider.name}/${model.name}` }))) },
     filteredRouteGroups() { const key = this.routeSearch.trim().toLowerCase(); return this.groupRows.filter((item) => !key || item.name.toLowerCase().includes(key)) },
     selectedRouteGroup() { return this.groupRows.find((item) => item.clientId === this.selectedRouteGroupId) || null },
-    filteredDiscovered() { const key = this.discoverySearch.trim().toLowerCase(); return this.discoveredModels.filter((item) => item.toLowerCase().includes(key)) },
+    upstreamModels() { const profiles = this.providerDraft?.discovery?.profiles; return profiles ? Object.keys(profiles).sort() : null },
+    newUpstreamModels() { const upstream = this.upstreamModels || []; return upstream.filter((name) => !this.isConfiguredModel(name)) },
+    /**
+     * 上游有但尚未添加的模型，按模型搜索框过滤，并附上能力提示
+     * @returns {{ name: string, hint: string }[]} 模型
+     */
+    upstreamAvailable() {
+      const key = this.modelSearch.trim().toLowerCase()
+      return this.newUpstreamModels.filter((name) => name.toLowerCase().includes(key)).map((name) => ({ name, hint: this.discoveredHint(name) }))
+    },
+    keyUrl() { return this.presets[this.providerDraft?.preset]?.key_url || "" },
+    missingModelCount() { return (this.providerDraft?.models || []).filter((model) => this.missingUpstream(model)).length },
+    /**
+     * 尚未核验或跳过核验的已启用对话模型
+     * @returns {object[]} 模型配置
+     */
+    uncheckedModels() { return (this.providerDraft?.models || []).filter((model) => model.enabled !== false && this.modelTask(model) === "chat" && this.checkState(model) !== CHECK_STATES.checked) },
+    catalogText() {
+      if (!this.catalog.updated_at) return "尚未下载，配置服务商后会在后台自动下载"
+      return `${this.catalog.count} 个模型，${this.formatTime(this.catalog.updated_at)} 更新，每 7 天自动更新`
+    },
     /**
      * 上下文、Agent、沙箱与高级设置各分区的设置分组，按依赖开关隐藏不可用的字段
      * @returns {Object<string, object[]>} 分区名称到设置分组的映射
@@ -325,23 +374,23 @@ export default {
       if (this.modelsDirty) return "模型列表有未保存修改，保存后热加载"
       return this.providerDirty ? "服务商参数有未保存修改，保存后热加载" : "保存后立即热加载"
     },
-    providerDiscoverySupported() { return Boolean(this.providerDraft && this.discoveryApiTypes.includes(this.providerDraft.api_type)) },
+    providerInvalid() { return !this.providerDraft?.name.trim() || Boolean(this.jsonError(this.providerDraft.paramsText) || this.jsonError(this.providerDraft.headersText)) },
     providerDraftStatus() {
       if (!this.providerDraft) return { code: "unavailable", label: "状态待确认", type: "info", reason: "请先选择服务商" }
-      if (!this.providerDiscoverySupported) return { code: "manual_only", label: "仅手动添加", type: "info", reason: "该 API 类型不支持安全的模型自动发现，请手动添加模型" }
+      const draft = this.providerDraft
       const original = this.providers.find((item) => item.name === this.selectedProviderName)
-      const draftBase = String(this.providerDraft.api_base || this.defaultApiBases[this.providerDraft.api_type] || "").replace(/\/$/, "")
-      const originalBase = String(original?.api_base || this.defaultApiBases[original?.api_type] || "").replace(/\/$/, "")
+      const draftBase = String(draft.base_url || this.presetBaseUrl(draft.preset, draft.protocol)).trim().replace(/\/$/, "")
+      const originalBase = String(original?.base_url || "").replace(/\/$/, "")
       const temporaryKey = Boolean(this.temporaryKey)
-      if (original && !temporaryKey && (original.api_type !== this.providerDraft.api_type || originalBase !== draftBase)) return { code: "scope_changed", label: "凭据范围已变化", type: "warning", reason: "修改 API 类型或地址后，请填写临时 API Key 再测试" }
-      if (!draftBase) return { code: "missing_base", label: "缺少 API 地址", type: "warning", reason: "请先填写 API 地址" }
-      const hasSavedKey = this.providerDraft.api_key_slots.some((slot) => (original?.api_key || []).includes(String(slot.value || "").trim()))
+      if (original && !temporaryKey && (original.protocol !== draft.protocol || originalBase !== draftBase)) return { code: "scope_changed", label: "凭据范围已变化", type: "warning", reason: "修改协议或地址后，请填写临时 API Key 再测试" }
+      if (!draftBase) return { code: "missing_base", label: "缺少接口地址", type: "warning", reason: "请先填写接口地址" }
+      const hasSavedKey = draft.api_key_slots.some((slot) => (original?.api_keys || []).includes(String(slot.value || "").trim()))
       if (!temporaryKey && !hasSavedKey) return { code: "missing_credentials", label: "缺少有效凭据", type: "warning", reason: "请先填写有效 API Key" }
       return { code: "ready", label: "可自动发现", type: "success", reason: "" }
     },
     temporaryKey() {
       if (!this.providerDraft) return null
-      const saved = this.providerDraft.isNew ? [] : this.providers.find((item) => item.name === this.selectedProviderName)?.api_key || []
+      const saved = this.providerDraft.isNew ? [] : this.providers.find((item) => item.name === this.selectedProviderName)?.api_keys || []
       return this.providerDraft.api_key_slots.map((slot) => String(slot.value || "").trim()).find((value) => value && !saved.includes(value)) || null
     },
     selectedProbeResult() { return this.providerProbeResults[this.selectedProviderName || "__new__"] || null },
@@ -352,6 +401,7 @@ export default {
     hasGroupErrors() { return this.groupNameErrors.some(Boolean) || this.groupRows.some((group) => Boolean(this.groupIssue(group))) },
   },
   watch: {
+    connectionError(value) { if (value) this.connectionOpen = true },
     activeSection(value) {
       const chatStore = this.$refs.chatStore
       if (value === "chat_plugins" && chatStore) chatStore.loadChatSwitches().catch(error => { if (error.response?.status === 401) this.sessionExpired = true })
@@ -419,7 +469,7 @@ export default {
     },
     applyConfiguration(data, preferredName = "") {
       this.settingsLocalIssues = {}
-      this.revision = data.revision; this.schema = data.schema || {}; this.apiTypes = data.api_types || []; this.defaultApiBases = data.default_api_bases || {}; this.discoveryApiTypes = data.discovery_api_types || []; this.providers = clone(data.providers || []); this.validationIssues = data.validation_issues || []; this.operationIssues = []
+      this.revision = data.revision; this.schema = data.schema || {}; this.presets = data.presets || {}; this.protocols = data.protocols || []; this.providers = clone(data.providers || []); this.validationIssues = data.validation_issues || []; this.operationIssues = []; this.catalog = data.catalog || {}
       this.originalSections = clone(data.sections || {}); this.sectionDrafts = clone(data.sections || {}); this.dirtySections = {}; this.invalidSections = {}; this.groupRows = this.groupsToRows(this.sectionDrafts.model_groups); this.selectedRouteGroupId = this.groupRows.some((item) => item.clientId === this.selectedRouteGroupId) ? this.selectedRouteGroupId : this.groupRows[0]?.clientId || ""; this.routingIssues = []
       const target = preferredName || this.selectedProviderName; this.selectedProviderName = this.providers.some((item) => item.name === target) ? target : this.providers[0]?.name || ""
       this.resetProviderDraft(); this.providerDirty = false; this.modelsDirty = false; this.syncDirty()
@@ -427,9 +477,10 @@ export default {
     resetProviderDraft() {
       const provider = this.providers.find((item) => item.name === this.selectedProviderName)
       if (!provider) { this.providerDraft = null; return }
-      const slots = (provider.api_key || []).map((value) => ({ value, clientId: uid() }))
+      this.connectionOpen = !(provider.api_keys || []).length
+      const slots = (provider.api_keys || []).map((value) => ({ value, clientId: uid() }))
       if (!slots.length) slots.push({ value: "", clientId: uid() })
-      this.providerDraft = { ...clone(provider), api_key_slots: slots, isNew: false }
+      this.providerDraft = { ...clone(provider), api_key_slots: slots, paramsText: jsonText(provider.params), headersText: jsonText(provider.headers), isNew: false }
     },
     applySavedConfiguration(data, preferredName, submitted) {
       const draft = clone(this.providerDraft)
@@ -468,16 +519,52 @@ export default {
     },
     async selectProvider(name) { if (this.saving) return; if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = name; this.providerDirty = false; this.modelsDirty = false; this.resetProviderDraft(); this.syncDirty() },
     async confirmDiscard() { try { await this.$confirm("当前 AI 配置有尚未保存的修改。", "放弃修改？", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑", type: "warning" }); return true } catch (_) { return false } },
-    async createProvider() { if (this.saving) return; if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = ""; this.providerDraft = { name: "", api_type: "openai", api_base: "", timeout: 180, temperature: null, max_output_tokens: null, api_key_slots: [{ value: "", clientId: uid() }], models: [], isNew: true }; this.providerDirty = true; this.modelsDirty = false; this.syncDirty() },
+    async createProvider() { if (this.saving) return; if ((this.providerDirty || this.modelsDirty) && !(await this.confirmDiscard())) return; this.selectedProviderName = ""; this.providerDraft = null; this.providerDirty = false; this.modelsDirty = false; this.syncDirty() },
+    /**
+     * 按所选厂商预设新建服务商草稿，自动填写名称、协议与地址
+     * @param {string|null} key 厂商预设，为空时为自定义服务商
+     */
+    startProvider(key) {
+      const preset = this.presets[key]
+      const label = preset?.label || "自定义服务商"
+      let name = label
+      for (let index = 2; this.providers.some((item) => item.name === name); index += 1) name = `${label} ${index}`
+      const protocol = preset?.protocol || "openai_chat"
+      this.providerDraft = { name, preset: key || null, protocol, base_url: this.presetBaseUrl(key, protocol), timeout: 120, paramsText: "", headersText: "", api_key_slots: [{ value: "", clientId: uid() }], models: [], isNew: true }
+      this.connectionOpen = true; this.providerDirty = true; this.modelsDirty = false; this.syncDirty()
+      this.$nextTick(() => this.$el.querySelector(key ? ".secret-row input" : ".provider-form input")?.focus())
+    },
+    cancelStarter() { this.selectedProviderName = this.providers[0]?.name || ""; this.resetProviderDraft() },
     invalidateProbeResults() {
       const key = this.selectedProviderName || "__new__"
       if (this.providerProbeResults[key]) this.$delete(this.providerProbeResults, key)
     },
     markProviderDirty() { this.providerDirty = true; this.invalidateProbeResults(); this.syncDirty() },
-    handleApiTypeChange(value) { if (!this.providerDraft.api_base && this.defaultApiBases[value]) this.providerDraft.api_base = this.defaultApiBases[value]; this.markProviderDirty() },
+    presetBaseUrl(preset, protocol) { return this.presets[preset]?.base_urls?.[protocol] || "" },
+    protocolLabel(protocol) { return PROTOCOL_LABELS[protocol] || protocol || "未设置协议" },
+    providerKind(provider) { return this.presets[provider.preset]?.label || this.protocolLabel(provider.protocol) },
+    jsonError,
+    modelTask,
+    checkState,
+    /**
+     * 切换厂商预设或协议；地址为空或仍是原预设默认地址时随之切换
+     * @param {object} changes 变更的 preset / protocol
+     */
+    setProviderScope(changes) {
+      const draft = this.providerDraft
+      const previousBase = this.presetBaseUrl(draft.preset, draft.protocol)
+      Object.assign(draft, changes)
+      const preset = this.presets[draft.preset]
+      if ("preset" in changes && preset && !preset.base_urls[draft.protocol]) draft.protocol = preset.protocol
+      if (!String(draft.base_url || "").trim() || draft.base_url === previousBase) draft.base_url = this.presetBaseUrl(draft.preset, draft.protocol)
+      this.markProviderDirty()
+    },
     addKey() { this.providerDraft.api_key_slots.push({ value: "", clientId: uid() }); this.markProviderDirty() },
     removeKey(index) { this.providerDraft.api_key_slots.splice(index, 1); this.markProviderDirty() },
-    providerPayload({ includeModels = false } = {}) { return { expected_revision: this.revision, name: this.providerDraft.name.trim(), api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base?.trim() || null, timeout: this.providerDraft.timeout, temperature: this.providerDraft.temperature, max_output_tokens: this.providerDraft.max_output_tokens, api_keys: this.providerDraft.api_key_slots.map((slot) => String(slot.value || "").trim()).filter(Boolean), models: this.providerDraft.isNew || includeModels ? this.providerDraft.models.map(({ capabilities, capability_source, ...model }) => model) : null } },
+    providerPayload({ includeModels = false } = {}) {
+      const draft = this.providerDraft
+      return { expected_revision: this.revision, name: draft.name.trim(), preset: draft.preset || null, protocol: draft.protocol, base_url: String(draft.base_url || "").trim() || null, timeout: draft.timeout, headers: parseJsonObject(draft.headersText), params: parseJsonObject(draft.paramsText), api_keys: draft.api_key_slots.map((slot) => String(slot.value || "").trim()).filter(Boolean), models: draft.isNew || includeModels ? draft.models.map(({ resolved_profile, check, ...model }) => model) : null }
+    },
     /**
      * 一次保存服务商参数、密钥与模型列表；模型列表未修改时不提交模型
      * @returns {Promise<boolean>} 是否保存成功
@@ -516,10 +603,11 @@ export default {
       this.discovering = true
       const resultKey = this.selectedProviderName || "__new__"
       try {
-        const response = await this.aiPost(`${this.$root.prefix}/ai/providers/discover`, { expected_revision: this.revision, provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, api_type: this.providerDraft.api_type, api_base: this.providerDraft.api_base, api_key: this.temporaryKey }, { suppressErrorToast: true })
+        const response = await this.aiPost(`${this.$root.prefix}/ai/providers/discover`, { expected_revision: this.revision, provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, preset: this.providerDraft.preset || null, protocol: this.providerDraft.protocol, base_url: String(this.providerDraft.base_url || "").trim() || null, api_key: this.temporaryKey }, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
-        this.$set(this.providerProbeResults, resultKey, { success: true, message: `连接成功，发现 ${response.data.models?.length || 0} 个模型，耗时 ${response.data.latency_ms || 0} ms。` })
-        this.discoveredModels = response.data.models || []; this.selectedDiscovered = []; this.discoveryDialog = true
+        this.$set(this.providerDraft, "discovery", { updated_at: Date.now() / 1000, profiles: response.data.profiles || {} })
+        this.upstreamOpen = true
+        this.$set(this.providerProbeResults, resultKey, { success: true, message: `连接成功，发现 ${response.data.models?.length || 0} 个模型，其中 ${this.newUpstreamModels.length} 个未添加，耗时 ${response.data.latency_ms || 0} ms。` })
       } catch (error) {
         const message = apiErrorDetail(error, "服务商连接测试失败。")
         this.operationIssues = apiErrorIssues(error)
@@ -532,66 +620,200 @@ export default {
       if (probe) return probe.success ? { label: "最近验证成功", type: "success" } : { label: "最近验证失败", type: "danger" }
       const states = {
         ready: { label: "可自动发现", type: "success" },
-        manual_only: { label: "仅手动添加", type: "info" },
         missing_credentials: { label: "缺少有效凭据", type: "warning" },
-        missing_base: { label: "缺少 API 地址", type: "warning" },
+        missing_base: { label: "缺少接口地址", type: "warning" },
       }
       return states[provider.discovery_status] || { label: "状态待确认", type: "info" }
     },
-    addDiscoveredModels() {
-      const exists = new Set(this.providerDraft.models.map((item) => item.model_name))
-      let added = 0
-      this.selectedDiscovered.forEach((name) => {
-        if (!exists.has(name)) {
-          this.providerDraft.models.push({ ...emptyModel(), model_name: name })
-          exists.add(name); added += 1
-        }
-      })
-      this.modelsDirty = this.modelsDirty || added > 0
-      this.syncDirty()
-      this.discoveryDialog = false
-      this.selectedDiscovered = []
-      this.$message.success(added ? `已添加 ${added} 个模型，保存后生效。` : "所选模型已在列表中。")
-    },
-    openModelEditor(model = null, index = null) { this.modelDraft = model ? { ...clone(model), capabilities: undefined, capability_source: undefined } : emptyModel(); this.modelEditIndex = index; this.modelDialog = true },
-    confirmModel() { const name = this.modelDraft.model_name.trim(); if (!name) return this.$message.warning("请填写模型名称。"); if (this.providerDraft.models.some((item, index) => item.model_name === name && index !== this.modelEditIndex)) return this.$message.warning("该服务商下已有同名模型。"); const value = { ...this.modelDraft, model_name: name }; delete value.capabilities; delete value.capability_source; if (this.modelEditIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.modelEditIndex, 1, value); this.modelsDirty = true; this.invalidateProbeResults(); this.modelDialog = false; this.syncDirty() },
-    modelIndex(model) { return this.providerDraft.models.findIndex((item) => item === model || item.model_name === model.model_name) },
-    modelTestKey(model) { return `${this.providerDraft?.name || this.selectedProviderName}/${model.model_name}` },
-    deleteModel(model) { const actual = this.modelIndex(model); if (actual < 0) return; this.providerDraft.models.splice(actual, 1); this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty() },
     /**
-     * 获取已收录模型的能力；未收录的模型只有宽松的默认能力，不用于判断任务类型
-     * @param {object} model 模型视图
-     * @returns {object} 已收录时为模型能力，否则为空对象
+     * 把上游模型加入模型列表，保存后生效
+     * @param {string[]} names 模型名称
      */
-    knownCapabilities(model) { return model.capability_source === "registry" ? model.capabilities || {} : {} },
-    capabilityTags(model) { const caps = this.knownCapabilities(model); const result = []; if (caps.is_embedding_model || model.task_type === "embedding") result.push("Embedding"); if (caps.is_rerank_model || model.task_type === "rerank") result.push("Rerank"); if ((caps.output_modalities || []).includes("image") || model.task_type === "image_generation") result.push("图像"); if ((caps.output_modalities || []).includes("audio") || model.task_type === "tts") result.push("语音"); if (caps.supports_tool_calling) result.push("工具"); if (model.capability_source === "default" && !model.task_type) result.push("能力未收录"); return result.slice(0, 3) },
-    modelTask(model) { const caps = this.knownCapabilities(model); if (caps.is_embedding_model || model.task_type === "embedding") return "embedding"; if (caps.is_rerank_model || model.task_type === "rerank") return "rerank"; if ((caps.output_modalities || []).includes("image") || model.task_type === "image_generation") return "image"; if ((caps.output_modalities || []).includes("audio") || model.task_type === "tts") return "tts"; return "chat" },
+    addUpstreamModels(names) {
+      const added = names.filter((name) => !this.isConfiguredModel(name))
+      added.forEach((name) => this.providerDraft.models.push({ name, enabled: true, protocol: null, base_url: null, profile: {}, params: {} }))
+      if (!added.length) return
+      this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty()
+      this.$message.success(added.length === 1 ? `已添加 ${added[0]}，保存后生效。` : `已添加 ${added.length} 个模型，保存后生效。`)
+    },
+    modelIndex(model) { return this.providerDraft.models.findIndex((item) => item === model || item.name === model.name) },
+    modelTestKey(model) { return `${this.providerDraft?.name || this.selectedProviderName}/${model.name}` },
+    deleteModel(model) { const actual = this.modelIndex(model); if (actual < 0) return; this.providerDraft.models.splice(actual, 1); this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty() },
+    isConfiguredModel(name) { return (this.providerDraft?.models || []).some((model) => model.name === name) },
+    missingUpstream(model) { const upstream = this.upstreamModels; return Boolean(upstream) && !model.protocol && !model.base_url && !upstream.includes(model.name) },
+    formatTime(seconds) { return seconds ? new Date(seconds * 1000).toLocaleString() : "" },
+    async refreshCatalog() {
+      this.catalogUpdating = true
+      try {
+        const response = await this.aiPost(`${this.$root.prefix}/ai/catalog/refresh`, {}, { suppressErrorToast: true })
+        if (!response.suc) throw new Error(response.info)
+        this.catalog = response.data || {}
+        this.$message.success(`能力库已更新，共 ${this.catalog.count} 个模型。`)
+        await this.loadConfiguration()
+      } catch (error) { this.$message.error(apiErrorDetail(error, "能力库更新失败。")) }
+      finally { this.catalogUpdating = false }
+    },
+    discoveredHint(name) {
+      const profile = this.providerDraft?.discovery?.profiles?.[name]
+      if (!profile) return ""
+      const parts = [profile.tasks.map((item) => TASK_LABELS[item] || item).join("、")]
+      if (profile.input_modalities.some((item) => item !== "text")) parts.push("多模态")
+      if (profile.reasoning) parts.push("推理")
+      parts.push(profile.catalog ? `${formatTokens(profile.context_window)} 上下文` : "能力库未收录")
+      if (profile.protocols) parts.push(profile.protocols.map((item) => PROTOCOL_SHORT[item] || item).join("/"))
+      return parts.join(" · ")
+    },
     async testModel(model) {
       const task = this.modelTask(model)
       const providerName = this.providerDraft.name.trim() || this.selectedProviderName
       if (!providerName) return this.$message.warning("请先填写服务商名称。")
-      const testKey = `${providerName}/${model.model_name}`
+      const testKey = `${providerName}/${model.name}`
       if (this.testingModelKey) return
       this.testingModelKey = testKey
-      try { await this.$confirm(`将对 ${providerName}/${model.model_name} 发起一次最小 ${task} 请求，可能产生费用。`, "确认模型测试", { type: "warning" }) } catch (_) { this.testingModelKey = ""; return }
+      try { await this.$confirm(`将对 ${providerName}/${model.name} 发起一次最小 ${TASK_LABELS[task] || task} 请求，可能产生费用。`, "确认模型测试", { type: "warning" }) } catch (_) { this.testingModelKey = ""; return }
       try {
-        const { capabilities, ...modelConfig } = model
-        const response = await this.aiPost(`${this.$root.prefix}/ai/models/test`, {
-          expected_revision: this.revision,
-          model: `${providerName}/${model.model_name}`,
-          provider_name: providerName,
-          saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName,
-          api_type: this.providerDraft.api_type,
-          api_base: this.providerDraft.api_base,
-          api_key: this.temporaryKey,
-          timeout: this.providerDraft.timeout,
-          model_config: modelConfig,
-          task,
-          confirmed_paid_request: true,
-        }, { suppressErrorToast: true })
+        const response = await this.aiPost(`${this.$root.prefix}/ai/models/test`, this.modelRequestPayload(model, task), { suppressErrorToast: true })
         this.$message.success(`连接成功，延迟 ${response.data.latency_ms} ms`)
       } catch (error) { this.$message.error(apiErrorDetail(error, "模型测试失败。")) }
       finally { if (this.testingModelKey === testKey) this.testingModelKey = "" }
+    },
+    /**
+     * 按当前服务商草稿构造模型测试与核验的请求体
+     * @param {object} model 模型配置
+     * @param {string} task 任务类型
+     * @returns {object} 请求体
+     */
+    modelRequestPayload(model, task) {
+      const providerName = this.providerDraft.name.trim() || this.selectedProviderName
+      const { resolved_profile, check, ...modelConfig } = model
+      return {
+        expected_revision: this.revision,
+        model: `${providerName}/${model.name}`,
+        provider_name: providerName,
+        saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName,
+        preset: this.providerDraft.preset || null,
+        protocol: this.providerDraft.protocol,
+        base_url: String(this.providerDraft.base_url || "").trim() || null,
+        api_key: this.temporaryKey,
+        timeout: this.providerDraft.timeout,
+        model_config: modelConfig,
+        task,
+        confirmed_paid_request: true,
+      }
+    },
+    /**
+     * 核验模型能力，并把核验状态与能力档案写回草稿与已保存配置中的同名模型
+     * @param {object} model 模型配置，可以是编辑中尚未写回列表的配置
+     * @param {string[]} items 核验项目
+     * @returns {Promise<object>} 后端返回的核验结果
+     */
+    async requestModelCheck(model, items) {
+      const testKey = this.modelTestKey(model)
+      this.testingModelKey = testKey
+      try {
+        const response = await this.aiPost(`${this.$root.prefix}/ai/models/check`, { ...this.modelRequestPayload(model, "chat"), items }, { suppressErrorToast: true })
+        if (!response.suc) throw new Error(response.info)
+        const { check, resolved_profile } = response.data
+        const targets = [this.providerDraft?.models, this.savedProvider?.models].map((models) => (models || []).find((item) => item.name === model.name))
+        targets.filter(Boolean).forEach((item) => { this.$set(item, "check", check); this.$set(item, "resolved_profile", resolved_profile) })
+        return response.data
+      } finally { if (this.testingModelKey === testKey) this.testingModelKey = "" }
+    },
+    /**
+     * 按默认项目逐个核验模型，结束后汇总失败的模型
+     * @param {object[]} models 模型配置
+     */
+    async checkModels(models) {
+      if (!models.length || this.testingModelKey) return
+      const failed = []
+      this.batchChecking = true
+      try {
+        for (const model of models) {
+          try { await this.requestModelCheck(model, DEFAULT_CHECK_ITEMS) } catch (error) { failed.push(`${model.name}：${apiErrorDetail(error, "核验失败")}`) }
+        }
+      } finally { this.batchChecking = false }
+      if (failed.length) this.$message.error({ message: `${failed.length} 个模型核验失败，可稍后重试。${failed.join("；")}`, duration: 8000 })
+      else this.$message.success(`已核验 ${models.length} 个模型。`)
+    },
+    async checkUncheckedModels() {
+      const models = [...this.uncheckedModels]
+      try { await this.$confirm(`将按默认项目核验 ${models.length} 个对话模型，每个模型发起数次小请求，可能产生费用。`, "核验未核验模型", { type: "warning", confirmButtonText: "开始核验", cancelButtonText: "取消" }) } catch (_) { return }
+      await this.checkModels(models)
+    },
+    /**
+     * 保存服务商；有新增且未核验的对话模型时，由用户选择保存后核验或跳过核验
+     */
+    async saveProviderWithCheck() {
+      if (this.saving || !this.providerDraft) return
+      const saved = this.providerDraft.isNew ? [] : (this.providers.find((item) => item.name === this.selectedProviderName)?.models || []).map((item) => item.name)
+      const added = this.providerDraft.models.filter((model) => !saved.includes(model.name) && model.enabled !== false && this.modelTask(model) === "chat" && this.checkState(model) !== CHECK_STATES.checked).map((model) => model.name)
+      let check = false
+      if (added.length) {
+        try {
+          await this.$confirm(`新增的对话模型 ${added.join("、")} 尚未核验能力。核验会按默认项目发起少量请求，可能产生费用；跳过时按能力库与名称推断处理，之后可随时核验。`, "保存后核验模型？", { confirmButtonText: "保存并核验", cancelButtonText: "跳过核验", distinguishCancelAndClose: true, type: "info" })
+          check = true
+        } catch (action) { if (action !== "cancel") return }
+      }
+      if (!(await this.saveProvider())) return
+      if (check) await this.checkModels((this.providerDraft?.models || []).filter((model) => added.includes(model.name)))
+      await this.fillDefaultModels()
+    },
+    /**
+     * 为尚未配置默认模型的任务选用当前服务商中合适的模型；对话任务优先选用已核验且对话正常的模型
+     */
+    async fillDefaultModels() {
+      const provider = this.savedProvider
+      const defaults = this.sectionDrafts.default_models || {}
+      if (!provider) return
+      const pending = this.routingDirty
+      const failed = (model) => (model.check?.results || []).some((row) => row.item === "chat" && row.status === "failed")
+      const filled = []
+      this.defaultTasks.forEach(({ key, label }) => {
+        if (defaults[key]) return
+        const candidates = provider.models.filter((model) => model.enabled !== false && modelProfile(model).tasks.includes(key) && !failed(model))
+        const model = (key === "chat" && candidates.find((item) => item.check?.status === "checked")) || candidates[0]
+        if (!model) return
+        this.$set(this.sectionDrafts.default_models, key, `${provider.name}/${model.name}`)
+        filled.push(`${model.name}（${label}）`)
+      })
+      if (!filled.length) return
+      const text = `已将 ${filled.join("、")} 设为默认模型，可在「默认与路由」中修改。`
+      if (pending) { this.markSectionDirty("default_models"); this.$message.info(`${text}与其他未保存的路由修改一起保存后生效。`); return }
+      await this.saveSection("default_models", { successMessage: text })
+    },
+    /**
+     * 把模型设为其主要任务的默认模型；默认与路由有未保存修改时只写入草稿
+     * @param {object} model 模型配置
+     */
+    async setDefault(model) {
+      if (this.saving) return
+      const task = modelTask(model)
+      const pending = this.routingDirty
+      this.$set(this.sectionDrafts.default_models, task, `${this.selectedProviderName}/${model.name}`)
+      const text = `已将 ${model.name} 设为默认${TASK_LABELS[task] || task}模型。`
+      if (pending) { this.markSectionDirty("default_models"); this.$message.info(`${text}「默认与路由」有未保存修改，保存后一起生效。`); return }
+      await this.saveSection("default_models", { successMessage: text })
+    },
+    /**
+     * 按默认项目核验单个对话模型，并以一行摘要提示结果
+     * @param {object} model 模型配置
+     */
+    async quickCheck(model) {
+      if (this.testingModelKey) return
+      if (!(this.providerDraft.name.trim() || this.selectedProviderName)) return this.$message.warning("请先填写服务商名称。")
+      try { await this.$confirm(`将对 ${model.name} 按默认项目各发起一到两次小请求，用实测结果确定能力，可能产生少量费用。需要核验网页搜索等项目时，请在“编辑”中选择。`, "核验模型能力", { type: "info", confirmButtonText: "开始核验", cancelButtonText: "取消" }) } catch (_) { return }
+      try {
+        const data = await this.requestModelCheck(model, DEFAULT_CHECK_ITEMS)
+        const failed = data.results.find((row) => row.item === "chat" && row.status === "failed")
+        if (failed) this.$message.error({ message: `${model.name} 核验失败：${briefDetail(failed.detail)}`, duration: 6000 })
+        else this.$message.success(`${model.name} 核验完成：${checkSummary(data.results) || "连通正常"}`)
+      } catch (error) { this.$message.error(apiErrorDetail(error, "模型核验失败。")) }
+    },
+    toggleModel(model, enabled) { this.$set(model, "enabled", enabled); this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty() },
+    openEditor(model = null) { this.editorModel = model; this.editorIndex = model ? this.modelIndex(model) : null; this.editorVisible = true },
+    saveEditedModel(value) {
+      if (this.editorIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.editorIndex, 1, value)
+      this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty()
     },
     async loadPersona() {
       this.personaLoading = true; this.personaError = ""
@@ -635,7 +857,7 @@ export default {
       finally { this.personaSaving = false }
     },
     resolveSchema(node) { if (!node?.$ref) return node || {}; return node.$ref.replace(/^#\//, "").split("/").reduce((value, key) => value?.[key], this.schema) || node },
-    sectionSchema(name) { const properties = this.schema.properties || {}; const map = { context: "context_settings", agent: "agent_settings", sandbox: "sandbox" }; if (name === "advanced") return { type: "object", properties: { client_settings: properties.client_settings, debug_log: properties.debug_log, provider_settings: properties.provider_settings } }; return this.resolveSchema(properties[map[name]]) },
+    sectionSchema(name) { const properties = this.schema.properties || {}; const map = SECTION_KEYS; if (name === "advanced") return { type: "object", properties: { client_settings: properties.client_settings, debug_log: properties.debug_log } }; return this.resolveSchema(properties[map[name]]) },
     /**
      * 读取设置项的草稿值；模型选择字段的 null 显示为“使用默认对话模型”
      * @param {string} tab 分区名称
@@ -674,8 +896,8 @@ export default {
       if (!issue) return
       const group = this.settingGroups[tab].find((item) => item.fields.some((field) => issue.path === field.path || issue.path.startsWith(`${field.path}.`)))
       if (group) this.settingsCategory[tab] = group.key
-      this.settingsSearch[tab] = ""
-      this.$nextTick(() => this.$el.querySelector(".el-tab-pane:not([style*='display: none']) .settings-workspace .field-error")?.scrollIntoView({ block: "center", behavior: "smooth" }))
+      this.settingsSearch[tab] = ""; this.settingsTab = tab
+      this.$nextTick(() => [].concat(this.$refs[`settings-${tab}`])[0]?.querySelector(".field-error")?.scrollIntoView({ block: "center", behavior: "smooth" }))
     },
     /**
      * 本地校验后保存设置分区，校验失败时定位到第一个问题
@@ -684,7 +906,7 @@ export default {
     async saveSettings(tab) {
       const draft = this.sectionDrafts[tab] || {}
       const issues = tab === "advanced"
-        ? [...new Set(["client_settings", "provider_settings", "debug_log", ...Object.keys(draft)])].flatMap((key) => validateField(draft[key], this.schema.properties?.[key] || {}, this.schema, key))
+        ? [...new Set(["client_settings", "debug_log", ...Object.keys(draft)])].flatMap((key) => validateField(draft[key], this.schema.properties?.[key] || {}, this.schema, key))
         : validateField(draft, this.sectionSchema(tab), this.schema, "")
       this.$set(this.settingsLocalIssues, tab, issues)
       this.$set(this.invalidSections, tab, issues.map((issue) => issue.path))
@@ -700,9 +922,10 @@ export default {
       })
     },
     isSectionDirty(name) { return Boolean(this.dirtySections[name]) },
+    resetRouting() { this.resetSection("default_models"); this.resetSection("model_groups") },
     resetSection(name) { this.$set(this.sectionDrafts, name, clone(this.originalSections[name])); if (name === "model_groups") { this.groupRows = this.groupsToRows(this.sectionDrafts.model_groups); this.selectedRouteGroupId = this.groupRows[0]?.clientId || ""; this.routingIssues = [] } this.$set(this.dirtySections, name, false); this.syncDirty() },
     sectionInvalid(name) { return Boolean(this.invalidSections[name]?.length) },
-    async saveSection(name, value = this.sectionDrafts[name]) { if (this.sectionInvalid(name) || (this.saving && this.saving !== "model_groups")) return; this.saving = name; try { const submitted = { section: name, value: JSON.stringify(name === "model_groups" ? this.groupRows : this.sectionDrafts[name]) }; const response = await this.aiPut(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
+    async saveSection(name, { successMessage } = {}) { const value = this.sectionDrafts[name]; if (this.sectionInvalid(name) || (this.saving && this.saving !== "model_groups")) return; this.saving = name; try { const submitted = { section: name, value: JSON.stringify(name === "model_groups" ? this.groupRows : this.sectionDrafts[name]) }; const response = await this.aiPut(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response, { successMessage }) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
     groupsToRows(groups) { const names = new Set(Object.keys(groups || {})); return Object.entries(groups || {}).map(([name, targets]) => ({ name, targets: targets.map((value) => ({ kind: names.has(value) ? "group" : "model", value, clientId: uid() })), clientId: uid() })) },
     addGroup() { const group = { name: "", targets: [], clientId: uid() }; this.groupRows.push(group); this.selectedRouteGroupId = group.clientId; this.markGroupsDirty() },
     async removeSelectedGroup() {
@@ -719,7 +942,7 @@ export default {
       this.markGroupsDirty()
     },
     markGroupsDirty() { this.routingIssues = []; this.$set(this.dirtySections, "model_groups", true); this.syncDirty() },
-    targetOptions(kind, currentGroup) { if (kind === "group") return this.groupRows.filter((item) => item.clientId !== currentGroup.clientId && item.name.trim()).map((item) => ({ label: item.name.trim(), value: item.name.trim(), tag: "路由组" })); return this.allModels.filter((item) => item.is_available).map((item) => ({ label: item.fullName, value: item.fullName, tag: this.modelTask(item) })) },
+    targetOptions(kind, currentGroup) { if (kind === "group") return this.groupRows.filter((item) => item.clientId !== currentGroup.clientId && item.name.trim()).map((item) => ({ label: item.name.trim(), value: item.name.trim(), tag: "路由组" })); return this.allModels.filter((item) => item.enabled !== false).map((item) => ({ label: item.fullName, value: item.fullName, tag: TASK_LABELS[this.modelTask(item)] })) },
     changeTargetKind(target) { target.value = ""; this.markGroupsDirty() },
     addTarget() { if (!this.selectedRouteGroup) return; this.selectedRouteGroup.targets.push({ kind: "model", value: "", clientId: uid() }); this.markGroupsDirty() },
     removeTarget(index) { this.selectedRouteGroup.targets.splice(index, 1); this.markGroupsDirty() },
@@ -767,20 +990,11 @@ export default {
      */
     groupsForTask(task) { return routingGroupsForModels(this.groupRows, new Set(this.modelsForTask(task).map((model) => model.fullName))) },
     /**
-     * 获取适合指定任务的已启用模型；专用任务只认已收录能力或显式任务类型
+     * 获取能力档案包含指定任务的已启用模型
      * @param {string} task 任务键
      * @returns {object[]} 模型列表
      */
-    modelsForTask(task) {
-      return this.allModels.filter((model) => {
-        if (!model.is_available) return false
-        const caps = this.knownCapabilities(model)
-        const outputs = caps.output_modalities || []
-        if (task === "chat") return !Object.values(TASK_TYPES).flat().includes(model.task_type) && !caps.is_embedding_model && !caps.is_rerank_model && (!outputs.length || outputs.includes("text"))
-        if (TASK_TYPES[task].includes(model.task_type)) return true
-        return { embedding: caps.is_embedding_model, rerank: caps.is_rerank_model, image: outputs.includes("image"), tts: outputs.includes("audio") }[task] === true
-      })
-    },
+    modelsForTask(task) { return this.allModels.filter((model) => { const profile = modelProfile(model); return model.enabled !== false && (task === "vision" ? profile.tasks.includes("chat") && (profile.input_modalities || []).includes("image") : profile.tasks.includes(task)) }) },
     /**
      * 设置默认任务模型，清空时保存为 null
      * @param {string} task 任务键
@@ -788,7 +1002,7 @@ export default {
      */
     setDefaultModel(task, value) { this.$set(this.sectionDrafts.default_models, task, value || null); this.markSectionDirty("default_models") },
     captureOperationError(error, fallback) { this.operationIssues = apiErrorIssues(error); this.$message.error(apiErrorDetail(error, fallback)) },
-    handleAiApply(response) { return handleApplyResult(this, response, { restartPrompt: "AI 启动期配置已保存，需要重启后生效。", restartRequest: () => this.aiPost(`${this.$root.prefix}/system/configuration/restart`, {}), returnRoute: "/ai", recoveryMessage: "AI 启动期配置将在新进程中生效。" }) },
+    handleAiApply(response, options = {}) { return handleApplyResult(this, response, { ...options, restartPrompt: "AI 启动期配置已保存，需要重启后生效。", restartRequest: () => this.aiPost(`${this.$root.prefix}/system/configuration/restart`, {}), returnRoute: "/ai", recoveryMessage: "AI 启动期配置将在新进程中生效。" }) },
     operationError(path) {
       const expected = path.toLowerCase()
       return this.operationIssues.find((issue) => {
@@ -802,20 +1016,11 @@ export default {
 </script>
 
 <style scoped>
-.ai-page { border-radius:16px; max-width:1600px; margin:0 auto; min-height: 100%; padding: 20px 22px 32px; overflow-y: auto; color: var(--text-color); background: var(--bg-color-secondary,#fff); }.page-header, .section-title, .subheading, .provider-actions, .section-action { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.page-header { margin-bottom: 12px; }.configuration-warning { margin-bottom: 12px; }.configuration-warning code { margin-right: 6px; }.load-error { display: grid; min-height: 260px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 28px; border: 1px solid var(--danger-color); border-radius: 8px; background: var(--bg-color-secondary); }.load-error > i { color: var(--danger-color); font-size: 34px; }.load-error h2 { margin: 0; font-size: 18px; }.load-error p { margin: 8px 0 0; color: var(--text-color-secondary); }.page-header h1, .section-title h2, .subheading h3 { margin: 0; letter-spacing: 0; }.page-header h1 { font-size: 24px; }.page-header p, .section-title p, .subheading p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 13px; }.header-status { display: flex; align-items: center; gap: 8px; }.ai-tabs { min-height: 0; }.provider-workbench { display: grid; min-height: 650px; grid-template-columns: 250px minmax(0, 1fr); border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.provider-sidebar { min-width: 0; padding: 16px; border-right: 1px solid var(--border-color); }.sidebar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }.provider-list { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }.provider-list button { display: flex; width: 100%; min-height: 58px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.provider-list button:hover { background: var(--bg-color-hover); }.provider-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.provider-list span { display: flex; min-width: 0; flex-direction: column; }.provider-list strong, .provider-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.provider-list small { margin-top: 4px; color: var(--text-color-secondary); }.provider-main { min-width: 0; padding: 20px 22px 26px; }.provider-form, .advanced-grid, .default-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.full-control { width: 100%; }.secret-section, .models-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-color-light); }.secret-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 10px; }.advanced-collapse { margin-top: 14px; border-bottom: 0; }.provider-actions { margin-top: 18px; }.models-section { margin-top: 24px; }.model-search { max-width: 420px; margin: 14px 0 10px; }.model-list { border-top: 1px solid var(--border-color-light); }.model-row { display: flex; min-height: 64px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border-color-light); }.model-name { display: flex; min-width: 0; flex-direction: column; gap: 7px; }.model-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.model-name span { display: flex; flex-wrap: wrap; gap: 5px; }.model-actions { flex: none; white-space: nowrap; }.provider-empty { display: grid; place-content: center; color: var(--text-color-secondary); text-align: center; }.provider-empty i { font-size: 42px; }.settings-section { min-height: 480px; padding: 20px 22px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.section-action { position: sticky; bottom: 0; z-index: 3; margin-top: 10px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color); }.section-action span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.group-row { display: grid; grid-template-columns: 210px minmax(0, 1fr) auto; gap: 10px; margin-top: 12px; }.empty-copy { padding: 30px 12px; color: var(--text-color-secondary); text-align: center; }.danger-text { color: var(--danger-color) !important; }.model-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }.discovery-list { display: grid; max-height: 360px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; overflow-y: auto; }.discovery-list .el-checkbox { min-width: 0; margin-right: 0; overflow: hidden; text-overflow: ellipsis; }.dialog-note { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
-.advanced-settings-section { min-height: 0; }
-
-
-
-
-
-
-
-@media (max-width: 820px) { .ai-page { padding: 12px; }.page-header, .section-title, .subheading { align-items: flex-start; flex-direction: column; }.header-status { width: 100%; flex-wrap: wrap; }.load-error { min-height: 220px; grid-template-columns: auto minmax(0, 1fr); padding: 20px; }.load-error .el-button { grid-column: 1 / -1; }.provider-workbench { grid-template-columns: 1fr; }.provider-sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }.provider-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }.provider-main { padding: 16px; }.provider-form, .advanced-grid, .default-grid, .model-form { grid-template-columns: 1fr; }.group-row { grid-template-columns: 1fr auto; }.group-row .el-select { grid-column: 1 / -1; grid-row: 2; }.model-row { align-items: flex-start; flex-direction: column; padding: 10px 0; }.model-actions { align-self: flex-end; }.discovery-list { grid-template-columns: 1fr; } }
+.ai-page { border-radius:16px; max-width:1600px; margin:0 auto; min-height: 100%; padding: 20px 22px 32px; overflow-y: auto; color: var(--text-color); background: var(--bg-color-secondary,#fff); }.page-header, .section-title, .subheading, .section-action { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.page-header { margin-bottom: 12px; }.configuration-warning { margin-bottom: 12px; }.configuration-warning code { margin-right: 6px; }.load-error { display: grid; min-height: 260px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 28px; border: 1px solid var(--danger-color); border-radius: 8px; background: var(--bg-color-secondary); }.load-error > i { color: var(--danger-color); font-size: 34px; }.load-error h2 { margin: 0; font-size: 18px; }.load-error p { margin: 8px 0 0; color: var(--text-color-secondary); }.page-header h1, .section-title h2, .subheading h3 { margin: 0; letter-spacing: 0; }.page-header h1 { font-size: 24px; }.page-header p, .section-title p, .subheading p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 13px; }.header-status { display: flex; align-items: center; gap: 8px; }.ai-tabs { min-height: 0; }.provider-workbench { display: grid; min-height: 650px; grid-template-columns: 250px minmax(0, 1fr); border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.provider-sidebar { min-width: 0; padding: 16px; border-right: 1px solid var(--border-color); }.sidebar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }.provider-list { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }.provider-list button { display: flex; width: 100%; min-height: 58px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.provider-list button:hover { background: var(--bg-color-hover); }.provider-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.provider-list span { display: flex; min-width: 0; flex-direction: column; }.provider-list strong, .provider-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.provider-list small { margin-top: 4px; color: var(--text-color-secondary); }.provider-main { min-width: 0; padding: 20px 22px 26px; }.provider-form, .advanced-grid, .default-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.full-control { width: 100%; }.secret-section, .models-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-color-light); }.secret-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 10px; }.advanced-collapse { margin-top: 14px; border-bottom: 0; }.provider-empty { display: grid; place-content: center; color: var(--text-color-secondary); text-align: center; }.provider-empty i { font-size: 42px; }.settings-section { min-height: 480px; padding: 20px 22px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.section-action { position: sticky; bottom: 0; z-index: 3; margin-top: 10px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color); }.section-action span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.empty-copy { padding: 30px 12px; color: var(--text-color-secondary); text-align: center; }.danger-text { color: var(--danger-color) !important; }.upstream-summary { margin: 8px 0 0; color: var(--text-color-secondary); font-size: 12px; }
+@media (max-width: 820px) { .ai-page { padding: 12px; }.page-header, .section-title, .subheading { align-items: flex-start; flex-direction: column; }.header-status { width: 100%; flex-wrap: wrap; }.load-error { min-height: 220px; grid-template-columns: auto minmax(0, 1fr); padding: 20px; }.load-error .el-button { grid-column: 1 / -1; }.provider-workbench { grid-template-columns: 1fr; }.provider-sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }.provider-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }.provider-main { padding: 16px; }.provider-form, .advanced-grid, .default-grid { grid-template-columns: 1fr; } }
 .mobile-provider-select { display: none; width: 100%; margin-top: 10px; }
 .mobile-section-select { display: none; width: 100%; margin-bottom: 12px; }
 @media (max-width: 767px) { .mobile-section-select { display: block; }.ai-tabs ::v-deep > .el-tabs__header { display: none; } }
-.group-name-field { margin-bottom: 0; }
 .route-section { padding: 0; overflow: hidden; }
 .route-section > .section-title { padding: 20px 22px 16px; }
 .route-workbench { display: grid; min-height: 500px; grid-template-columns: 240px minmax(0, 1fr); border-top: 1px solid var(--border-color); }
@@ -845,7 +1050,30 @@ export default {
 @media (max-width: 820px) { .mobile-provider-select { display: block; }.provider-list { display: none; } }
 @media (max-width: 820px) { .route-workbench { grid-template-columns: 1fr; }.route-sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }.route-editor { padding: 16px; }.route-target-row { grid-template-columns: 54px 100px minmax(0, 1fr); padding: 10px 0; }.route-target-actions { grid-column: 2 / -1; justify-content: flex-end; } }
 @media (max-width: 620px) { .persona-basics { grid-template-columns: 1fr; gap: 0; } }
-@media (max-width: 460px) { .provider-list { grid-template-columns: 1fr; }.provider-actions, .section-action { align-items: stretch; flex-direction: column; }.section-action span { margin: 0; }.secret-row { grid-template-columns: 1fr; } }
+@media (max-width: 460px) { .provider-list { grid-template-columns: 1fr; }.section-action { align-items: stretch; flex-direction: column; }.section-action span { margin: 0; }.secret-row { grid-template-columns: 1fr; } }
+.provider-workbench.no-sidebar { grid-template-columns: 1fr; }
+.provider-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 16px; }
+.provider-title { min-width: 0; flex: 1 1 240px; }
+.provider-header > .provider-logo { margin-top: 2px; }
+.provider-list button > .provider-logo { margin-right: -2px; }
+.provider-list button > span { flex: 1; }
+.external-link { display: inline-flex; align-items: center; gap: 2px; margin-left: 10px; color: var(--primary-color); font-size: 12px; font-weight: normal; text-decoration: none; }
+.external-link:hover { text-decoration: underline; }
+.provider-title h2 { margin: 0; font-size: 18px; }
+.provider-title p { margin: 6px 0 0; color: var(--text-color-secondary); font-size: 13px; word-break: break-all; }
+.connection-panel { margin-top: 14px; padding: 16px 18px; border: 1px solid var(--border-color-light); border-radius: 8px; background: var(--bg-color); }
+.connection-panel .secret-section { margin-top: 4px; padding-top: 14px; }
+.models-section { margin-top: 18px; }
+.models-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.models-toolbar h3 { margin: 0 auto 0 0; font-size: 15px; }
+.models-toolbar h3 small { margin-left: 4px; color: var(--text-color-secondary); font-size: 12px; font-weight: normal; }
+.models-toolbar .model-search { width: 220px; }
+.models-toolbar .el-button + .el-button, .models-toolbar span + .el-button { margin-left: 0; }
+.routing-defaults { min-height: 0; margin-bottom: 14px; }
+.routing-defaults .default-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); margin-top: 12px; }
+.settings-switch { margin-bottom: 14px; }
+.dirty-dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: var(--warning-color, #e6a23c); vertical-align: middle; }
+@media (max-width: 820px) {.connection-panel { padding: 12px; }.models-toolbar .model-search { width: 100%; order: 1; } }
 </style>
 
 <style scoped>

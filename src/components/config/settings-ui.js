@@ -1,33 +1,30 @@
 import { resolveReference } from './schema-utils'
 
-export function environmentCategories(descriptors, matches, source, customCount) {
+export function environmentCategories(descriptors, matches, customCount) {
   const groups = [
     { key: 'access', title: '访问与 HTTPS', icon: 'el-icon-lock', description: '管理 WebUI 监听与安全访问入口。', keys: ['HOST', 'PORT', 'WEBUI_HTTPS_ENABLED', 'WEBUI_TLS_CERTFILE', 'WEBUI_TLS_KEYFILE', 'WEBUI_HTTP_MODE', 'WEBUI_HTTP_REDIRECT_PORT'] },
     { key: 'bot', title: '机器人与命令', icon: 'el-icon-chat-dot-round', description: '设置机器人称呼、消息与命令行为。', keys: ['NICKNAME', 'SELF_NICKNAME', 'COMMAND_START', 'COMMAND_SEP', 'ALCONNA_USE_COMMAND_START', 'IMAGE_TO_BYTES'] },
     { key: 'permissions', title: '权限与会话', icon: 'el-icon-user', description: '管理超级用户范围与交互会话。', keys: ['SUPERUSERS', 'PLATFORM_SUPERUSERS', 'SESSION_EXPIRE_TIMEOUT'] },
     { key: 'runtime', title: '日志与扩展', icon: 'el-icon-document', description: '调整日志级别与扩展插件路径。', keys: ['LOG_LEVEL', 'EXT_PATH'] },
-    { key: 'storage', title: '数据库与缓存', icon: 'el-icon-coin', description: '此处仅供查看，修改请前往「数据与缓存」页面，保存前会先测试连接。', keys: ['DB_URL', 'CACHE_MODE', 'REDIS_HOST', 'REDIS_PASSWORD', 'REDIS_PORT'] },
-    { key: 'adapters', title: '适配器配置', icon: 'el-icon-link', description: '按协议维护机器人连接配置。', keys: [] },
-    { key: 'plugins', title: '插件环境项', icon: 'el-icon-connection', description: '由已注册配置模型声明，详细信息中可查看来源。', keys: [] },
   ]
   const known = new Set(groups.flatMap(group => group.keys))
   return [...groups.map(group => {
-    const fields = descriptors.filter(field => group.keys.includes(field.key) || (!known.has(field.key) && (field.category || 'plugins') === group.key))
-    if (group.key === 'plugins') fields.sort((a, b) => source(a).localeCompare(source(b)))
+    const fields = descriptors.filter(field => group.keys.includes(field.key) || (!known.has(field.key) && field.category === group.key))
     return { ...group, fields, count: fields.filter(matches).length }
   }), { key: 'custom', title: '自定义变量', icon: 'el-icon-edit-outline', count: customCount }]
 }
 
 const advancedLabels = {
-  'client_settings.timeout': { label: '请求超时', unit: '秒', description: '单次 API 请求的超时上限。' },
   'client_settings.max_retries': { label: '最大重试次数', unit: '次', description: '控制请求失败后的重试上限，实际重试仍遵循安全发送策略。' },
   'client_settings.retry_delay': { label: '重试延迟', unit: '秒', description: '连续重试之间的基础等待时间。' },
   'client_settings.structured_retries': { label: '结构化校验重试', unit: '次', description: '模型输出未通过结构化校验时的重试上限。' },
+  'client_settings.rate_limit_cooldown': { label: '限流冷却', unit: '秒', description: '密钥触发限流且服务端未给出 Retry-After 时的冷却时间。' },
+  'client_settings.quota_cooldown': { label: '额度耗尽冷却', unit: '秒', description: '密钥额度耗尽后暂停使用的时间。' },
+  'client_settings.route_cooldown': { label: '线路熔断冷却', unit: '秒', description: '模型线路连续失败后暂停使用的时间。' },
+  'client_settings.catalog_url': { label: '模型能力库地址', description: 'models.dev 格式的能力数据下载地址，用于自动识别模型的模态、推理等级与上下文长度；无法访问时可换成镜像地址。' },
   'debug_log.show_tools': { label: '记录工具定义', description: '在调试日志中展示工具定义的 JSON Schema。' },
   'debug_log.show_schema': { label: '记录响应 Schema', description: '在调试日志中展示结构化输出格式。' },
   'debug_log.show_safety': { label: '记录安全设置', description: '在调试日志中展示发送给厂商的安全设置。' },
-  'provider_settings.gemini.safety_threshold': { label: '安全过滤阈值', description: 'Gemini 的内容安全过滤级别，是否允许取决于厂商策略。', options: [ { value: 'BLOCK_NONE', label: '不额外过滤 · BLOCK_NONE' }, { value: 'BLOCK_ONLY_HIGH', label: '仅高风险 · BLOCK_ONLY_HIGH' }, { value: 'BLOCK_MEDIUM_AND_ABOVE', label: '中高风险 · BLOCK_MEDIUM_AND_ABOVE' }, { value: 'BLOCK_LOW_AND_ABOVE', label: '低风险及以上 · BLOCK_LOW_AND_ABOVE' } ] },
-  'provider_settings.gemini.allow_mixed_tools': { label: '允许混合工具', description: '允许同时使用本地工具与 Gemini 云端内置工具。' },
 }
 
 export function valueAt(value, path) { return (Array.isArray(path) ? path : path.split('.')).reduce((current, key) => current?.[key], value) }
@@ -92,6 +89,14 @@ const aiSectionSettings = {
       enable_vfs_helper: { label: 'VFS 路径防护', requires: 'enable_sandbox', description: '阻止沙箱内的路径逃逸，遇到兼容性问题时可关闭。' },
     } },
   ],
+  web_search: [
+    { key: 'search', title: '联网搜索', icon: 'el-icon-search', description: '为需要联网的 AI 功能选择搜索方式。原生搜索由模型厂商在服务端执行；搜索服务由 Bot 调用搜索接口，适用于任何支持工具调用的模型。', fields: {
+      mode: { label: '搜索方式', description: '自动：模型的线路都支持原生搜索时使用原生搜索，否则使用搜索服务。原生搜索只在官方接口或核验通过的线路上发送。', options: [{ value: 'auto', label: '自动' }, { value: 'native', label: '仅原生搜索' }, { value: 'api', label: '仅搜索服务' }, { value: 'off', label: '关闭' }] },
+      provider: { label: '搜索服务', placeholder: '自动选择', description: '未选择时使用第一个已配置官方密钥的 DeepSeek / Kimi / 智谱 / Jina 服务商。DeepSeek 搜索按次计费，Tavily 与博查需要单独填写密钥。', options: [{ value: 'deepseek', label: 'DeepSeek' }, { value: 'kimi', label: 'Kimi (Moonshot)' }, { value: 'glm', label: '智谱 GLM' }, { value: 'jina', label: 'Jina AI' }, { value: 'tavily', label: 'Tavily' }, { value: 'bocha', label: '博查' }] },
+      api_key: { label: '搜索服务密钥', description: '留空时复用同厂商服务商（官方接口）的密钥。' },
+      max_results: { label: '结果数量', unit: '条', description: '每次搜索返回的结果数量。' },
+    } },
+  ],
 }
 
 /**
@@ -121,8 +126,7 @@ export function aiSectionGroups(section, sectionSchema, rootSchema, draft) {
 
 export function advancedSettingGroups(schema, draft) {
   const groups = [
-    { key: 'client_settings', title: '请求与重试', icon: 'el-icon-timer', description: '平衡请求等待与恢复次数，适用于真寻托管的 AI 客户端。' },
-    { key: 'provider_settings', title: '厂商参数', icon: 'el-icon-connection', description: '按厂商设置特有行为，未知参数会原样保留。' },
+    { key: 'client_settings', title: '请求与能力库', icon: 'el-icon-timer', description: '控制失败重试、密钥和模型线路的冷却时间，以及模型能力库的下载地址。' },
     { key: 'debug_log', title: '调试日志', icon: 'el-icon-document', description: '只控制调试日志展示的内容，不改变模型回答。' },
   ]
   function row(segments, fieldSchema, section = '') {
@@ -131,20 +135,16 @@ export function advancedSettingGroups(schema, draft) {
     const resolved = resolveReference(fieldSchema, schema)
     return { path, segments, schema: fieldSchema, section, label: meta.label || resolved.title || path.split('.').pop(), ui: { description: resolved.description || '', ...meta } }
   }
-  function fields(segments, fieldSchema, flattenProvider = false) {
+  function fields(segments, fieldSchema) {
     const resolved = resolveReference(fieldSchema, schema)
     if (!resolved.properties) return [row(segments, fieldSchema)]
     const value = valueAt(draft, segments)
     // Keep explicit null and unexpected scalar values editable without coercion.
     if (value !== undefined && (value === null || typeof value !== 'object' || Array.isArray(value))) return [row(segments, fieldSchema)]
-    return [...new Set([...Object.keys(resolved.properties), ...Object.keys(value || {})])].flatMap(key => {
-      const childSchema = resolved.properties[key] || (typeof resolved.additionalProperties === 'object' ? resolved.additionalProperties : {})
-      const childPath = [...segments, key]
-      return flattenProvider ? fields(childPath, childSchema).map(field => ({ ...field, section: key === 'gemini' ? 'Gemini' : key })) : [row(childPath, childSchema)]
-    })
+    return [...new Set([...Object.keys(resolved.properties), ...Object.keys(value || {})])].map(key => row([...segments, key], resolved.properties[key] || (typeof resolved.additionalProperties === 'object' ? resolved.additionalProperties : {})))
   }
-  return groups.map(group => ({ ...group, fields: [
-    ...fields([group.key], schema.properties?.[group.key] || {}, group.key === 'provider_settings'),
-    ...(group.key === 'provider_settings' ? Object.keys(draft || {}).filter(key => !groups.some(item => item.key === key)).map(key => row([key], schema.properties?.[key] || {}, '其他参数')) : []),
+  return groups.map((group, index) => ({ ...group, fields: [
+    ...fields([group.key], schema.properties?.[group.key] || {}),
+    ...(index === groups.length - 1 ? Object.keys(draft || {}).filter(key => !groups.some(item => item.key === key)).map(key => row([key], schema.properties?.[key] || {}, '其他参数')) : []),
   ] }))
 }
