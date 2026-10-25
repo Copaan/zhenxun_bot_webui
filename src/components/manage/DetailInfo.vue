@@ -111,7 +111,7 @@
 
             <div class="flex items-center justify-between">
               <span :style="{ color: 'var(--el-text-color-regular)' }"
-                >群权限:</span
+                >群等级:</span
               >
               <el-select
                 v-model="data.level"

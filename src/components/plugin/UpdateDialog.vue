@@ -133,7 +133,7 @@
                   <i class="el-icon-lock"></i>
                 </div>
                 <div class="setting-content">
-                  <div class="setting-label">群权限</div>
+                  <div class="setting-label">所需群等级</div>
                   <div class="setting-control">
                     <el-select
                       v-model="updateData.level"
