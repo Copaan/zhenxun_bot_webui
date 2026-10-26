@@ -90,7 +90,10 @@
 </template>
 
 <script>
+import axios from "axios"
 import { getBaseUrl } from "@/utils/api"
+import { apiErrorDetail } from "@/utils/api-error"
+import { uploadBackupInChunks } from "@/utils/chunk-upload"
 import { reasonLabels, reasonText } from "@/utils/plugin-operation"
 import { startRestartRecovery } from "@/utils/restart-recovery"
 import { formatBytes } from "@/utils/utils"
@@ -283,18 +286,14 @@ export default {
       const file = event.target.files[0]
       event.target.value = ""
       if (!file) return
-      const form = new FormData()
-      form.append("file", file)
       this.uploading = 0
       try {
-        const response = await this.postRequest(this.api("/upload"), form, {
-          timeout: 0,
-          onUploadProgress: (progress) => { this.uploading = progress.total ? Math.min(100, Math.round(progress.loaded / progress.total * 100)) : 0 },
+        const name = await uploadBackupInChunks(this.api(""), file, {
+          onProgress: (loaded, total) => { this.uploading = total ? Math.min(100, Math.round(loaded / total * 100)) : 0 },
         })
-        if (!response?.suc) throw new Error(response?.info)
-        this.$message.success(`已上传 ${response.data}`)
+        this.$message.success(`已上传 ${name}`)
         this.refresh()
-      } catch (error) { this.$message.error(error.message || "上传失败") }
+      } catch (error) { if (!axios.isCancel(error)) this.$message.error(apiErrorDetail(error, "上传失败")) }
       finally { this.uploading = null }
     },
     async openExport() {

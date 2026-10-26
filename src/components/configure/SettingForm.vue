@@ -362,6 +362,7 @@
 
 <script>
 import { getAuthToken } from "@/utils/auth-token"
+import { uploadBackupInChunks } from "@/utils/chunk-upload"
 import { reasonLabels } from "@/utils/plugin-operation"
 
 import logoUrl from "@/assets/image/logo.png"
@@ -722,18 +723,12 @@ export default {
       const file = event.target.files[0]
       event.target.value = ""
       if (!file) return
-      const form = new FormData()
-      form.append("file", file)
       Object.assign(this, { uploading: 0, restoreError: "", backupName: "", backupPassword: "", backupSummary: null })
       try {
-        const response = await this.postRequest(`${this.$root.prefix}/configure/backup/upload`, form, {
-          ...this.setupHeaders,
-          timeout: 0,
-          suppressErrorToast: true,
-          onUploadProgress: (progress) => { this.uploading = progress.total ? Math.min(100, Math.round(progress.loaded / progress.total * 100)) : 0 },
+        this.backupName = await uploadBackupInChunks(`${this.$root.prefix}/configure/backup`, file, {
+          config: this.setupHeaders,
+          onProgress: (loaded, total) => { this.uploading = total ? Math.min(100, Math.round(loaded / total * 100)) : 0 },
         })
-        if (!response?.suc) throw new Error(response?.info)
-        this.backupName = response.data
       } catch (error) {
         this.restoreError = this.requestError(error, "上传失败")
         return
