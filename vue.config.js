@@ -22,6 +22,8 @@ module.exports = defineConfig({
   devServer: {
     host: process.env.WEBUI_DEV_HOST || "127.0.0.1",
     port: Number(process.env.WEBUI_DEV_PORT || 8081),
+    // 压缩会缓冲 AI 控制台的流式响应
+    compress: false,
     proxy: {
       "/zhenxun": {
         // 后端开启 HTTPS 时设为 https://127.0.0.1:8080，开发代理接受自签证书

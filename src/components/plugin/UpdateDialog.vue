@@ -215,6 +215,7 @@ export default {
   name: "NekoPluginDialog",
   props: {
     module: String,
+    tab: { type: String, default: "basic" },
   },
   components: {
     ConfigGroupEditor,
@@ -231,7 +232,7 @@ export default {
       callback()
     }
     return {
-      activeTab: "basic", configSearch: "", configIssues: [], configGroups: [], configRevision: "",
+      activeTab: this.tab, configSearch:"", configIssues: [], configGroups: [], configRevision: "",
       visible: false,
       menuTypeList: [],
       menuTypeOptions: [],

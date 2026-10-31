@@ -31,6 +31,8 @@ const ProtocolSetting = () =>
   import(/* webpackChunkName: "protocol" */ "@/views/protocol/ProtocolSetting")
 const AIConfiguration = () =>
   import(/* webpackChunkName: "ai-configuration" */ "@/views/ai/AIConfiguration")
+const AIChat = () =>
+  import(/* webpackChunkName: "ai-chat" */ "@/views/ai/AIChat")
 const NetworkProxy = () =>
   import(/* webpackChunkName: "network-proxy" */ "@/views/network-proxy/NetworkProxy")
 const ConsoleConnect = () =>
@@ -84,6 +86,7 @@ const routes = [
       { path: "/database", name: "数据与缓存", component: DatabaseManage },
       { path: "/protocol", name: "机器人接入", component: ProtocolSetting },
       { path: "/ai", name: "AI 配置", component: AIConfiguration },
+      { path: "/ai/chat", name: "AI 聊天", component: AIChat },
       { path: "/network-proxy", name: "网络代理", component: NetworkProxy },
       { path: "/system", name: "系统设置", component: SystemInfo },
       { path: "/about", name: "更新与维护", component: About },

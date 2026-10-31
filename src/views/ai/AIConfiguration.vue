@@ -159,40 +159,12 @@
         <SectionAction :dirty="routingDirty" :saving="saving === 'model_groups'" :invalid="hasGroupErrors" effect="默认模型与路由组一起保存，保存后立即热加载" @reset="resetRouting" @save="saveGroups" />
       </el-tab-pane>
 
-      <el-tab-pane label="AI人设" name="persona">
-        <section v-loading="personaLoading" class="settings-section persona-section">
-          <div class="section-title"><div><h2>默认聊天人设</h2><p>设置 AI 聊天插件的身份、背景和表达方式，从下一条消息开始生效。</p></div><el-tag v-if="personaAvailable" size="small" type="success">运行时读取</el-tag></div>
-          <el-alert v-if="personaError" title="AI 人设加载失败" type="error" :closable="false" show-icon>
-            <p>{{ personaError }}</p>
-            <el-button size="small" plain @click="loadPersona">重新加载</el-button>
-          </el-alert>
-          <el-alert v-else-if="personaAvailable === false" title="当前没有可管理的人设" type="info" :closable="false" show-icon>
-            <p>请先在“AI聊天”中安装支持人设管理的聊天插件。</p>
-            <el-button size="small" type="primary" plain @click="activeSection = 'chat_plugins'">前往 AI聊天</el-button>
-          </el-alert>
-          <el-form v-else-if="personaAvailable" label-position="top" class="persona-form">
-            <div class="persona-basics">
-              <el-form-item label="人设名称"><el-input v-model.trim="personaDraft.name" maxlength="80" @input="markPersonaDirty" /></el-form-item>
-              <el-form-item label="启用人设"><el-switch v-model="personaDraft.enabled" @change="markPersonaDirty" /></el-form-item>
-            </div>
-            <el-form-item label="身份与背景设定"><el-input v-model="personaDraft.prompt" type="textarea" :rows="10" maxlength="20000" show-word-limit placeholder="描述角色身份、背景、性格、知识边界和相处方式" @input="markPersonaDirty" /></el-form-item>
-            <el-form-item label="表达风格"><el-input v-model="personaDraft.style" type="textarea" :rows="3" maxlength="2000" show-word-limit placeholder="例如：简短、自然、避免客服口吻" @input="markPersonaDirty" /></el-form-item>
-            <el-form-item label="语气样例"><el-input v-model="personaToneText" type="textarea" :rows="4" placeholder="每行一条，最多 12 条，只用于参考表达方式" @input="markPersonaDirty" /></el-form-item>
-            <el-form-item label="示例对话"><el-input v-model="personaDialogueText" type="textarea" :rows="6" placeholder="每段一组示例对话，段落之间留一个空行，最多 12 段" @input="markPersonaDirty" /></el-form-item>
-          </el-form>
-        </section>
-        <SectionAction v-if="personaAvailable" :dirty="personaDirty" :saving="personaSaving" :invalid="!personaDraft.name.trim() || !personaDraft.prompt.trim()" effect="下一条消息生效" @reset="resetPersona" @save="savePersona" />
-      </el-tab-pane>
-
-      <el-tab-pane label="AI聊天" name="chat_plugins" lazy>
-        <StoreTemplate ref="chatStore" capability="ai_chat" embedded @session-expired="sessionExpired = true; aiEpoch += 1" />
-      </el-tab-pane>
-
       <el-tab-pane label="运行设置" name="settings">
         <el-radio-group v-model="settingsTab" size="small" class="settings-switch">
           <el-radio-button v-for="tab in schemaTabs" :key="tab.name" :label="tab.name">{{ tab.label }}<i v-if="isSectionDirty(tab.name)" class="dirty-dot" title="有未保存修改"></i></el-radio-button>
         </el-radio-group>
         <div v-for="tab in schemaTabs" v-show="settingsTab === tab.name" :key="tab.name" :ref="`settings-${tab.name}`">
+          <p v-if="tab.link" class="settings-link"><i class="el-icon-link"></i>{{ tab.link.text }}<el-button type="text" @click="$router.push(tab.link.route)">{{ tab.link.label }}</el-button></p>
           <SettingsLayout v-model="settingsCategory[tab.name]" :query="settingsSearch[tab.name]" :groups="settingGroups[tab.name]" @search="settingsSearch[tab.name] = $event">
             <section v-for="group in settingGroups[tab.name]" v-show="settingsSearch[tab.name].trim() ? group.count > 0 : settingsCategory[tab.name] === group.key" :key="group.key">
               <header class="settings-group-heading"><div><h3>{{ group.title }}</h3><p>{{ group.description }}</p></div><el-tag :type="group.restart ? 'warning' : 'success'" size="mini">{{ group.restart ? "部分设置需重启" : "保存后热加载" }}</el-tag></header>
@@ -229,7 +201,6 @@ import SettingsLayout from "@/components/config/SettingsLayout.vue"
 import SchemaField from "@/components/config/SchemaField.vue"
 import { advancedSettingGroups, aiSectionGroups, valueAt, updateAt } from "@/components/config/settings-ui"
 import { fieldMatches, validateField } from "@/components/config/schema-utils"
-import StoreTemplate from "@/components/store/StoreTemplate.vue"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
@@ -241,7 +212,7 @@ import ModelTable from "./ModelTable.vue"
 import ProviderLogo from "./ProviderLogo.vue"
 import ProviderStarter from "./ProviderStarter.vue"
 
-const SECTION_KEYS = { context: "context_settings", agent: "agent_settings", sandbox: "sandbox", web_search: "web_search" }
+const SECTION_KEYS = { context: "context_settings", agent: "agent_settings", web_search: "web_search" }
 const CONNECTION_ERRORS = ["providers.name", "providers.protocol", "providers.base_url", "providers.timeout", "api_key"]
 const hostOf = (url) => { try { return new URL(url).host } catch (_) { return url || "" } }
 
@@ -258,21 +229,19 @@ const SectionAction = {
 
 export default {
   name: "AIConfiguration",
-  components: { ModelEditor, ModelTable, ProviderLogo, ProviderStarter, SchemaField, SettingsLayout, StoreTemplate, SectionAction },
+  components: { ModelEditor, ModelTable, ProviderLogo, ProviderStarter, SchemaField, SettingsLayout, SectionAction },
   data() {
     return {
-      settingsCategory: { context: "llm_summary", agent: "loop", sandbox: "runtime", web_search: "search", advanced: "client_settings" }, settingsSearch: { context: "", agent: "", sandbox: "", web_search: "", advanced: "" }, settingsLocalIssues: {}, repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
+      settingsCategory: { context: "llm_summary", agent: "loop", web_search: "search", advanced: "client_settings" }, settingsSearch: { context: "", agent: "", web_search: "", advanced: "" }, settingsLocalIssues: {}, repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
       loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, presets: {}, protocols: [], providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
-      providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, sandbox: {}, web_search: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
+      providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, web_search: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
       discovering: false, upstreamOpen: false, catalog: {}, catalogUpdating: false, providerProbeResults: {}, testingModelKey: "", batchChecking: false,
       connectionOpen: false, editorVisible: false, editorModel: null, editorIndex: null, settingsTab: "context",
-      personaLoading: false, personaSaving: false, personaAvailable: null, personaError: "", personaRevision: "", personaDraft: { name: "", prompt: "", style: "", enabled: true }, personaOriginal: null, personaToneText: "", personaDialogueText: "", personaDirty: false,
       taskLabels: TASK_LABELS,
-      defaultTasks: [{ key: "chat", label: "对话" }, { key: "vision", label: "视觉（对话模型不支持图片时转述图片）" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
+      defaultTasks: [{ key: "chat", label: "对话" }, { key: "vision", label: "视觉（对话模型不支持图片时转述图片）" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "stt", label: "语音转文字" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
       schemaTabs: [
-        { name: "context", label: "上下文", saveLabel: "保存上下文设置", effect: "保存后立即热加载" },
-        { name: "agent", label: "Agent", saveLabel: "保存 Agent 设置", effect: "保存后立即热加载" },
-        { name: "sandbox", label: "沙箱", saveLabel: "保存沙箱设置", effect: "部分设置在新会话或重启后生效" },
+        { name: "context", label: "上下文", saveLabel: "保存上下文设置", effect: "保存后立即热加载", link: { text: "群聊背景消息数、分段发送与长回复在 AI 聊天的「聊天设置」中。", label: "打开聊天设置", route: { path: "/ai/chat", query: { settings: "ai_chat" } } } },
+        { name: "agent", label: "Agent", saveLabel: "保存 Agent 设置", effect: "保存后立即热加载", link: { text: "Agent 开关、MCP 服务与沙箱在 AI 聊天的「Agent」页。", label: "打开 Agent 页", route: { path: "/ai/chat", query: { tab: "agent" } } } },
         { name: "web_search", label: "联网搜索", saveLabel: "保存联网搜索设置", effect: "保存后立即热加载" },
         { name: "advanced", label: "高级设置", saveLabel: "保存高级设置", effect: "保存后立即热加载" },
       ],
@@ -287,8 +256,6 @@ export default {
       return [
         { name: "providers", label: "服务商与模型" },
         { name: "routing", label: "默认与路由" },
-        { name: "persona", label: "AI人设" },
-        { name: "chat_plugins", label: "AI聊天" },
         { name: "settings", label: "运行设置" },
       ]
     },
@@ -321,7 +288,7 @@ export default {
       return [this.presets[draft.preset]?.label || "自定义", this.protocolLabel(draft.protocol), hostOf(base) || "未填写接口地址", keys ? `${keys} 个密钥` : "未填写密钥"].join(" · ")
     },
     connectionError() { return CONNECTION_ERRORS.some((path) => this.operationError(path)) },
-    dirtyCount() { return Number(this.providerDirty) + Number(this.modelsDirty) + Number(this.personaDirty) + Object.values(this.dirtySections).filter(Boolean).length },
+    dirtyCount() { return Number(this.providerDirty) + Number(this.modelsDirty) + Object.values(this.dirtySections).filter(Boolean).length },
     filteredProviders() { const key = this.providerSearch.trim().toLowerCase(); return this.providers.filter((item) => `${item.name} ${item.preset || ""} ${item.protocol}`.toLowerCase().includes(key)) },
     filteredModels() { const key = this.modelSearch.trim().toLowerCase(); return (this.providerDraft?.models || []).filter((item) => item.name.toLowerCase().includes(key)) },
     allModels() { return this.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.name, fullName: `${provider.name}/${model.name}` }))) },
@@ -402,13 +369,12 @@ export default {
   },
   watch: {
     connectionError(value) { if (value) this.connectionOpen = true },
-    activeSection(value) {
-      const chatStore = this.$refs.chatStore
-      if (value === "chat_plugins" && chatStore) chatStore.loadChatSwitches().catch(error => { if (error.response?.status === 401) this.sessionExpired = true })
-      if (value === "persona" && this.personaAvailable === false && !this.personaLoading) this.loadPersona()
-    },
   },
-  mounted() { this.loadConfiguration() },
+  mounted() {
+    if (this.sectionOptions.some((item) => item.name === this.$route.query.section)) this.activeSection = this.$route.query.section
+    if (this.schemaTabs.some((item) => item.name === this.$route.query.tab)) this.settingsTab = this.$route.query.tab
+    this.loadConfiguration()
+  },
   beforeDestroy() { clearDirtyState("ai-configuration") },
   methods: {
     async aiRequest(method, url, data = {}, options = {}) {
@@ -463,7 +429,6 @@ export default {
         const response = await this.aiGet(`${this.$root.prefix}/ai/configuration`, {}, { suppressErrorToast: true })
         if (!response.suc) throw new Error(response.info)
         this.applyConfiguration(response.data)
-        await this.loadPersona()
       } catch (error) { this.loadError = apiErrorDetail(error, "AI 配置加载失败，请检查服务状态后重试。") }
       finally { this.loading = false }
     },
@@ -815,47 +780,6 @@ export default {
       if (this.editorIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.editorIndex, 1, value)
       this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty()
     },
-    async loadPersona() {
-      this.personaLoading = true; this.personaError = ""
-      try {
-        const response = await this.aiGet(`${this.$root.prefix}/ai/personas/default`, {}, { suppressErrorToast: true })
-        if (!response.suc) throw new Error(response.info)
-        this.personaAvailable = Boolean(response.data?.available)
-        if (!this.personaAvailable) { this.personaRevision = ""; this.personaOriginal = null; this.personaDirty = false; return }
-        this.personaRevision = response.data.revision
-        this.personaDraft = clone(response.data.persona)
-        this.personaToneText = (this.personaDraft.tone_examples || []).join("\n")
-        this.personaDialogueText = (this.personaDraft.preset_dialogues || []).join("\n\n")
-        this.personaOriginal = this.personaSnapshot()
-        this.personaDirty = false
-      } catch (error) {
-        this.personaAvailable = false
-        this.personaError = apiErrorDetail(error, "AI 人设加载失败。")
-      } finally { this.personaLoading = false; this.syncDirty() }
-    },
-    personaSnapshot() { return { ...clone(this.personaDraft), tone_examples: this.personaToneText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean), preset_dialogues: this.personaDialogueText.split(/(?:\r?\n){2,}/).map((item) => item.trim()).filter(Boolean) } },
-    markPersonaDirty() { this.personaDirty = JSON.stringify(this.personaSnapshot()) !== JSON.stringify(this.personaOriginal); this.syncDirty() },
-    resetPersona() {
-      if (!this.personaOriginal) return
-      this.personaDraft = clone(this.personaOriginal)
-      this.personaToneText = (this.personaOriginal.tone_examples || []).join("\n")
-      this.personaDialogueText = (this.personaOriginal.preset_dialogues || []).join("\n\n")
-      this.personaDirty = false; this.syncDirty()
-    },
-    async savePersona() {
-      if (!this.personaDraft.name.trim() || !this.personaDraft.prompt.trim()) return
-      const snapshot = this.personaSnapshot()
-      if (snapshot.tone_examples.length > 12 || snapshot.preset_dialogues.length > 12) return this.$message.warning("语气样例和示例对话各最多 12 条。")
-      this.personaSaving = true
-      try {
-        const response = await this.aiPut(`${this.$root.prefix}/ai/personas/default`, { expected_revision: this.personaRevision, ...snapshot })
-        if (!response.suc) throw new Error(response.info)
-        this.personaRevision = response.data.revision; this.personaDraft = clone(response.data.persona)
-        this.personaToneText = (this.personaDraft.tone_examples || []).join("\n"); this.personaDialogueText = (this.personaDraft.preset_dialogues || []).join("\n\n")
-        this.personaOriginal = this.personaSnapshot(); this.personaDirty = false; this.syncDirty(); this.$message.success(response.info || "AI 人设已保存。")
-      } catch (error) { this.$message.error(apiErrorDetail(error, "AI 人设保存失败。")) }
-      finally { this.personaSaving = false }
-    },
     resolveSchema(node) { if (!node?.$ref) return node || {}; return node.$ref.replace(/^#\//, "").split("/").reduce((value, key) => value?.[key], this.schema) || node },
     sectionSchema(name) { const properties = this.schema.properties || {}; const map = SECTION_KEYS; if (name === "advanced") return { type: "object", properties: { client_settings: properties.client_settings, debug_log: properties.debug_log } }; return this.resolveSchema(properties[map[name]]) },
     /**
@@ -1044,12 +968,10 @@ export default {
 .route-option-tag { float: right; margin-top: 7px; }
 .route-empty { padding: 38px 12px; color: var(--text-color-secondary); text-align: center; }
 .add-route-target, .route-issues { margin-top: 14px; }
-.persona-section { min-height: 520px; }.persona-form { margin-top: 18px; }.persona-basics { display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: 18px; }.persona-section .el-alert { margin-top: 18px; }.persona-section .el-alert p { margin: 0 0 12px; }
 .provider-heading-actions { display: flex; align-items: center; gap: 10px; }.provider-probe-result { margin-top: 12px; }
 .secret-hint { margin: 10px 0 0; color: var(--text-color-secondary); font-size: 12px; line-height: 1.6; }.secret-section .field-error { margin-top: 8px; color: var(--danger-color); font-size: 12px; }.provider-main > .section-action { margin-top: 20px; }.setting-restart { margin: 6px 8px 0 0; }
 @media (max-width: 820px) { .mobile-provider-select { display: block; }.provider-list { display: none; } }
 @media (max-width: 820px) { .route-workbench { grid-template-columns: 1fr; }.route-sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }.route-editor { padding: 16px; }.route-target-row { grid-template-columns: 54px 100px minmax(0, 1fr); padding: 10px 0; }.route-target-actions { grid-column: 2 / -1; justify-content: flex-end; } }
-@media (max-width: 620px) { .persona-basics { grid-template-columns: 1fr; gap: 0; } }
 @media (max-width: 460px) { .provider-list { grid-template-columns: 1fr; }.section-action { align-items: stretch; flex-direction: column; }.section-action span { margin: 0; }.secret-row { grid-template-columns: 1fr; } }
 .provider-workbench.no-sidebar { grid-template-columns: 1fr; }
 .provider-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 16px; }
@@ -1072,6 +994,8 @@ export default {
 .routing-defaults { min-height: 0; margin-bottom: 14px; }
 .routing-defaults .default-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); margin-top: 12px; }
 .settings-switch { margin-bottom: 14px; }
+.settings-link { display: flex; align-items: center; gap: 6px; margin: 0 0 12px; color: var(--text-color-secondary); font-size: 12px; }
+.settings-link .el-button { padding: 0; }
 .dirty-dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: var(--warning-color, #e6a23c); vertical-align: middle; }
 @media (max-width: 820px) {.connection-panel { padding: 12px; }.models-toolbar .model-search { width: 100%; order: 1; } }
 </style>

@@ -1,158 +1,102 @@
 <template>
-  <div
-    class="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
-    :style="{ background: 'var(--bg-color)' }"
-  >
-    <!-- 樱花动画背景元素 - 优化了动画流畅度和随机性 -->
-    <div class="absolute inset-0 overflow-hidden pointer-events-none">
-      <div
-        v-for="(pos, i) in sakuraPositions"
-        :key="i"
-        class="absolute sakura"
-        :style="{
-          left: `${pos.left}%`,
-          top: `${pos.top}%`,
-          animationDelay: `${pos.delay}s`,
-          animationDuration: `${pos.duration}s`,
-          transform: `scale(${pos.scale}) rotate(${pos.rotate}deg)`,
-          opacity: pos.opacity,
-        }"
+  <div class="login-page">
+    <div class="login-card">
+      <img
+        :src="logoUrl"
+        alt="Logo"
+        class="login-logo"
+        :class="{ 'animate-pulse': loading }"
+      />
+
+      <el-form
+        @submit.native.prevent
+        v-loading="loading"
+        element-loading-text="正在登录..."
+        element-loading-spinner="el-icon-loading"
+        element-loading-custom-class="rounded-lg"
+        :rules="rules"
+        ref="loginForm"
+        :model="loginForm"
+        label-position="top"
+        class="login-form"
       >
-        <svg
-          viewBox="0 0 100 100"
-          class="w-8 h-8"
-          :style="{ color: 'var(--primary-color-light)' }"
-        >
-          <path
-            fill="currentColor"
-            d="M50 0C40 20 20 30 0 50c20 20 40 30 50 50 10-20 30-30 50-50C70 30 60 20 50 0z"
+        <el-form-item prop="username" label="账号">
+          <el-input
+            v-model="loginForm.username"
+            placeholder="请输入用户名"
+            prefix-icon="el-icon-user"
+            autocomplete="username"
           />
-        </svg>
-      </div>
-    </div>
+        </el-form-item>
 
-    <!-- 主登录框 - 添加了更平滑的悬停效果 -->
-    <div
-      class="w-full max-w-md backdrop-blur-sm rounded-xl shadow-xl overflow-hidden transition-all duration-500 transform hover:shadow-2xl hover:-translate-y-1"
-      :style="{ backgroundColor: 'var(--bg-color-secondary)' }"
-    >
-      <!-- 装饰性顶部渐变条 - 添加了动画效果 -->
-      <div
-        class="h-2"
-        :style="{
-          background:
-            'linear-gradient(to right, var(--primary-color), var(--primary-color-light))',
-        }"
-      ></div>
-
-      <div class="p-8 sm:p-10">
-        <!-- Logo 头像 - 添加了加载动画 -->
-        <div class="flex justify-center mb-8">
-          <img
-            :src="logoUrl"
-            alt="Logo"
-            class="w-100 h-50 object-contain transition-all duration-500 hover:scale-110 hover:rotate-3"
-            :class="{ 'animate-pulse': loading }"
+        <el-form-item prop="password" label="密码">
+          <el-input
+            v-model="loginForm.password"
+            placeholder="请输入密码"
+            prefix-icon="el-icon-lock"
+            type="password"
+            show-password
+            autocomplete="current-password"
           />
-        </div>
+        </el-form-item>
 
-        <!-- 表单部分 - 优化了加载状态 -->
-        <el-form
-          @submit.native.prevent
-          v-loading="loading"
-          element-loading-text="正在登录..."
-          element-loading-spinner="el-icon-loading"
-          element-loading-background="rgba(255, 255, 255, 0.8)"
-          element-loading-custom-class="rounded-lg"
-          :rules="rules"
-          ref="loginForm"
-          :model="loginForm"
-        >
-          <el-form-item prop="username" label="账号" class="mb-6">
-            <InteractiveInput
-              v-model="loginForm.username"
-              placeholder="请输入用户名"
-              prefixIcon="account"
-              class="w-full"
-              @focus="handleInputFocus('username')"
-              @blur="handleInputBlur('username')"
-            ></InteractiveInput>
-          </el-form-item>
-
-          <el-form-item prop="password" label="密码" class="mb-8">
-            <InteractiveInput
-              v-model="loginForm.password"
-              placeholder="请输入密码"
-              prefixIcon="password"
-              type="password"
-              class="w-full"
-              @focus="handleInputFocus('password')"
-              @blur="handleInputBlur('password')"
-            ></InteractiveInput>
-          </el-form-item>
-
-          <!-- 按钮组 - 优化了按钮交互 -->
-          <div class="flex flex-col sm:flex-row justify-between gap-4">
-            <CuteButton
-              type="secondary"
-              icon="server"
-              @click="changeApi"
-              class="flex-1"
-              iconColor="var(--button-icon-color-default)"
-            >
-              地址设置
-            </CuteButton>
-            <CuteButton
-              type="primary"
-              icon="login"
-              @click="submitLogin"
-              :loading="loading"
-              class="flex-1"
-              iconColor="var(--button-icon-color-primary)"
-            >
-              登录
-            </CuteButton>
-          </div>
-        </el-form>
-
-        <!-- 忘记密码 - 优化了交互体验 -->
-        <div
-          id="forgetPwd"
-          class="mt-6 text-center relative"
-          style="height: 40px"
-          @mouseenter="startButtonDance"
-        >
-          <el-button
-            type="text"
-            class="absolute transition-all duration-300 ease-out"
-            :class="{
-              'cursor-not-allowed': isButtonMoving,
-              'cursor-pointer': !isButtonMoving,
-            }"
-            :style="{
-              ...buttonPosition,
-              color: isButtonMoving
-                ? 'var(--danger-color)'
-                : 'var(--primary-color)',
-            }"
-            @click="handleForgetPassword"
+        <div class="login-actions">
+          <CuteButton
+            type="secondary"
+            icon="server"
+            @click="changeApi"
+            iconColor="var(--button-icon-color-default)"
           >
-            忘记密码
-            <transition name="el-zoom-in-top">
-              <p
-                v-if="showTaunt"
-                class="ml-2 text-xs"
-                :style="{
-                  color: isButtonMoving
-                    ? 'var(--danger-color)'
-                    : 'var(--primary-color-light)',
-                }"
-              >
-                {{ currentTaunt }}
-              </p>
-            </transition>
-          </el-button>
+            地址设置
+          </CuteButton>
+          <CuteButton
+            type="primary"
+            icon="login"
+            @click="submitLogin"
+            :loading="loading"
+            iconColor="var(--button-icon-color-primary)"
+          >
+            登录
+          </CuteButton>
         </div>
+      </el-form>
+
+      <div
+        id="forgetPwd"
+        class="mt-4 text-center relative"
+        style="height: 40px"
+        @mouseenter="startButtonDance"
+      >
+        <el-button
+          type="text"
+          class="absolute transition-all duration-300 ease-out"
+          :class="{
+            'cursor-not-allowed': isButtonMoving,
+            'cursor-pointer': !isButtonMoving,
+          }"
+          :style="{
+            ...buttonPosition,
+            color: isButtonMoving
+              ? 'var(--danger-color)'
+              : 'var(--primary-color)',
+          }"
+          @click="handleForgetPassword"
+        >
+          忘记密码
+          <transition name="el-zoom-in-top">
+            <p
+              v-if="showTaunt"
+              class="ml-2 text-xs"
+              :style="{
+                color: isButtonMoving
+                  ? 'var(--danger-color)'
+                  : 'var(--primary-color-light)',
+              }"
+            >
+              {{ currentTaunt }}
+            </p>
+          </transition>
+        </el-button>
       </div>
     </div>
 
@@ -183,12 +127,11 @@ import logoUrl from "@/assets/image/logo.png"
 import { syncApiWithBrowserLocation } from "@/utils/api"
 import { establishSession } from "@/utils/auth-session"
 import { clearAuthenticationState } from "@/utils/auth-session"
-import InteractiveInput from "@/components/ui/NeonInput.vue"
 import CuteButton from "@/components/ui/CuteButton.vue"
 
 export default {
   name: "MainLogin",
-  components: { InteractiveInput, CuteButton },
+  components: { CuteButton },
   data() {
     const validateName = (rules, value, callback) => {
       if (!value) {
@@ -239,19 +182,6 @@ export default {
         "放弃吧，你抓不到我的！",
       ],
       danceInterval: null,
-
-      // 櫻花
-      sakuraPositions: Array(20)
-        .fill()
-        .map(() => ({
-          left: Math.random() * 100,
-          top: Math.random() * -20,
-          delay: Math.random() * 5,
-          duration: 15 + Math.random() * 25,
-          scale: 0.3 + Math.random() * 0.7,
-          rotate: Math.random() * 360,
-          opacity: 0.4 + Math.random() * 0.5,
-        })),
     }
   },
   methods: {
@@ -326,25 +256,6 @@ export default {
     changeApi() {
       this.$router.replace("/myapi")
     },
-
-    handleInputFocus(field) {
-      // this.showKeyboardHint = true
-      // 添加输入框聚焦动画
-      const input = document.querySelector(`[prop="${field}"] input`)
-      if (input) {
-        input.parentElement.classList.add("ring-2", "ring-purple-200")
-      }
-    },
-
-    handleInputBlur(field) {
-      // this.showKeyboardHint = false
-      // 移除输入框聚焦动画
-      const input = document.querySelector(`[prop="${field}"] input`)
-      if (input) {
-        input.parentElement.classList.remove("ring-2", "ring-purple-200")
-      }
-    },
-
 
     // 忘记密码按钮相关方法
     startButtonDance() {
@@ -439,90 +350,82 @@ export default {
 </script>
 
 <style scoped>
-/* 樱花飘落动画 - 优化了动画效果 */
-.sakura {
-  position: absolute;
-  animation: sakura-fall linear infinite;
-  z-index: 0;
-  will-change: transform, opacity;
+.login-page {
+  display: flex;
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: radial-gradient(
+      circle at 50% 0%,
+      var(--primary-color-light-9),
+      transparent 60%
+    ),
+    var(--bg-color);
 }
 
-@keyframes sakura-fall {
-  0% {
-    transform: translateY(-100px) rotate(0deg);
-    opacity: 0.8;
-  }
-  80% {
-    opacity: 0.6;
-  }
-  100% {
-    transform: translateY(100vh) rotate(720deg);
-    opacity: 0;
-  }
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 32px 32px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  background: var(--bg-color-secondary);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
 }
 
-/* 顶部渐变条动画 */
-@keyframes gradient-x {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
+.login-logo {
+  display: block;
+  width: 240px;
+  max-width: 80%;
+  margin: 0 auto 24px;
+  object-fit: contain;
 }
 
-.animate-gradient-x {
-  background-size: 200% 200%;
-  animation: gradient-x 3s ease infinite;
+.login-form ::v-deep .el-form-item {
+  margin-bottom: 18px;
 }
 
-/* 覆盖 Element UI 样式 */
-.el-form-item__label {
-  color: var(--el-text-color-primary);
+.login-form ::v-deep .el-form-item__label {
+  padding-bottom: 6px;
+  color: var(--text-color);
   font-weight: 500;
-  transition: color 0.3s;
+  line-height: 20px;
 }
 
-.el-form-item.is-error .el-form-item__label {
-  color: var(--el-color-danger);
+.login-form ::v-deep .el-input__inner {
+  height: 42px;
+  border-radius: 12px;
 }
 
-.el-input__inner {
-  border-color: var(--el-border-color);
-  transition: all 0.3s;
+.login-form ::v-deep .el-input__icon {
+  line-height: 42px;
 }
 
-.el-input__inner:hover {
-  border-color: var(--el-color-primary-light-3);
+.login-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 26px;
 }
 
-.el-input__inner:focus {
-  border-color: var(--el-color-primary);
-  box-shadow: 0 0 0 2px var(--el-color-primary-light-9);
+.login-actions > * {
+  flex: 1;
 }
 
-.el-button--primary {
-  box-shadow: var(--el-box-shadow-light);
+@media (max-width: 480px) {
+  .login-card {
+    padding: 28px 20px 12px;
+  }
+
+  .login-actions {
+    flex-direction: column-reverse;
+  }
 }
 
-.el-button--default {
-  transition: all 0.3s;
-}
-
-.el-loading-mask {
-  background-color: var(--el-mask-color);
-  border-radius: 0.5rem;
-}
-
-/* 键盘提示样式 */
 kbd {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", "Courier New", monospace;
   border: 1px solid var(--el-border-color);
   border-bottom-width: 2px;
-  border-opacity: 0.2;
 }
 </style>

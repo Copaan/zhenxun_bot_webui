@@ -147,7 +147,7 @@
 
       <template v-else>
         <el-steps :active="step" finish-status="success" class="desktop-steps">
-          <el-step title="管理员" />
+          <el-step title="基本信息" />
           <el-step title="数据服务" />
           <el-step title="监听地址" />
           <el-step title="检查并启动" />
@@ -162,10 +162,38 @@
           <section v-show="step === 0" class="step-section">
             <div class="step-intro">
               <span class="section-number">01</span>
-              <h2>管理员账户</h2>
-              <p>该账户仅用于登录当前 WebUI。</p>
+              <h2>基本信息</h2>
+              <p>设置机器人的称呼和管理员，以及登录 WebUI 的账户。</p>
             </div>
             <el-form ref="accountForm" :model="account" label-position="top">
+              <label class="field-label">机器人</label>
+              <div class="field-grid two-columns">
+                <el-form-item label="Bot 名字">
+                  <el-input
+                    v-model.trim="account.selfNickname"
+                    maxlength="32"
+                    placeholder="小真寻"
+                  />
+                  <p class="field-hint">Bot 的自称，AI 聊天时也用这个名字。</p>
+                </el-form-item>
+                <el-form-item label="其他称呼">
+                  <el-input
+                    v-model="account.nicknames"
+                    placeholder="真寻，绪山真寻"
+                  />
+                  <p class="field-hint">消息以名字或这些称呼开头时视为在叫 Bot，用逗号分隔。</p>
+                </el-form-item>
+                <el-form-item label="超级用户 QQ 号">
+                  <el-input
+                    v-model="account.superusers"
+                    placeholder="多个号码用逗号分隔"
+                  />
+                  <p class="field-hint">填写你自己的 QQ 号，可在聊天中使用管理指令。</p>
+                </el-form-item>
+              </div>
+
+              <div class="section-divider" />
+              <label class="field-label">WebUI 管理员账户</label>
               <div class="field-grid two-columns">
                 <el-form-item label="用户名" required>
                   <el-input
@@ -174,12 +202,7 @@
                     autocomplete="username"
                   />
                 </el-form-item>
-                <el-form-item label="超级用户 ID">
-                  <el-input
-                    v-model="account.superusers"
-                    placeholder="多个 ID 使用逗号或换行分隔"
-                  />
-                </el-form-item>
+                <span />
                 <el-form-item label="管理密码" required>
                   <el-input
                     v-model="account.password"
@@ -410,8 +433,8 @@ export default {
       accessError: "",
       mode: null,
       step: 0,
-      stepTitles: ["管理员", "数据服务", "监听地址", "检查并启动"],
-      account: { username: "admin", password: "", confirmPassword: "", superusers: "" },
+      stepTitles: ["基本信息", "数据服务", "监听地址", "检查并启动"],
+      account: { username: "admin", password: "", confirmPassword: "", superusers: "", selfNickname: "", nicknames: "" },
       database: {
         mode: "sqlite",
         path: "data/db/zhenxun.db",
@@ -485,11 +508,18 @@ export default {
     },
     reviewItems() {
       return [
+        { key: "bot", label: "机器人", status: "ok", message: this.botSummary },
         { key: "account", label: "管理员账户", status: this.accountReady ? "ok" : "error", message: this.accountReady ? "密码规则和确认均已通过" : "账户或密码规则尚未完成" },
         { key: "database", label: "数据库", status: this.results.database ? this.results.database.status : "error", message: this.results.database ? this.results.database.message : "尚未执行真实连接测试" },
         { key: "cache", label: "缓存", status: this.results.cache ? this.results.cache.status : "error", message: this.results.cache ? this.results.cache.message : "尚未执行缓存检查" },
         { key: "network", label: "监听地址", status: this.results.network ? this.results.network.status : "error", message: this.results.network ? this.results.network.message : "尚未执行监听检查" },
       ]
+    },
+    botSummary() {
+      const names = this.normalizedNicknames()
+      const head = names.length ? `名字 ${names[0]}${names.length > 1 ? `，也可以叫 ${names.slice(1).join("、")}` : ""}` : "沿用默认名字"
+      const users = this.normalizedSuperusers()
+      return `${head}；${users.length ? `超级用户 ${users.join("、")}` : "未设置超级用户，可稍后在系统设置中添加"}`
     },
     hasWarnings() {
       return this.reviewItems.some((item) => item.status === "warning")
@@ -564,6 +594,8 @@ export default {
         if (sequence !== this.readSequence) return
         const draft = response.data
         this.account.username = draft.username || "admin"
+        this.account.selfNickname = draft.self_nickname || ""
+        this.account.nicknames = (draft.nicknames || []).join("，")
         Object.assign(this.database, draft.database || {})
         Object.assign(this.cache, draft.cache || {})
         Object.assign(this.network, draft.network || {})
@@ -580,7 +612,7 @@ export default {
     },
     nextStep() {
       if (this.step === 0 && !this.accountReady) {
-        this.$message.warning("请先完成管理员账户和密码规则")
+        this.$message.warning("请先完成 WebUI 管理员账户和密码规则")
         return
       }
       if (this.step === 1 && (!this.results.database || !this.results.cache)) {
@@ -627,6 +659,10 @@ export default {
     normalizedSuperusers() {
       return [...new Set(this.account.superusers.split(/[，,\n]/).map((value) => value.trim()).filter(Boolean))]
     },
+    normalizedNicknames() {
+      const others = this.account.nicknames.split(/[，,、\n]/)
+      return [...new Set([this.account.selfNickname, ...others].map((value) => value.trim()).filter(Boolean))]
+    },
     reviewIcon(status) {
       if (status === "ok") return "el-icon-circle-check ok"
       if (status === "warning") return "el-icon-warning-outline warning"
@@ -654,6 +690,8 @@ export default {
             password: this.account.password,
             confirm_password: this.account.confirmPassword,
             superusers: this.normalizedSuperusers(),
+            self_nickname: this.account.selfNickname,
+            nicknames: this.normalizedNicknames(),
             database: this.database,
             cache: this.cache,
             network: this.network,

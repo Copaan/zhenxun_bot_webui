@@ -1,9 +1,9 @@
 <template>
-  <section class="store-shell" :class="{ 'is-embedded': embedded }">
+  <section class="store-shell">
     <header class="store-header">
       <div>
-        <h1>{{ capability === "ai_chat" ? "AI 聊天插件" : "插件商店" }}</h1>
-        <p>{{ capability === "ai_chat" ? "选择并安装适合当前机器人的对话插件" : "浏览、安装和维护真寻插件" }}</p>
+        <h1>插件商店</h1>
+        <p>浏览、安装和维护真寻插件</p>
       </div>
       <el-button icon="el-icon-refresh" :loading="loading" @click="loadPlugins(true)">检查更新</el-button>
     </header>
@@ -100,8 +100,6 @@
                 <el-button v-if="repositoryUrl(plugin)" class="icon-action" icon="el-icon-link" circle @click="openRepository(plugin)" />
               </el-tooltip>
               <span class="action-spacer"></span>
-            <span v-if="capability === 'ai_chat' && plugin.installed" class="chat-switch">当前启用 <el-switch :value="chatEnabled(plugin)" :disabled="switchSaving || switchLoading || !switchRevision" @change="setChatEnabled(plugin, $event)" /></span>
-              <el-button v-if="capability === 'ai_chat' && plugin.installed" class="plugin-config-action" type="primary" plain size="small" icon="el-icon-setting" @click="openPluginConfiguration(plugin)">插件配置</el-button>
               <el-tooltip v-if="plugin.installed && plugin.reload_support === 'hot_reloadable'" content="热重载插件" placement="top">
                 <el-button class="icon-action" icon="el-icon-refresh" circle :loading="actionId === (plugin.store_key || plugin.id) && actionType === 'reload'" :disabled="Boolean(actionId) || pluginOperation.active" @click="runAction('reload', plugin)" />
               </el-tooltip>
@@ -134,12 +132,10 @@
         <span v-else>未提供仓库地址</span>
       </div>
     </el-drawer>
-    <UpdateDialog v-if="configModule" :module="configModule" @close="configModule = ''" />
   </section>
 </template>
 
 <script>
-import UpdateDialog from "@/components/plugin/UpdateDialog.vue"
 import { notifyRestartStatusChanged } from "@/utils/apply-result"
 import { newOperationId, reasonText, rememberPluginOperation, storeOperationResult } from "@/utils/plugin-operation"
 
@@ -159,38 +155,17 @@ const compareVersion = (left, right) => {
 
 export default {
   name: "StoreTemplate",
-  components: { UpdateDialog },
-  props: {
-    capability: { type: String, default: "" },
-    embedded: { type: Boolean, default: false },
-  },
   data() {
     let source = "auto"
     try { source = localStorage.getItem("zhenxun_plugin_download_source") || "auto" } catch (_) { /* Storage may be disabled. */ }
-    return { chatSwitches: {}, localChatPlugins: [], switchRevision: "", switchSaving: false, switchLoading: false, switchSequence: 0, downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", filtersOpen: false, page: 1, pageSize: 18, actionId: null, actionType: "", pendingActionKey: "", drawerVisible: false, selectedPlugin: null, configModule: "" }
+    return { downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", filtersOpen: false, page: 1, pageSize: 18, actionId: null, actionType: "", pendingActionKey: "", drawerVisible: false, selectedPlugin: null }
   },
   computed: {
     pluginOperation() { return this.$store.state.pluginOperation },
-    catalogPlugins() {
-      if (!this.capability) return this.plugins
-      const matched = this.plugins.filter((item) => (item.capabilities || []).includes(this.capability))
-      if (this.capability !== "ai_chat") return matched
-      return [...matched, ...this.localOnlyChatPlugins]
-    },
-    /**
-     * 已加载但不在插件商店中的 AI 聊天插件
-     * @returns {object[]} 按商店卡片字段整理的本地插件
-     */
-    localOnlyChatPlugins() {
-      const known = new Set(this.plugins.flatMap((item) => [item.module, item.runtime_module].filter(Boolean)))
-      return this.localChatPlugins
-        .filter((item) => !known.has(item.module) && !known.has(item.module_path))
-        .map((item) => ({ ...item, id: `local:${item.module}`, store_key: `local:${item.module}`, source: "local", local: true, installed: true, runtime_module: item.module_path, capabilities: ["ai_chat"] }))
-    },
-    pluginTypes() { return [...new Set(this.catalogPlugins.map((item) => item.plugin_type).filter(Boolean))].sort() },
+    pluginTypes() { return [...new Set(this.plugins.map((item) => item.plugin_type).filter(Boolean))].sort() },
     filteredPlugins() {
       const keyword = this.search.toLowerCase()
-      const result = this.catalogPlugins.filter((plugin) => {
+      const result = this.plugins.filter((plugin) => {
         const matchesSearch = !keyword || `${plugin.name} ${plugin.module} ${plugin.author}`.toLowerCase().includes(keyword)
         const matchesType = this.typeFilter === "all" || plugin.plugin_type === this.typeFilter
         const matchesStatus = this.statusFilter === "all" || (this.statusFilter === "uninstalled" && !plugin.installed) || (this.statusFilter === "installed" && plugin.installed) || (this.statusFilter === "updatable" && plugin.update_available)
@@ -212,35 +187,6 @@ export default {
   mounted() { this.loadPlugins() },
   methods: {
     reasonText,
-    chatEnabled(plugin) {
-      const normalize = value => String(value || "").split(":")[0].replace(/^zhenxun\.(?:builtin_plugins|plugins)\./, "")
-      const identity = normalize(plugin.runtime_module || plugin.module)
-      return !Object.entries(this.chatSwitches).some(([name, enabled]) => enabled === false && (identity === normalize(name) || identity.startsWith(`${normalize(name)}.`)))
-    },
-    async loadChatSwitches() {
-      const sequence = ++this.switchSequence
-      this.switchLoading = true
-      try {
-        const response = await this.getRequest(`${this.$root.prefix}/ai/chat-plugins/switches`, {}, { authFailureMode: "local" })
-        if (sequence !== this.switchSequence) return
-        if (!response.suc) throw new Error(response.info)
-        this.chatSwitches = response.data.switches || {}; this.switchRevision = response.data.revision; this.localChatPlugins = response.data.chat_plugins || []
-      } finally { if (sequence === this.switchSequence) this.switchLoading = false }
-    },
-    async setChatEnabled(plugin, enabled) {
-      if (this.switchSaving || this.switchLoading) return
-      this.switchSequence += 1
-      this.switchSaving = true
-      try {
-        const response = await this.putRequest(`${this.$root.prefix}/ai/chat-plugins/switches`, { expected_revision: this.switchRevision, module: plugin.module, enabled }, { authFailureMode: "local" })
-        if (!response.suc) throw new Error(response.info)
-        this.chatSwitches = response.data.switches; this.switchRevision = response.data.revision; this.$message.success(response.info)
-      } catch (error) {
-        if (error.response?.status === 401) this.$emit("session-expired")
-        if (error.response?.status === 409) await this.loadChatSwitches().catch(() => {})
-        this.$message.error(error.response?.status === 409 ? "配置已变化，请检查更新后重新操作。" : error.message || "开关保存失败")
-      } finally { this.switchSaving = false }
-    },
     saveDownloadSource() {
       try { localStorage.setItem("zhenxun_plugin_download_source", this.downloadSource) } catch (_) { /* Optional preference. */ }
       this.loadPlugins()
@@ -258,27 +204,12 @@ export default {
       if ((plugin.reload_reasons || []).includes("not_loaded")) return "尚未加载"
       return "变更后需要重启"
     },
-    async openPluginConfiguration(plugin) {
-      const module = String(plugin.runtime_module || plugin.module).split(".").pop()
-      try {
-        const response = await this.getRequest(`${this.$root.prefix}/plugin/get_plugin`, { module })
-        if (!response.suc) throw new Error(response.info || "插件配置读取失败")
-        if (!response.data?.config_groups?.length) {
-          this.$message.info("该插件无需额外配置。")
-          return
-        }
-        this.configModule = module
-      } catch (error) {
-        this.$message.error(error.message || "插件配置读取失败")
-      }
-    },
     async loadPlugins(refresh = false) {
       this.loading = true; this.error = ""
       try {
         const response = await this.getRequest(`${this.$root.prefix}/store/get_plugin_store`, { refresh, download_source: this.downloadSource })
         if (!response.suc) throw new Error(response.info || "插件商店加载失败")
         this.plugins = Array.isArray(response.data.plugin_list) ? response.data.plugin_list : []
-        if (this.capability === "ai_chat") await this.loadChatSwitches()
       } catch (error) {
         this.plugins = []
         this.error = error.response?.data?.detail || error.message || "插件商店暂时不可用。"
@@ -396,8 +327,6 @@ export default {
 
 <style scoped>
 .store-shell { min-height: 100%; padding: 22px; color: var(--text-color); background: var(--bg-color); }
-.store-shell.is-embedded { padding: 0; background: transparent; }
-.store-shell.is-embedded .store-header h1 { font-size: 18px; }
 .store-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .store-header h1 { margin: 0; font-size: 24px; }.store-header p { margin: 5px 0 0; color: var(--text-color-secondary); }
 .store-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) 150px 150px 150px 230px; gap: 10px; margin-bottom: 16px; }

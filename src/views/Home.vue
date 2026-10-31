@@ -9,27 +9,19 @@
       ></div>
       <!-- 侧边栏 -->
       <aside
-        class="app-sidebar fixed md:relative z-50 h-screen flex flex-col"
+        class="app-sidebar z-50 h-screen flex flex-col"
+        :class="{ 'is-mobile': isMobile }"
         :style="{
           width: getMenuWidth(),
           transform: getTransform(),
           backgroundColor: 'var(--bg-color-secondary)',
         }"
       >
-        <button
-          v-if="isMobile && asideShow"
-          type="button"
-          class="mobile-sidebar-close md:hidden"
-          aria-label="关闭导航菜单"
-          @click="toggleMenu"
-        >
-          <i class="el-icon-close"></i>
-        </button>
         <div class="flex flex-col h-full overflow-hidden">
           <!-- 顶部内容 -->
           <div class="flex-1 overflow-y-auto">
             <div
-              class="brand-area flex justify-center"
+              class="brand-area flex"
               :class="{ 'is-collapsed': isCollapsed }"
             >
               <img
@@ -39,6 +31,15 @@
                 alt="Logo"
               />
               <span v-else class="brand-mark" aria-label="真寻">真</span>
+              <button
+                v-if="isMobile"
+                type="button"
+                class="mobile-sidebar-close"
+                aria-label="关闭导航菜单"
+                @click="toggleMenu"
+              >
+                <i class="el-icon-close"></i>
+              </button>
             </div>
 
             <div class="px-2 pb-4">
@@ -57,31 +58,16 @@
                   :key="menu.module"
                   :index="normalizeRoute(menu.router)"
                   class="group my-1 flex justify-center"
-                  :style="{
-                    backgroundColor:
-                      activeMenu === normalizeRoute(menu.router)
-                        ? 'var(--bg-color-hover)'
-                        : 'transparent',
-                  }"
                 >
                   <div class="flex items-center w-full">
-                    <span
-                      class="h-8 w-1 rounded-full mr-4 transition-all duration-300"
-                      :style="{
-                        backgroundColor:
-                          activeMenu === normalizeRoute(menu.router)
-                            ? 'var(--primary-color)'
-                            : 'transparent',
-                      }"
-                    ></span>
                     <svg-icon
                       :icon-class="
                         activeMenu === normalizeRoute(menu.router)
                           ? menu.icon + '-select'
                           : menu.icon
                       "
-                      size="1.7em"
-                      class="w-6 h-6 transition-all duration-300"
+                      size="1.4em"
+                      class="menu-icon transition-all duration-300"
                       :style="{
                         '--icon-color':
                           activeMenu === normalizeRoute(menu.router)
@@ -96,7 +82,7 @@
                     />
                     <span
                       v-if="!isCollapsed"
-                      class="ml-3 text-lg font-medium transition-all duration-300"
+                      class="menu-label transition-all duration-300"
                       :style="{
                         color:
                           activeMenu === normalizeRoute(menu.router)
@@ -131,6 +117,7 @@
         class="app-content flex-1 flex flex-col"
         :style="{
           width: contentWidth,
+          height: windowHeight + 'px',
           overflow: 'hidden',
         }"
       >
@@ -139,40 +126,33 @@
           class="app-header flex items-center justify-between sticky top-0 z-30"
           :style="{ backgroundColor: 'var(--bg-color-secondary)' }"
         >
-          <!-- 移动端菜单按钮 -->
-          <button
-            @click="toggleMenu"
-            class="md:hidden p-2 rounded-full transition-all duration-300"
-            :style="{ backgroundColor: 'var(--bg-color-hover)' }"
-          >
-            <svg-icon
-              :icon-class="!asideShow ? 'arrow-right' : 'arrow-left'"
-              class="w-5 h-5 transition-transform duration-300"
-              :style="{ color: 'var(--primary-color)' }"
-              :class="{ 'rotate-180': asideShow }"
-            />
-          </button>
-
           <!-- 左侧功能区 -->
-          <div class="flex items-center space-x-4">
+          <div class="header-group">
+            <button
+              v-if="isMobile"
+              type="button"
+              class="header-icon-button"
+              aria-label="打开导航菜单"
+              @click="toggleMenu"
+            >
+              <i class="el-icon-s-unfold"></i>
+            </button>
+            <span v-if="isMobile" class="header-title">{{ currentMenuName }}</span>
             <!-- 桌面端菜单展开/收起按钮 -->
             <button
-              v-if="!isMobile"
+              v-else
+              type="button"
+              class="header-icon-button"
+              :aria-label="isCollapsed ? '展开导航菜单' : '收起导航菜单'"
               @click="toggleCollapse"
-              class="header-icon-button hidden md:flex items-center"
-              :style="{ backgroundColor: 'var(--bg-color-hover)' }"
             >
-              <svg-icon
-                :icon-class="isCollapsed ? 'arrow-right' : 'arrow-left'"
-                class="w-5 h-5 transition-transform duration-300"
-                :style="{ color: 'var(--primary-color)' }"
-                :class="{ 'rotate-180': isCollapsed }"
-              />
+              <i :class="isCollapsed ? 'el-icon-s-unfold' : 'el-icon-s-fold'"></i>
             </button>
 
             <el-autocomplete
+              v-if="!isMobile"
               v-model="menuSearch"
-              class="global-search hidden sm:block"
+              class="global-search"
               value-key="name"
               prefix-icon="el-icon-search"
               placeholder="搜索页面"
@@ -204,12 +184,13 @@
           </div>
 
           <!-- 右侧功能区 -->
-          <div class="flex items-center space-x-2 md:space-x-4">
+          <div class="header-group">
             <el-tooltip :content="startupSummary.detail" placement="bottom" :disabled="startupDrawerVisible">
               <button
                 type="button"
                 class="startup-status"
                 :class="`is-${startupSummary.status}`"
+                :aria-label="startupSummary.label"
                 @click="openStartupReport"
               >
                 <i></i>
@@ -225,15 +206,10 @@
             <el-dropdown
               @command="handleThemeChange"
               trigger="click"
-              class="rounded-full p-2 transition-all duration-300"
-              :style="{ backgroundColor: 'var(--bg-color-hover)' }"
             >
-              <span class="el-dropdown-link cursor-pointer">
-                <i
-                  class="el-icon-magic-stick text-xl"
-                  :style="{ color: 'var(--primary-color)' }"
-                ></i>
-              </span>
+              <button type="button" class="header-icon-button" aria-label="切换主题">
+                <i class="el-icon-magic-stick"></i>
+              </button>
               <el-dropdown-menu
                 slot="dropdown"
                   class="shadow-lg overflow-hidden"
@@ -269,12 +245,12 @@
                 <span class="mr-2 hidden md:inline" :style="{ color: 'var(--text-color)' }">切换 Bot</span>
                 <el-image
                   :src="botInfo.ava_url || logoUrl"
-                  class="w-10 h-10 rounded-full object-cover border-2 shadow-sm"
+                  class="bot-avatar rounded-full object-cover border-2"
                   :style="{ borderColor: 'var(--primary-color)' }"
                 >
                   <img slot="error" class="w-full h-full object-cover" :src="logoUrl" alt="当前机器人头像" />
                 </el-image>
-                <i class="el-icon-arrow-down ml-2"></i>
+                <i class="el-icon-arrow-down ml-1 hidden md:inline"></i>
               </div>
               <el-dropdown-menu slot="dropdown" class="bot-switch-menu">
                 <el-dropdown-item
@@ -301,7 +277,8 @@
             <button
               v-else
               type="button"
-              class="bot-connect-shortcut"
+              class="header-icon-button"
+              aria-label="连接机器人"
               @click="navigateTo('/protocol')"
             >
               <i class="el-icon-connection"></i>
@@ -313,20 +290,12 @@
               @command="dropdownClick"
               trigger="click"
               popper-class="account-dropdown-menu"
-              class="rounded-full p-2 transition-all duration-300"
-              :style="{ backgroundColor: 'var(--bg-color-hover)' }"
             >
-              <span class="el-dropdown-link cursor-pointer flex items-center">
-                <span
-                  class="font-medium mx-2 transition-all duration-300"
-                  :style="{ color: 'var(--text-color)' }"
-                  >管理员</span
-                >
-                <i
-                  class="el-icon-arrow-down transition-transform duration-300"
-                  :style="{ color: 'var(--primary-color)' }"
-                ></i>
-              </span>
+              <button type="button" class="header-icon-button" aria-label="账户菜单">
+                <i class="el-icon-user"></i>
+                <span class="hidden md:inline">管理员</span>
+                <i class="el-icon-arrow-down hidden md:inline"></i>
+              </button>
               <el-dropdown-menu
                 slot="dropdown"
                 class="account-dropdown-menu shadow-lg overflow-hidden"
@@ -361,11 +330,8 @@
 
         <!-- 主内容 -->
         <main
-          class="flex-1 h-full p-0"
-          :style="{
-            backgroundColor: 'var(--bg-color)',
-            height: computedHeight + 'px',
-          }"
+          class="app-main"
+          :style="{ backgroundColor: 'var(--bg-color)' }"
           @click="handleMainClick"
         >
           <bot-required-state
@@ -378,11 +344,8 @@
           />
           <router-view
             v-else
-            class="route-surface h-full"
-            :style="{
-              backgroundColor: 'var(--bg-color-secondary)',
-              height: computedHeight + 'px',
-            }"
+            class="route-surface"
+            :style="{ backgroundColor: 'var(--bg-color-secondary)' }"
             :key="routeRequiresBot ? botInfo.bot_key : undefined"
           />
         </main>
@@ -544,7 +507,6 @@ import logoUrl from "@/assets/image/logo.png"
 import EventBus from "@/utils/event-bus"
 import { clearAuthenticationState } from "@/utils/auth-session"
 import { hasValidAuthToken } from "@/utils/auth-token"
-import { getHeaderHeight } from "@/utils/utils"
 import { hasDirtyState } from "@/utils/dirty-state"
 import { requestRestartWithRecovery } from "@/utils/restart-flow"
 import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
@@ -604,6 +566,10 @@ export default {
     activeMenu() {
       return this.normalizeRoute(this.$route.path)
     },
+    currentMenuName() {
+      const menu = this.menus.find((item) => this.normalizeRoute(item.router) === this.activeMenu)
+      return menu ? menu.name : "真寻"
+    },
     botInfo() {
       return this.$store.state.botInfo || {}
     },
@@ -635,9 +601,6 @@ export default {
     contentWidth() {
       if (this.isMobile) return "100%"
       return this.isCollapsed ? "calc(100% - 5.5rem)" : "calc(100% - 13.5rem)"
-    },
-    computedHeight() {
-      return this.windowHeight - getHeaderHeight() + 7
     },
     socketSummary() {
       const state = this.socketStates.status
@@ -1072,7 +1035,7 @@ export default {
     },
     applyScreenState(initial) {
       const wasMobile = this.isMobile
-      this.isMobile = window.innerWidth <= 768
+      this.isMobile = window.innerWidth < 768
       if (this.isMobile) {
         if (initial || !wasMobile) this.asideShow = false
         this.isCollapsed = false
@@ -1185,41 +1148,61 @@ export default {
 }
 
 .app-sidebar {
+  position: relative;
   border-right: 1px solid var(--border-color);
-  box-shadow: 4px 0 18px rgba(20, 24, 31, 0.04);
+}
+
+.app-sidebar.is-mobile {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: min(16rem, 82vw) !important;
+  border-right: 0;
+  border-radius: 0 16px 16px 0;
+  box-shadow: 8px 0 28px rgba(15, 23, 42, 0.18);
 }
 
 .mobile-sidebar-mask {
   position: fixed;
   inset: 0;
   z-index: 45;
-  background: rgba(15, 23, 42, 0.45);
+  background: rgba(15, 23, 42, 0.4);
 }
 
 .mobile-sidebar-close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 1;
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
   place-items: center;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--text-color-secondary);
-  background: var(--bg-color);
+  background: var(--bg-color-hover);
 }
 
 .brand-area {
-  height: 96px;
+  height: 88px;
   align-items: center;
+  justify-content: center;
+  gap: 8px;
   padding: 14px 18px 8px;
+}
+
+.app-sidebar.is-mobile .brand-area {
+  justify-content: space-between;
+  padding: 16px 14px 8px 18px;
 }
 
 .brand-logo {
   width: 148px;
   height: 66px;
+  min-width: 0;
+}
+
+.app-sidebar.is-mobile .brand-logo {
+  width: 132px;
+  height: 58px;
+  object-position: left center;
 }
 
 .brand-area.is-collapsed {
@@ -1232,39 +1215,80 @@ export default {
   width: 38px;
   height: 38px;
   place-items: center;
-  border: 1px solid var(--primary-color);
-  border-radius: 8px;
+  border-radius: 12px;
   color: var(--primary-color);
-  background: var(--bg-color-hover);
+  background: var(--primary-color-light-9);
   font-size: 17px;
   font-weight: 700;
 }
 
 .app-header {
   min-height: 64px;
+  gap: 12px;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border-color);
-  box-shadow: 0 2px 10px rgba(20, 24, 31, 0.035);
 }
 
-.header-icon-button,
-.bot-connect-shortcut {
+.header-group {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-color);
+  font-size: 16px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-icon-button {
+  display: inline-flex;
   min-width: 38px;
   height: 38px;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   padding: 0 10px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--primary-color);
   background: var(--bg-color);
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.header-icon-button span {
+  color: var(--text-color);
+  font-size: 14px;
+}
+
+.header-icon-button:hover:not(:disabled) {
+  border-color: var(--primary-color-light-7);
+  background: var(--primary-color-light-9);
+}
+
+.bot-avatar {
+  width: 38px;
+  height: 38px;
 }
 
 .header-icon-button:disabled { opacity: .45; cursor: not-allowed; }
 .bot-switch-menu { min-width: 280px; }.bot-switch-item { height: auto !important; padding: 8px 12px !important; line-height: 1.2 !important; }.bot-switch-item ::v-deep .el-dropdown-menu__item { display: flex; }.bot-switch-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; margin-left: 10px; }.bot-switch-copy strong, .bot-switch-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.bot-switch-copy span { color: var(--text-color-secondary); font-size: 12px; }
 
+.app-main {
+  flex: 1;
+  min-height: 0;
+}
+
 .route-surface {
+  height: 100%;
   min-width: 0;
   overflow: auto;
 }
@@ -1292,7 +1316,7 @@ export default {
 ::v-deep .global-search .el-input__inner {
   height: 38px;
   border-color: var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   background: var(--bg-color);
   color: var(--text-color);
 }
@@ -1302,7 +1326,7 @@ export default {
   height: 38px;
   place-items: center;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 10px;
   color: var(--primary-color);
   background: var(--bg-color);
 }
@@ -1504,28 +1528,33 @@ export default {
   padding-top: 6px;
 }
 
-::v-deep .el-menu-item:hover {
-  background-color: var(--bg-color-hover) !important;
-}
-::v-deep .el-menu-item.is-active {
-  background-color: var(--bg-color-hover) !important;
-}
-
 ::v-deep .app-menu .el-menu-item {
-  height: 46px;
-  border-radius: 6px;
-  line-height: 46px;
+  height: 44px;
+  padding: 0 14px !important;
+  border-radius: 12px;
+  line-height: 44px;
+  transition: background-color 0.2s;
 }
 
-::v-deep .app-menu .el-menu-item span {
+::v-deep .app-menu .el-menu-item:hover,
+::v-deep .app-menu .el-menu-item:focus {
+  background-color: var(--bg-color-hover) !important;
+}
+
+::v-deep .app-menu .el-menu-item.is-active {
+  background-color: var(--primary-color-light-9) !important;
+}
+
+.menu-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.menu-label {
+  margin-left: 12px;
+  font-size: 15px;
   letter-spacing: 0;
-}
-
-/* 响应式调整 */
-@media (max-width: 768px) {
-  .el-dropdown-link span {
-    display: none;
-  }
 }
 
 /* 折叠菜单样式 */
@@ -1541,12 +1570,11 @@ export default {
   margin-right: 0;
 }
 
-.rotate-180 {
-  transform: rotate(180deg);
-}
-@media (max-width: 768px) {
-  .app-header { min-height: 58px; padding: 10px 12px; }
-  .brand-area { height: 84px; }
+@media (max-width: 767px) {
+  .app-header { min-height: 56px; padding: 9px 12px; }
+  .header-group { gap: 8px; }
+  .header-icon-button, .bot-avatar { min-width: 36px; width: auto; height: 36px; }
+  .bot-avatar { width: 36px; }
   .startup-diagnostic-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
 }
 </style>

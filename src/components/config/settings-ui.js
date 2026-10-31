@@ -65,6 +65,12 @@ const aiSectionSettings = {
     } },
     { key: 'vision', title: '多模态窗口', icon: 'el-icon-picture-outline', description: '控制图片等多模态原始数据在上下文中保留的范围。', fields: {
       vision_window_size: { label: '多模态窗口', unit: '轮', description: '只保留最近若干轮消息中的多模态原始数据，更早的替换为占位符；0 表示不限制。' },
+      image_max_side: { label: '图片长边上限', unit: '像素', description: '发给模型前把图片缩小到该长边以内，动图取 9 帧拼成一张；0 表示不压缩。' },
+      file_max_chars: { label: '文件读取字数', unit: '字', description: '聊天中收到文档时读取给模型的最大字数，支持 txt / md / html / csv / json / epub，安装“知识库文档解析”组件后支持 docx / xlsx / pptx / pdf；0 表示只告诉模型文件名。' },
+    } },
+    { key: 'history', title: '对话记录保存', icon: 'el-icon-time', description: '短期对话记忆保存在数据库中，每天凌晨按以下规则清理一次。', fields: {
+      history_retention_days: { label: '保留天数', unit: '天', description: '超过该天数的对话消息会被删除；0 表示不限制。' },
+      history_max_messages: { label: '每个会话保留条数', unit: '条', description: '每个会话只保留最近若干条消息，更早的会被删除；0 表示不限制。' },
     } },
   ],
   agent: [
@@ -76,24 +82,16 @@ const aiSectionSettings = {
     } },
     { key: 'tools', title: '工具与协作', icon: 'el-icon-connection', description: '设置工具调用方式与外部服务的驻留时间。', fields: {
       enable_parallel_calls: { label: '并行工具调用', description: '允许模型在一轮中同时调用多个工具。' },
-      enable_hitl: { label: '允许向用户求助', description: '允许智能体挂起任务并向用户提问后继续。' },
+      tool_output_max_chars: { label: '工具结果长度上限', unit: '字', description: '单个工具结果交给模型的最大字符数，超出时保留首尾、截去中间；0 表示不限制。' },
+      tool_timeout: { label: '工具调用超时', unit: '秒', description: '单次工具调用的最长执行时间，超时后告知模型调用失败；子代理转交不受限制，0 表示不限制。' },
       mcp_cleanup_timeout: { label: 'MCP 闲置回收', unit: '秒', description: 'MCP 服务闲置超过该时间后自动关闭；0 表示常驻不回收。' },
     } },
   ],
-  sandbox: [
-    { key: 'runtime', title: '沙箱运行环境', icon: 'el-icon-box', restart: true, description: '沙箱开关和驱动需要重启后生效，镜像与清理参数影响新会话。', fields: {
-      enable_sandbox: { label: '启用沙箱', restart: true, description: '关闭时不加载 Docker 等沙箱驱动，启动更快。' },
-      sandbox_type: { label: '沙箱驱动', restart: true, requires: 'enable_sandbox', description: '沙箱使用的底层驱动。', options: [{ value: 'docker', label: 'Docker' }] },
-      docker_image: { label: 'Docker 镜像', requires: 'enable_sandbox', description: '新建沙箱会话时使用的镜像。' },
-      cleanup_timeout: { label: '闲置清理', unit: '秒', requires: 'enable_sandbox', description: '沙箱闲置超过该时间后自动清理；0 表示不自动清理。' },
-      enable_vfs_helper: { label: 'VFS 路径防护', requires: 'enable_sandbox', description: '阻止沙箱内的路径逃逸，遇到兼容性问题时可关闭。' },
-    } },
-  ],
   web_search: [
-    { key: 'search', title: '联网搜索', icon: 'el-icon-search', description: '为需要联网的 AI 功能选择搜索方式。原生搜索由模型厂商在服务端执行；搜索服务由 Bot 调用搜索接口，适用于任何支持工具调用的模型。', fields: {
-      mode: { label: '搜索方式', description: '自动：模型的线路都支持原生搜索时使用原生搜索，否则使用搜索服务。原生搜索只在官方接口或核验通过的线路上发送。', options: [{ value: 'auto', label: '自动' }, { value: 'native', label: '仅原生搜索' }, { value: 'api', label: '仅搜索服务' }, { value: 'off', label: '关闭' }] },
+    { key: 'search', title: '联网搜索', icon: 'el-icon-search', description: '让 AI 能上网查资料。原生搜索由模型厂商执行；搜索服务由 Bot 调用搜索接口，适用于任何支持工具调用的模型。', fields: {
+      mode: { label: '搜索方式', description: '开启后 AI 聊天会获得联网搜索工具。自动：模型支持原生搜索（官方接口或核验通过的线路）时用原生搜索，否则用搜索服务。', options: [{ value: 'auto', label: '自动' }, { value: 'native', label: '仅原生搜索' }, { value: 'api', label: '仅搜索服务' }, { value: 'off', label: '关闭' }] },
       provider: { label: '搜索服务', placeholder: '自动选择', description: '未选择时使用第一个已配置官方密钥的 DeepSeek / Kimi / 智谱 / Jina 服务商。DeepSeek 搜索按次计费，Tavily 与博查需要单独填写密钥。', options: [{ value: 'deepseek', label: 'DeepSeek' }, { value: 'kimi', label: 'Kimi (Moonshot)' }, { value: 'glm', label: '智谱 GLM' }, { value: 'jina', label: 'Jina AI' }, { value: 'tavily', label: 'Tavily' }, { value: 'bocha', label: '博查' }] },
-      api_key: { label: '搜索服务密钥', description: '留空时复用同厂商服务商（官方接口）的密钥。' },
+      api_keys: { label: '搜索服务密钥', description: '可填写多个，轮流使用，某个失败时自动换下一个；留空时复用同厂商服务商（官方接口）的密钥。' },
       max_results: { label: '结果数量', unit: '条', description: '每次搜索返回的结果数量。' },
     } },
   ],
@@ -101,7 +99,7 @@ const aiSectionSettings = {
 
 /**
  * 生成 AI 配置分区的设置分组，嵌套字段展开为带中文说明的独立设置项
- * @param {string} section 分区名称（context / agent / sandbox）
+ * @param {string} section 分区名称（context / agent / web_search）
  * @param {object} sectionSchema 分区的 JSON Schema
  * @param {object} rootSchema 根 Schema，用于解析引用
  * @param {object} draft 分区草稿

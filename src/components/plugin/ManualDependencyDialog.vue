@@ -40,7 +40,7 @@ const storageKey = 'zhenxun_manual_dependency_operation'
 
 export default {
   name: 'ManualDependencyDialog',
-  props: { visible: Boolean },
+  props: { visible: Boolean, packages: { type: Array, default: () => [] } },
   data: () => ({ action: 'install', input: '', preview: null, result: null, error: '', busy: false, confirmSource: false, operationId: '', operationMissing: false, expired: false, frozen: isBusinessNetworkFrozen() }),
   computed: {
     pending() { return Boolean(this.operationId && !['completed', 'failed', 'interrupted', 'rolled_back', 'not_found'].includes(this.result?.status)) },
@@ -60,9 +60,13 @@ export default {
     this.unsubscribe = onBusinessNetworkChange(value => { this.frozen = value; if (value) this.pause(); else if (this.visible) this.resume() })
   },
   beforeDestroy() { this.pause(); this.unsubscribe?.(); document.removeEventListener('visibilitychange', this.onVisibility); window.removeEventListener('zhenxun-auth-expired', this.onExpired) },
-  mounted() { if (this.visible) this.resume() },
-  watch: { visible(value) { if (value) this.resume(); else this.pause() } },
+  mounted() { if (this.visible) this.open() },
+  watch: { visible(value) { if (value) this.open(); else this.pause() } },
   methods: {
+    open() {
+      if (this.packages.length && !this.pending) { this.action = 'install'; this.input = this.packages.join('\n'); this.invalidate() }
+      this.resume()
+    },
     pause() { this.epoch++; clearTimeout(this.timer); clearTimeout(this.analysisTimer); for (const controller of this.requests) controller.abort(); this.requests.clear(); this.busy = false },
     resume() { if (!this.expired && !this.frozen && !document.hidden && this.operationId) this.refreshOperation() },
     close() { this.$emit('update:visible', false) },

@@ -1,4 +1,4 @@
-export const TASK_LABELS = { chat: "对话", embedding: "向量嵌入", rerank: "文本重排", image: "图像生成", tts: "语音合成" }
+export const TASK_LABELS = { chat: "对话", embedding: "向量嵌入", rerank: "文本重排", image: "图像生成", tts: "语音合成", stt: "语音转文字" }
 export const MODALITY_LABELS = { text: "文本", image: "图片", audio: "音频", video: "视频", file: "文件" }
 export const PROTOCOL_LABELS = { openai_chat: "OpenAI Chat Completions", openai_responses: "OpenAI Responses", anthropic: "Anthropic Messages", gemini: "Gemini" }
 export const PROTOCOL_SHORT = { openai_chat: "Chat", openai_responses: "Responses", anthropic: "Anthropic", gemini: "Gemini" }

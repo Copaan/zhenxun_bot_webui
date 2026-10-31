@@ -33,6 +33,29 @@
       </div>
     </section>
 
+    <section v-if="overview && showGettingStarted" class="page-section getting-started">
+      <div class="section-heading">
+        <div><span class="eyebrow">快速开始</span><h2>让{{ botName }}开始聊天</h2></div>
+        <span class="muted">{{ gettingStartedDone }} / {{ gettingStarted.length }} 已完成</span>
+      </div>
+      <ol class="start-list">
+        <li v-for="(item, index) in gettingStarted" :key="item.key" class="start-row" :class="{ 'is-done': item.done }">
+          <span class="start-mark"><i v-if="item.done" class="el-icon-check"></i><template v-else>{{ index + 1 }}</template></span>
+          <div><strong>{{ item.title }}</strong><span>{{ item.detail }}</span></div>
+          <el-button v-if="!item.done" type="text" @click="goTo(item.route)">
+            {{ item.action }}<i class="el-icon-arrow-right el-icon--right"></i>
+          </el-button>
+        </li>
+      </ol>
+      <p class="start-tip">
+        <i class="el-icon-chat-dot-round"></i>
+        <span>在群里 @{{ botName }}，或以“{{ botName }}”开头说话就能和它聊天；人设、唤醒词和回复方式可以在</span>
+        <el-button type="text" @click="goTo('/ai/chat')">AI 聊天</el-button>
+        <span>中调整。</span>
+        <el-button type="text" class="start-hide" @click="hideGettingStarted">不再显示</el-button>
+      </p>
+    </section>
+
     <section v-if="overview" class="page-section">
       <div class="section-heading">
         <div><span class="eyebrow">待处理</span><h2>{{ issueTitle }}</h2></div>
@@ -106,6 +129,7 @@ const DashboardAnalytics = () =>
   import("@/components/dashboard/DashboardAnalytics.vue")
 const DashboardRuntimeDetails = () =>
   import("@/components/dashboard/DashboardRuntimeDetails.vue")
+const GETTING_STARTED_KEY = "zhenxunGettingStartedHidden"
 
 export default {
   name: "MainDashboard",
@@ -124,6 +148,7 @@ export default {
     pageDisposed: false,
     networkUnsubscribe: null,
     analyticsObserver: null,
+    gettingStartedHidden: window.localStorage.getItem(GETTING_STARTED_KEY) === "1",
   }),
   computed: {
     cacheModeDescription() {
@@ -148,6 +173,23 @@ export default {
       return this.overview.overall_status === "ok"
         ? "核心服务和机器人连接均已就绪。"
         : "按照下方待办逐项处理即可，不需要在多个页面间查找状态。"
+    },
+    botName() {
+      return this.overview?.getting_started?.self_nickname || "真寻"
+    },
+    gettingStarted() {
+      const state = this.overview?.getting_started || {}
+      return [
+        { key: "bot", title: "连接 QQ", detail: `用 NapCat 等协议端或 QQ 官方机器人接入，让${this.botName}收发消息。`, done: !!this.overview?.bots.length, action: "去接入", route: "/protocol" },
+        { key: "ai", title: "接入 AI 模型", detail: "选择厂商并填入 API Key，设置默认对话模型。", done: !!state.ai_ready, action: "去配置", route: "/ai" },
+        { key: "superusers", title: "设置超级用户", detail: "填写你自己的 QQ 号，就能在聊天中使用管理指令。", done: !!state.superusers, action: "去设置", route: "/system" },
+      ]
+    },
+    gettingStartedDone() {
+      return this.gettingStarted.filter((item) => item.done).length
+    },
+    showGettingStarted() {
+      return !this.gettingStartedHidden && this.gettingStartedDone < this.gettingStarted.length
     },
     issueTitle() {
       return this.overview.issues.length ? "需要留意的事项" : "当前没有待办"
@@ -267,6 +309,10 @@ export default {
       }, { rootMargin: "240px" })
       this.analyticsObserver.observe(this.$refs.analyticsAnchor)
     },
+    hideGettingStarted() {
+      window.localStorage.setItem(GETTING_STARTED_KEY, "1")
+      this.gettingStartedHidden = true
+    },
     goTo(route) {
       if (this.$route.path === route) this.loadOverview(true)
       else this.$router.push(route)
@@ -311,7 +357,8 @@ export default {
 .inline-error span { flex: 1; }
 .inline-error button { color: inherit; font-weight: 700; }
 .service-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; overflow: hidden; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
-.service-item { min-height: 82px; gap: 12px; padding: 14px 18px; border-right: 1px solid var(--border-color); }
+.service-item { min-width: 0; min-height: 82px; gap: 12px; padding: 14px 18px; border-right: 1px solid var(--border-color); }
+.service-item > span:last-child { flex-shrink: 0; max-width: 40%; overflow: hidden; color: var(--text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .service-item:last-child { border-right: 0; }
 .service-item > div { min-width: 0; flex: 1; }
 .service-item strong, .service-item small { display: block; }
@@ -345,10 +392,21 @@ export default {
 .bot-adapter { color: var(--text-color-secondary); }
 .empty-state { display: flex; min-height: 110px; align-items: center; justify-content: center; gap: 10px; color: var(--text-color-secondary); border: 1px dashed var(--border-color); }
 .bot-list + .empty-state { margin-top: 16px; }
+.start-list { margin: 0; padding: 0; border-top: 1px solid var(--border-color); list-style: none; }
+.start-row { display: flex; min-height: 68px; align-items: center; gap: 14px; border-bottom: 1px solid var(--border-color); }
+.start-row > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.start-row > div span { color: var(--text-color-secondary); }
+.start-row.is-done strong { color: var(--text-color-secondary); }
+.start-mark { display: grid; width: 26px; height: 26px; flex: 0 0 26px; place-items: center; border: 1px solid var(--primary-color); border-radius: 50%; color: var(--primary-color); font-size: 13px; font-weight: 700; }
+.start-row.is-done .start-mark { border-color: var(--el-color-success); color: #fff; background: var(--el-color-success); }
+.start-tip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 14px 0 0; color: var(--text-color-secondary); font-size: 13px; }
+.start-tip > i { margin-right: 4px; color: var(--primary-color); }
+.start-tip .el-button { padding: 0; }
+.start-tip .start-hide { margin-left: auto; color: var(--text-color-secondary); }
 .deferred-section { min-height: 260px; }
 .details-section { padding: 0; overflow: hidden; }
 .details-toggle { width: 100%; justify-content: space-between; padding: 20px 24px; color: var(--text-color); }
 .details-toggle > span { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 @media (max-width: 1100px) { .service-strip, .daily-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .service-item:nth-child(2), .daily-grid > div:nth-child(2) { border-right: 0; } .service-item:nth-child(-n + 2), .daily-grid > div:nth-child(-n + 2) { border-bottom: 1px solid var(--border-color); } }
-@media (max-width: 700px) { .runtime-page { padding: 12px; } .runtime-hero { min-height: 0; align-items: flex-start; flex-direction: column; padding: 22px; } .runtime-hero h1 { font-size: 23px; } .hero-actions { width: 100%; justify-content: space-between; } .service-strip, .daily-grid { grid-template-columns: 1fr; } .service-item, .daily-grid > div { border-right: 0; border-bottom: 1px solid var(--border-color); } .service-item:last-child, .daily-grid > div:last-child { border-bottom: 0; } .page-section { padding: 18px; } .issue-row { align-items: flex-start; flex-wrap: wrap; padding: 14px 0; } .issue-row .el-button { margin-left: 34px; } .bot-adapter { display: none; } }
+@media (max-width: 700px) { .runtime-page { padding: 12px; } .runtime-hero { min-height: 0; align-items: flex-start; flex-direction: column; padding: 22px; } .runtime-hero h1 { font-size: 23px; } .hero-actions { width: 100%; justify-content: space-between; } .service-strip, .daily-grid { grid-template-columns: minmax(0, 1fr); } .service-item, .daily-grid > div { border-right: 0; border-bottom: 1px solid var(--border-color); } .service-item:last-child, .daily-grid > div:last-child { border-bottom: 0; } .page-section { padding: 18px; } .issue-row { align-items: flex-start; flex-wrap: wrap; padding: 14px 0; } .issue-row .el-button { margin-left: 34px; } .start-row { align-items: flex-start; flex-wrap: wrap; padding: 14px 0; } .start-row .el-button { margin-left: 40px; } .bot-adapter { display: none; } }
 </style>

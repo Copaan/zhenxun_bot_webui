@@ -70,10 +70,11 @@ export default {
       return Object.entries(this.properties).map(([key, schema], index) => ({ key, schema, index, ui: this.fieldUi[key] || {} }))
         .sort((left, right) => (left.ui.order ?? left.index) - (right.ui.order ?? right.index))
     },
-    advancedFields() { return this.fieldEntries.filter((field) => field.ui.advanced) },
+    visibleEntries() { return this.fieldEntries.filter((field) => this.visible(field.key)) },
+    advancedFields() { return this.visibleEntries.filter((field) => field.ui.advanced) },
     sections() {
       const sections = new Map()
-      this.fieldEntries.filter((field) => !field.ui.advanced).forEach((field) => {
+      this.visibleEntries.filter((field) => !field.ui.advanced).forEach((field) => {
         const section = field.ui.section || ""
         if (!sections.has(section)) sections.set(section, [])
         sections.get(section).push(field)

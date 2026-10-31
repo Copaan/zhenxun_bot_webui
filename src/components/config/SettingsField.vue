@@ -24,7 +24,7 @@
                 <el-select v-if="simpleItem.enum" :value="item" :aria-label="`${label} 第 ${index + 1} 项`" @input="updateItem(index, $event)"><el-option v-for="option in simpleItem.enum" :key="String(option)" :value="option" :label="String(option)" /></el-select>
                 <el-switch v-else-if="simpleItem.type === 'boolean'" :value="item === true" :aria-label="`${label} 第 ${index + 1} 项`" @input="updateItem(index, $event)" />
                 <el-input-number v-else-if="['number','integer'].includes(simpleItem.type)" :value="item" :precision="simpleItem.type === 'integer' ? 0 : undefined" :min="simpleItem.minimum" :max="simpleItem.maximum" :aria-label="`${label} 第 ${index + 1} 项`" controls-position="right" @change="updateItem(index, $event)" />
-                <el-input v-else :value="item" :aria-label="`${label} 第 ${index + 1} 项`" :placeholder="item === '' ? '空字符串（有效值）' : ''" @input="updateItem(index, $event)" />
+                <el-input v-else :value="item" :aria-label="`${label} 第 ${index + 1} 项`" :placeholder="item === '' ? '空字符串（有效值）' : ''" :show-password="secret" autocomplete="off" @input="updateItem(index, $event)" />
                 <el-button type="text" icon="el-icon-delete" :aria-label="`删除第 ${index + 1} 项`" @click="removeItem(index)" />
               </div>
               <el-button size="small" icon="el-icon-plus" @click="emitValue([...arrayValue, emptyValue(simpleItem)])">添加条目</el-button>
