@@ -6,8 +6,10 @@
         <el-radio-button label="nonebot">NoneBot 插件</el-radio-button>
       </el-radio-group>
     </div>
-    <StoreTemplate v-if="source === 'zhenxun'" />
-    <NoneBotStore v-else :initial-search="$route.query.search || ''" />
+    <keep-alive>
+      <StoreTemplate v-if="source === 'zhenxun'" />
+      <NoneBotStore v-else :initial-search="$route.query.search || ''" />
+    </keep-alive>
   </div>
 </template>
 

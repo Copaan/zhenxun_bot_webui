@@ -65,7 +65,7 @@
             </template>
             <el-collapse v-if="orphanGroups.length" v-model="orphanPanel" class="orphan-groups">
               <el-collapse-item name="orphaned"><template slot="title"><span class="orphan-title">孤立配置 · {{ orphanGroups.length }} 组</span><el-button v-if="cleanableGroups.length" type="text" size="mini" :loading="saving === 'cleanup'" :disabled="Boolean(saving)" @click.stop="cleanupGroups(cleanableGroups)">全部清理</el-button></template>
-                <button v-for="group in filteredOrphanGroups" :key="`orphan-${group.module}`" :class="{ active: selectedOrphan === group.module }" @click="selectOrphan(group)">
+                <button v-for="group in filteredOrphanGroups" :key="`orphan-${group.module}`" class="orphan-item" :class="{ active: selectedOrphan === group.module }" @click="selectOrphan(group)">
                   <strong>{{ group.name }}</strong><span>{{ group.module }} · {{ group.fields.length }} 项</span>
                 </button>
               </el-collapse-item>
@@ -508,10 +508,12 @@ export default {
 .override-note { color:var(--warning-color); }
 .orphan-groups { margin-top:8px; border:0; }
 .orphan-groups ::v-deep .el-collapse-item__header { height:auto; min-height:34px; padding:6px 8px; border:1px solid var(--border-color-light); border-radius:5px; color:var(--text-color-secondary); background:var(--bg-color-secondary); line-height:1.4; }
+.orphan-groups ::v-deep .el-collapse-item__arrow { margin:0 0 0 2px; }
 .orphan-groups ::v-deep .el-collapse-item__wrap { border:0; background:transparent; }
 .orphan-groups ::v-deep .el-collapse-item__content { padding:4px 0 0; }
-.orphan-groups button { width:100%; }
-.orphan-title { flex:1; }
+.orphan-groups .orphan-item { width:100%; }
+.orphan-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.orphan-groups .el-button { display:inline-flex; flex:none; flex-direction:row; width:auto; min-height:0; margin:0 0 0 4px; padding:0; white-space:nowrap; }
 .orphan-config-panel .el-alert { margin-bottom:14px; }
 .orphan-preview { margin:14px 0 0; padding:14px; border:1px solid var(--border-color-light); border-radius:6px; background:var(--bg-color); color:var(--text-color); white-space:pre-wrap; overflow-wrap:anywhere; }
 @container (max-width:760px) {  .plugin-config-workbench { grid-template-columns:1fr; } .config-groups { max-height:180px; } .custom-env-row { grid-template-columns:minmax(0,1fr); } }

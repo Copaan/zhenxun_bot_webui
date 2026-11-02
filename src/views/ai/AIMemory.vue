@@ -7,8 +7,12 @@
       </div>
       <div class="heading-actions">
         <el-tag size="small" :type="status.mode === 'off' ? 'info' : 'success'">{{ modeNames[status.mode] || status.mode }}</el-tag>
-        <span class="muted">向量模型：<span class="mono">{{ status.embedding_model || "未设置，只用关键词" }}</span></span>
-        <el-button size="small" icon="el-icon-refresh-right" :loading="status.rebuilding" @click="rebuild">重算向量</el-button>
+        <span class="embedding-switch">
+          <span class="muted">向量召回</span>
+          <el-switch :value="status.embedding_enabled" :disabled="switching" @change="toggleEmbedding" />
+        </span>
+        <span class="muted embedding-model">向量模型：<span class="mono">{{ status.embedding_enabled ? status.embedding_model || "未设置，只用关键词" : "已关闭，只用关键词" }}</span></span>
+        <el-button size="small" icon="el-icon-refresh-right" :loading="status.rebuilding" :disabled="!status.embedding_enabled || !status.embedding_model" @click="rebuild">重算向量</el-button>
       </div>
     </div>
 
@@ -100,7 +104,8 @@ export default {
   name: "AIMemory",
   data() {
     return {
-      status: { mode: "off", rebuilding: false, embedding_model: "", scopes: [], archived: 0 },
+      status: { mode: "off", rebuilding: false, embedding_enabled: true, embedding_model: "", scopes: [], archived: 0 },
+      switching: false,
       current: null, items: [], total: 0, page: 1, pageSize: 50, loading: false,
       query: "", source: "", archived: false,
       recallQuery: "", recalled: null, recalling: false,
@@ -199,6 +204,13 @@ export default {
         this.recalled = (await this.request("post", "/memory/recall", { ...this.scopeParams(this.current), query: this.recallQuery.trim() })).data
       } catch (error) { this.fail(error, "召回失败。") } finally { this.recalling = false }
     },
+    async toggleEmbedding(enabled) {
+      this.switching = true
+      try {
+        this.$message.success((await this.request("put", "/memory/embedding", { enabled })).info)
+        await this.loadStatus()
+      } catch (error) { this.fail(error, "切换失败。") } finally { this.switching = false }
+    },
     async rebuild() {
       try { await this.$confirm("用当前的向量模型重算全部记忆的向量？更换向量模型后需要重算。", "重算向量", { type: "warning" }) } catch (error) { return }
       try {
@@ -213,6 +225,11 @@ export default {
 
 <style scoped>
 .heading-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ai-memory > .zx-section-heading { flex-wrap: wrap; align-items: flex-start; }
+.ai-memory > .zx-section-heading > div:first-child { flex: 1 1 480px; min-width: 0; }
+.ai-memory > .zx-section-heading > .heading-actions { flex: 0 1 auto; justify-content: flex-end; min-width: 0; }
+.embedding-switch { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.embedding-model { min-width: 0; max-width: 340px; overflow-wrap: anywhere; }
 .full { width: 100%; }
 .wrap { margin: 4px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .mono { font-family: var(--font-mono, monospace); overflow-wrap: anywhere; }

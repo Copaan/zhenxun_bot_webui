@@ -438,13 +438,15 @@ export default {
   },
   mounted() {
     this.readControllers = new Set()
-    this.onVisibility = () => { if (document.hidden) this.pauseReads(); else this.resumeReads() }
+    this.onVisibility = () => { if (this.inactive) return; if (document.hidden) this.pauseReads(); else this.resumeReads() }
     this.onExpired = () => { this.authExpired = true; this.pauseReads(); this.error = '登录已过期；已提交操作继续执行，请重新登录后查看。' }
     document.addEventListener('visibilitychange', this.onVisibility)
     window.addEventListener('zhenxun-auth-expired', this.onExpired)
-    this.unsubscribeNetwork = onBusinessNetworkChange(value => { if (value) this.pauseReads(); else this.resumeReads() })
+    this.unsubscribeNetwork = onBusinessNetworkChange(value => { if (value) this.pauseReads(); else if (!this.inactive) this.resumeReads() })
     this.resumeReads()
   },
+  activated() { if (!this.inactive) return; this.inactive = false; this.resumeReads() },
+  deactivated() { this.inactive = true; this.pauseReads() },
   beforeDestroy() { this.componentDestroyed = true; this.pauseReads(); this.unsubscribeNetwork?.(); document.removeEventListener('visibilitychange', this.onVisibility); window.removeEventListener('zhenxun-auth-expired', this.onExpired) },
   methods: {
     async cancelPreparedRepair() {
