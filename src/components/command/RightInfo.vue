@@ -84,12 +84,12 @@
             活跃群组
           </p>
 
-          <div ref="groupType" class="flex flex-wrap gap-1">
+          <div class="time-filters">
             <button
               v-for="type in timeTypes"
               :key="'group' + type.value"
               @click="clickGroupType(type.value)"
-              class="time-filter px-2 py-0.5 text-[10px] transition-all duration-200"
+              class="time-filter transition-all duration-200"
               :style="{
                 backgroundColor:
                   selectGroupType === type.value
@@ -108,8 +108,8 @@
 
         <div
           ref="groupChart"
-          class="w-full"
-          :style="{ height: computedChartHeight + 'px' }"
+          class="chart-canvas w-full"
+          :style="compact ? { height: '240px' } : {}"
         ></div>
       </div>
 
@@ -129,12 +129,12 @@
             热门插件
           </p>
 
-          <div class="flex flex-wrap gap-1">
+          <div class="time-filters">
             <button
               v-for="type in timeTypes"
               :key="'plugin' + type.value"
               @click="clickHotPluginType(type.value)"
-              class="time-filter px-2 py-0.5 text-[10px] transition-all duration-200"
+              class="time-filter transition-all duration-200"
               :style="{
                 backgroundColor:
                   selectHotPluginType === type.value
@@ -153,8 +153,8 @@
 
         <div
           ref="hotPluginChart"
-          class="w-full h-full min-h-[200px]"
-          :style="{ height: computedChartHeight + 'px' }"
+          class="chart-canvas w-full"
+          :style="compact ? { height: '240px' } : {}"
         ></div>
       </div>
     </div>
@@ -169,7 +169,6 @@ export default {
   name: "RightInfo",
   data() {
     return {
-      chartHeight: 100,
       timeTypes: [
         { label: "全部", value: "all" },
         { label: "今日", value: "day" },
@@ -179,6 +178,7 @@ export default {
       ],
       chartAreaHeight: 0,
       compact: window.innerWidth < 768,
+      narrow: window.innerWidth < 768,
       activeGroupData: [],
       hotPluginData: [],
       botInfo: {},
@@ -201,12 +201,6 @@ export default {
         this.handleResize()
       }
       return this.chartAreaHeight
-    },
-    computedChartHeight() {
-      if (!this.chartHeight) {
-        this.handleResize()
-      }
-      return this.chartHeight
     },
   },
   created() {
@@ -270,7 +264,7 @@ export default {
     },
 
     /**
-     * 根据容器尺寸重新计算图表高度并刷新图表，移动端使用固定图表高度
+     * 根据容器尺寸重新计算图表区高度并刷新图表，图表较窄时改用紧凑坐标轴
      */
     handleResize() {
       if (this.destroyed) return
@@ -281,9 +275,7 @@ export default {
       }
       this.$nextTick(() => {
         if (this.destroyed) return
-        if (this.compact) {
-          this.chartHeight = 240
-        } else if (this.$refs.rightInfo && this.$refs.groupType) {
+        if (!this.compact && this.$refs.rightInfo) {
           const infoHeight =
             this.$refs.rightInfo.querySelector(".base-info").offsetHeight
           this.chartAreaHeight =
@@ -292,11 +284,15 @@ export default {
           if (this.$isMobile()) {
             this.chartAreaHeight = Math.max(this.chartAreaHeight, 400)
           }
-          this.chartHeight =
-            this.chartAreaHeight / 2 - this.$refs.groupType.offsetHeight - 20
         }
         this.$nextTick(() => {
           if (this.destroyed) return
+          const narrow =
+            this.compact || (this.$refs.groupChart?.clientWidth || 0) < 360
+          if (narrow !== this.narrow) {
+            this.narrow = narrow
+            this.updateChartTheme()
+          }
           this.groupChart?.resize()
           this.hotPluginChart?.resize()
         })
@@ -357,7 +353,7 @@ export default {
       option.xAxis.name = name
       option.xAxis.data = data.map((item) => item.name)
       option.series[0].data = data
-      if (this.compact) {
+      if (this.narrow) {
         option.grid = { top: 24, bottom: 4, left: 4, right: 8, containLabel: true }
         option.xAxis.name = ""
         option.xAxis.axisLabel.rotate = 40
@@ -367,6 +363,7 @@ export default {
         option.yAxis.splitNumber = 3
         option.yAxis.axisLabel.fontSize = 10
         option.yAxis.axisLabel.formatter = abbreviateNumber
+        option.series[0].label.show = false
       }
       return option
     },
@@ -415,8 +412,21 @@ export default {
   border-radius: 8px;
 }
 
+.time-filters {
+  display: flex;
+  gap: 4px;
+}
+
 .time-filter {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 2px 0;
+  overflow: hidden;
   border-radius: 4px;
+  font-size: 11px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .right-info::-webkit-scrollbar {
@@ -437,6 +447,11 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.chart-canvas {
+  flex: 1;
+  min-height: 140px;
 }
 
 .chart-container {

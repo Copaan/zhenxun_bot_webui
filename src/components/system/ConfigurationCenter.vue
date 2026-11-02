@@ -22,7 +22,7 @@
             <template v-for="field in group.fields"><SchemaField v-show="envMatches(field)" :key="field.key" presentation="settings" :value="envFields[field.key]" :schema="field.schema" :root-schema="field.schema['x-root-schema'] || field.schema" :label="envLabel(field)" :path="field.key" :ui="envFieldUi(field)" :query="envSearch" :readonly-reason="field.readonly_reason || envDisabledReason(field)" :issues="envIssues" @input="setEnvField(field.key, $event)">
               <template #meta><div v-if="envFieldChanged(field.key)" class="field-effect changed-indicator">未保存修改</div></template>
               <template #details><div>生效方式：{{ effectMeta(field.apply_effect).label }}</div><div v-if="field.schema_sources && field.schema_sources.length">来源：{{ field.schema_sources.join('、') }}</div><div v-if="field.external_environment_present">启动环境也声明了此变量，重启时请核对外部环境设置。</div></template>
-              <template #status><div class="setting-runtime"><span>当前运行</span><code>{{ runtimeText(field) }}</code></div><p v-if="field.overridden" class="setting-status-note">当前运行值与启动环境变量一致，和文件设置不同。重启时请同时核对启动环境。</p><p v-else-if="!envFieldChanged(field.key) && envStateText(field)" class="setting-status-note" :class="{ neutral: field.apply_state === 'unknown' }">{{ envStateText(field) }}</p></template>
+              <template #status><div v-if="tlsKinds[field.key] && !field.readonly_reason && !envDisabledReason(field)" class="tls-picker"><el-button size="small" icon="el-icon-folder-opened" @click="pickTls(field.key)">选择{{ tlsKinds[field.key] === 'cert' ? '证书' : '私钥' }}文件</el-button><span v-if="tlsFiles[field.key]">{{ tlsFiles[field.key].name }} · 保存时上传</span><span v-else>选择本机文件，保存时上传到 Bot 的 data/web_ui/tls 目录</span></div><div class="setting-runtime"><span>当前运行</span><code>{{ runtimeText(field) }}</code></div><p v-if="field.overridden" class="setting-status-note">当前运行值与启动环境变量一致，和文件设置不同。重启时请同时核对启动环境。</p><p v-else-if="!envFieldChanged(field.key) && envStateText(field)" class="setting-status-note" :class="{ neutral: field.apply_state === 'unknown' }">{{ envStateText(field) }}</p></template>
             </SchemaField></template>
           </section>
           <section v-show="envSearch.trim() ? customSearchCount > 0 : envCategory === 'custom'" class="custom-env-section">
@@ -44,10 +44,15 @@
           </section>
           <template #footer><div class="save-description"><strong>{{ envChangeCount ? envChangeCount + ' 项未保存修改' : '没有未保存的修改' }}</strong><span v-if="envSaveHint" class="save-hint">{{ envSaveHint }}</span></div><el-button :disabled="!envChangeCount || Boolean(saving)" @click="resetEnvironment">撤销修改</el-button><el-button type="primary" :disabled="!envChangeCount || Boolean(customEnvError)" :loading="saving === 'env'" @click="saveEnv">保存环境配置</el-button></template>
         </SettingsLayout>
+        <input ref="tlsInput" type="file" :accept="tlsAccept" hidden @change="tlsSelected" />
       </el-tab-pane>
 
       <el-tab-pane label="其他配置" name="simple">
-        <p class="environment-source">插件的配置请在「插件列表」中打开插件详情修改，这里只列出不属于插件列表中插件的配置组。<el-button type="text" @click="$router.push('/plugin', () => {}, (error) => $message.error(error.message))">前往插件列表</el-button></p>
+        <div class="config-callout" role="note">
+          <i class="el-icon-info config-callout-icon" aria-hidden="true"></i>
+          <div><strong>插件的配置请在「插件列表」中修改</strong><p>打开插件详情即可修改该插件的配置，这里只列出不属于插件列表中插件的配置组。</p></div>
+          <el-button size="small" type="primary" plain @click="$router.push('/plugin', () => {}, (error) => $message.error(error.message))">前往插件列表</el-button>
+        </div>
         <div class="plugin-config-workbench">
           <aside class="config-groups">
             <el-input v-model="groupSearch" clearable prefix-icon="el-icon-search" placeholder="搜索配置组或配置项" size="small" />
@@ -59,7 +64,7 @@
               </button>
             </template>
             <el-collapse v-if="orphanGroups.length" v-model="orphanPanel" class="orphan-groups">
-              <el-collapse-item name="orphaned"><template slot="title">孤立配置 · {{ orphanGroups.length }} 组</template>
+              <el-collapse-item name="orphaned"><template slot="title"><span class="orphan-title">孤立配置 · {{ orphanGroups.length }} 组</span><el-button v-if="cleanableGroups.length" type="text" size="mini" :loading="saving === 'cleanup'" :disabled="Boolean(saving)" @click.stop="cleanupGroups(cleanableGroups)">全部清理</el-button></template>
                 <button v-for="group in filteredOrphanGroups" :key="`orphan-${group.module}`" :class="{ active: selectedOrphan === group.module }" @click="selectOrphan(group)">
                   <strong>{{ group.name }}</strong><span>{{ group.module }} · {{ group.fields.length }} 项</span>
                 </button>
@@ -77,7 +82,7 @@
             </div>
           </section>
           <section v-else-if="selectedOrphanGroup" class="current-config-group orphan-config-panel">
-            <header class="group-heading"><div><h3>{{ selectedOrphanGroup.name }}</h3><p>{{ selectedOrphanGroup.module }} · 文件中保留的未注册配置</p></div><el-button size="small" icon="el-icon-document" @click="section = 'raw'">查看配置原文</el-button></header>
+            <header class="group-heading"><div><h3>{{ selectedOrphanGroup.name }}</h3><p>{{ selectedOrphanGroup.module }} · {{ selectedOrphanGroup.source_status === 'stale' ? '没有插件注册的残留配置' : '文件中保留的未注册配置' }}</p></div><div><el-button size="small" icon="el-icon-document" @click="section = 'raw'">查看配置原文</el-button><el-button v-if="cleanable(selectedOrphanGroup)" size="small" type="danger" plain icon="el-icon-delete" :loading="saving === 'cleanup'" :disabled="Boolean(saving)" @click="cleanupGroups([selectedOrphanGroup])">清理</el-button></div></header>
             <el-alert :title="selectedOrphanGroup.readonly_reason || '该配置组当前没有对应的已加载插件。内容会保留，不会自动写入运行配置。'" type="warning" :closable="false" show-icon />
             <pre class="orphan-preview">{{ JSON.stringify(selectedOrphanGroup.raw_value || Object.fromEntries(selectedOrphanGroup.fields.map(field => [field.key, field.value])), null, 2) }}</pre>
           </section>
@@ -124,6 +129,7 @@ import NetworkStatus from "@/components/system/NetworkStatus.vue"
 import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
+import { TLS_ACCEPT, uploadTlsFile } from "@/utils/tls-upload"
 
 export default {
   name: "ConfigurationCenter",
@@ -133,14 +139,16 @@ export default {
       envCategory: "access", networkStatus: {}, rawLoading: false, envSearch: "", envIssues: [],
       loading: false, saving: "", validating: false, section: "env", envRevision: "", simpleRevision: "", envFields: {}, originalEnvFields: {}, envDescriptors: [], envSourceFile: "", customEnv: [], originalCustomEnv: [], customEnvError: "", customEnvSequence: 0, groups: [], groupSearch: "", selectedGroup: "", launcherManaged: false,
       rawFile: "env", rawContent: "", rawOriginal: "", rawRevision: "", rawError: "", rawIssues: [], rawLoaded: {}, pluginInvalid: {}, pluginIssues: [], orphanPanel: [], selectedOrphan: "",
+      tlsAccept: TLS_ACCEPT, tlsKinds: { WEBUI_TLS_CERTFILE: "cert", WEBUI_TLS_KEYFILE: "key" }, tlsFiles: {}, tlsPickKey: "",
       envFieldDefinitions: [
         { key: "HOST", label: "监听地址", placeholder: "0.0.0.0", help: "0.0.0.0 允许局域网与公网访问，127.0.0.1 仅本机访问。" },
         { key: "PORT", label: "监听端口", type: "number", placeholder: "8080", help: "WebUI 与适配器共享的本地服务端口；启用 HTTPS 后该端口提供 HTTPS。" },
         { key: "WEBUI_HTTPS_ENABLED", label: "启用 HTTPS", type: "switch", help: "使用用户提供的可信 PEM 证书和私钥，需要重启生效。开启后 OneBot 协议端必须改用 wss:// 连接并信任证书，ws:// 与 HTTP 兼容入口都无法接入。" },
-        { key: "WEBUI_TLS_CERTFILE", label: "TLS 证书路径", placeholder: "C:\\certs\\fullchain.pem", dependsOn: "WEBUI_HTTPS_ENABLED", help: "证书 PEM 的绝对路径，保存时会检查有效期及密钥匹配。" },
-        { key: "WEBUI_TLS_KEYFILE", label: "TLS 私钥路径", placeholder: "C:\\certs\\privkey.pem", dependsOn: "WEBUI_HTTPS_ENABLED", help: "未加密私钥 PEM 的绝对路径。" },
+        { key: "WEBUI_TLS_CERTFILE", label: "TLS 证书", placeholder: "C:\\certs\\fullchain.pem", dependsOn: "WEBUI_HTTPS_ENABLED", help: "选择本机的证书 PEM 文件，保存时自动上传到 Bot；也可以填写 Bot 所在机器上的绝对路径。保存时会检查有效期及与私钥是否匹配。" },
+        { key: "WEBUI_TLS_KEYFILE", label: "TLS 私钥", placeholder: "C:\\certs\\privkey.pem", dependsOn: "WEBUI_HTTPS_ENABLED", help: "选择未加密的私钥 PEM 文件，保存时自动上传到 Bot；也可以填写 Bot 所在机器上的绝对路径。" },
         { key: "WEBUI_HTTP_MODE", label: "HTTP兼容入口", type: "http-mode", dependsOn: "WEBUI_HTTPS_ENABLED", options: [{ value: "serve", label: "完整访问" }, { value: "redirect", label: "跳转HTTPS" }, { value: "disabled", label: "关闭" }], help: "完整访问以明文提供 WebUI 页面、接口和实时连接，不开放适配器等其他服务；跳转HTTPS 把请求 308 跳转到 HTTPS 端口。需要重启生效。" },
         { key: "WEBUI_HTTP_REDIRECT_PORT", label: "HTTP兼容端口", type: "number", dependsOn: "WEBUI_HTTPS_ENABLED", httpModeRequired: true, placeholder: "80", help: "默认80，不能与监听端口相同；端口被占用时HTTPS继续运行，HTTP入口进入降级并自动重试。" },
+        { key: "TIMEZONE", label: "时区", placeholder: "Asia/Shanghai", help: "Bot 计算日期与时间使用的 IANA 时区，影响签到、每日额度、定时任务、日志与 AI 获取的当前时间。默认 Asia/Shanghai（北京时间），需要重启生效。" },
         { key: "LOG_LEVEL", label: "日志等级", placeholder: "INFO", help: "常用值为 DEBUG、INFO、WARNING。" },
         { key: "API_TIMEOUT", label: "接口超时", unit: "秒", help: "适配器 API 调用的等待时间上限。" },
         { key: "NICKNAME", label: "机器人昵称", placeholder: "[\"真寻\"]", help: "使用 dotenv 支持的列表格式。" },
@@ -159,7 +167,7 @@ export default {
   computed: {
     envCategories() { return environmentCategories(this.envDescriptors, this.envMatches, this.customSearchCount) },
     customSearchCount() { return this.customEnv.filter(this.customMatches).length },
-    envChangeCount() { return Object.keys(this.changedEnvFields()).length + this.unsetEnvFields().length + this.customEnv.filter(item => item.isNew || item.deleted || this.originalCustomEnv.find(old => old.key === item.key)?.value !== item.value).length },
+    envChangeCount() { return Object.keys(this.changedEnvFields()).length + Object.keys(this.tlsFiles).length + this.unsetEnvFields().length + this.customEnv.filter(item => item.isNew || item.deleted || this.originalCustomEnv.find(old => old.key === item.key)?.value !== item.value).length },
     customOperations() {
       const original = new Map(this.originalCustomEnv.map((item) => [item.key, item]))
       const operations = []
@@ -172,8 +180,9 @@ export default {
     },
     envSaveHint() {
       const changedKeys = Object.keys(this.changedEnvFields())
-      const needsRestart = this.customOperations.length > 0 || changedKeys.some((key) => this.envDescriptors.find(field => field.key === key)?.apply_effect !== "in_place")
-      if (!changedKeys.length && !this.customOperations.length && !Object.keys(this.originalEnvFields).some(key => this.envFields[key] === undefined)) return ""
+      const pendingTls = Object.keys(this.tlsFiles).length > 0
+      const needsRestart = pendingTls || this.customOperations.length > 0 || changedKeys.some((key) => this.envDescriptors.find(field => field.key === key)?.apply_effect !== "in_place")
+      if (!pendingTls && !changedKeys.length && !this.customOperations.length && !Object.keys(this.originalEnvFields).some(key => this.envFields[key] === undefined)) return ""
       if (!needsRestart) return "保存后立即生效"
       return this.launcherManaged ? "包含启动期配置，保存后可确认重启" : "包含启动期配置，保存后需要手动重启"
     },
@@ -187,6 +196,7 @@ export default {
     filteredOrphanGroups() { return this.orphanGroups.filter(group => groupMatches(group, this.groupSearch)) },
     activeGroups() { return this.groups.filter((group) => group.registered !== false && group.source_status !== "orphaned") },
     orphanGroups() { return this.groups.filter((group) => group.registered === false || group.source_status === "orphaned") },
+    cleanableGroups() { return this.orphanGroups.filter(this.cleanable) },
     selectedOrphanGroup() { return this.orphanGroups.find((group) => group.module === this.selectedOrphan) || null },
     currentGroup() { return this.activeGroups.find((group) => group.module === this.selectedGroup) || null },
     simpleChanges() { return collectChanges(this.activeGroups) },
@@ -200,7 +210,7 @@ export default {
     envFieldChanged(key) { return JSON.stringify(this.envFields[key]) !== JSON.stringify(this.originalEnvFields[key]) },
     envStateText(field) { return { restart_pending: '已保存，重启 Bot 后生效', applying: '正在应用', unknown: '运行状态未确认' }[field.apply_state] || '' },
     customMatches(item) { return !this.envSearch.trim() || `${item.key} 自定义变量`.toLowerCase().includes(this.envSearch.trim().toLowerCase()) },
-    resetEnvironment() { this.envFields = JSON.parse(JSON.stringify(this.originalEnvFields)); this.customEnv = this.originalCustomEnv.map(item => ({ ...item })); this.envIssues = []; this.markEnvDirty() },
+    resetEnvironment() { this.envFields = JSON.parse(JSON.stringify(this.originalEnvFields)); this.tlsFiles = {}; this.customEnv = this.originalCustomEnv.map(item => ({ ...item })); this.envIssues = []; this.markEnvDirty() },
     focusEnvironmentIssue() { const issue = this.envIssues[0]; if (!issue) return; const group = this.envCategories.find(item => item.fields?.some(field => issue.path === field.key || String(issue.path).startsWith(field.key + '.'))); this.envCategory = group ? group.key : 'custom'; this.envSearch = ''; this.focusIssue() },
     envMeta(field) { return this.envFieldDefinitions.find((item) => item.key === field.key) || {} },
     envLabel(field) { return this.envMeta(field).label || field.key },
@@ -269,6 +279,7 @@ export default {
         this.envSourceFile = response.data.env.source_file || ""
         this.envFields = Object.fromEntries(this.envDescriptors.filter(field => field.configured).map(field => [field.key, field.value]))
         this.originalEnvFields = JSON.parse(JSON.stringify(this.envFields))
+        this.tlsFiles = {}
         this.customEnv = this.normalizeCustomEnv(response.data.env.custom_env)
         this.originalCustomEnv = this.customEnv.map((item) => ({ ...item }))
         this.customEnvError = ""
@@ -289,6 +300,28 @@ export default {
     setInvalid(module, paths) { if (paths.length) this.$set(this.pluginInvalid, module, paths); else this.$delete(this.pluginInvalid, module) },
     setEnvField(key, value) { if (value === undefined) this.$delete(this.envFields, key); else this.$set(this.envFields, key, value); this.envIssues = this.envIssues.filter(issue => issue.path !== key && !String(issue.path).startsWith(key + ".")); this.markEnvDirty() },
     selectOrphan(group) { this.selectedOrphan = group.module; this.selectedGroup = "" },
+    cleanable(group) { return ["stale", "orphaned"].includes(group.source_status) },
+    /**
+     * 确认后删除孤立配置组或残留配置项，并重新读取其他配置
+     * @param {object[]} groups 要清理的孤立配置组
+     */
+    async cleanupGroups(groups) {
+      if (this.saving || !groups.length) return
+      if (Object.keys(this.simpleChanges).length && !await this.confirmDiscard("清理后会重新读取其他配置，未保存的修改将丢失。")) return
+      const names = groups.map(group => group.name).join("、")
+      try {
+        await this.$confirm(`将从 plugins2config.yaml 与 config.yaml 中删除 ${names} 的残留配置，删除后无法恢复。`, "清理孤立配置？", { type: "warning", customClass: "configuration-confirm", confirmButtonText: "清理", cancelButtonText: "取消" })
+      } catch (_) { return }
+      this.saving = "cleanup"
+      try {
+        const response = await this.postRequest(`${this.$root.prefix}/system/configuration/cleanup`, { expected_revision: this.simpleRevision, modules: [...new Set(groups.map(group => group.module))] })
+        if (!response.suc) throw new Error(response.info)
+        this.$message.success(response.info || "已清理")
+        this.selectedOrphan = ""
+      } catch (error) { this.$message.error(apiErrorDetail(error, "清理失败")) }
+      finally { this.saving = "" }
+      await this.loadSummary("simple")
+    },
     changedEnvFields() {
       const changed = {}
       this.envDescriptors.forEach(({ key }) => { if (JSON.stringify(this.envFields[key]) !== JSON.stringify(this.originalEnvFields[key]) && this.envFields[key] !== undefined) changed[key] = this.envFields[key] })
@@ -306,8 +339,30 @@ export default {
       return ""
     },
     markEnvDirty() { this.customEnvError = this.validateCustomEnv(); setDirtyState("environment-configuration", this.envChangeCount > 0) },
+    pickTls(key) { this.tlsPickKey = key; this.$refs.tlsInput.click() },
+    tlsSelected(event) {
+      const [file] = event.target.files
+      event.target.value = ""
+      if (!file || !this.tlsPickKey) return
+      this.$set(this.tlsFiles, this.tlsPickKey, file)
+      this.envIssues = this.envIssues.filter(issue => issue.path !== this.tlsPickKey)
+      this.markEnvDirty()
+    },
+    /**
+     * 上传已选择的证书和私钥，并把返回的 Bot 端路径填入对应配置项
+     */
+    async uploadTlsFiles() {
+      for (const [key, file] of Object.entries(this.tlsFiles)) {
+        this.setEnvField(key, await uploadTlsFile(this, this.tlsKinds[key], file))
+        this.$delete(this.tlsFiles, key)
+      }
+    },
     async saveEnv() {
       if (this.saving) return
+      if (Object.keys(this.tlsFiles).length) {
+        this.saving = "env"
+        try { await this.uploadTlsFiles() } catch (error) { return this.$message.error(apiErrorDetail(error, "证书上传失败")) } finally { this.saving = "" }
+      }
       const fields = this.changedEnvFields()
       this.customEnvError = this.validateCustomEnv()
       if (this.customEnvError) { this.envCategory = "custom"; this.envSearch = ""; return }
@@ -456,6 +511,7 @@ export default {
 .orphan-groups ::v-deep .el-collapse-item__wrap { border:0; background:transparent; }
 .orphan-groups ::v-deep .el-collapse-item__content { padding:4px 0 0; }
 .orphan-groups button { width:100%; }
+.orphan-title { flex:1; }
 .orphan-config-panel .el-alert { margin-bottom:14px; }
 .orphan-preview { margin:14px 0 0; padding:14px; border:1px solid var(--border-color-light); border-radius:6px; background:var(--bg-color); color:var(--text-color); white-space:pre-wrap; overflow-wrap:anywhere; }
 @container (max-width:760px) {  .plugin-config-workbench { grid-template-columns:1fr; } .config-groups { max-height:180px; } .custom-env-row { grid-template-columns:minmax(0,1fr); } }
@@ -468,6 +524,18 @@ export default {
 
 <style scoped>
 .setting-status-note.neutral { color:var(--text-color-secondary); }
+.tls-picker { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin-top:10px; }
+.tls-picker span { min-width:0; font-size:11px; line-height:1.6; color:var(--text-color-secondary); overflow-wrap:anywhere; }
+.config-callout { display:flex; align-items:center; gap:12px; margin:4px 0 18px; padding:12px 16px; border:1px solid var(--primary-color-light-7); border-left:4px solid var(--primary-color); border-radius:8px; background:var(--primary-color-light-9); color:var(--text-color); }
+.config-callout-icon { flex:none; font-size:20px; color:var(--primary-color); }
+.config-callout > div { flex:1 1 auto; min-width:0; }
+.config-callout strong { display:block; font-size:14px; line-height:1.5; }
+.config-callout p { margin:2px 0 0; font-size:12px; line-height:1.6; color:var(--text-color-secondary); }
+.config-callout .el-button { flex:none; }
+@media (max-width: 767px) {
+  .config-callout { flex-wrap:wrap; }
+  .config-callout .el-button { margin-left:32px; }
+}
 @media (max-width: 767px) {
   .configuration-center { padding:0; border-radius:0; background:transparent; }
   .configuration-center ::v-deep .settings-workspace { padding:12px; }

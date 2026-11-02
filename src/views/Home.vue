@@ -137,7 +137,6 @@
             >
               <i class="el-icon-s-unfold"></i>
             </button>
-            <span v-if="isMobile" class="header-title">{{ currentMenuName }}</span>
             <!-- 桌面端菜单展开/收起按钮 -->
             <button
               v-else
@@ -148,6 +147,9 @@
             >
               <i :class="isCollapsed ? 'el-icon-s-unfold' : 'el-icon-s-fold'"></i>
             </button>
+            <transition name="title-slide" mode="out-in">
+              <span :key="currentMenuName" class="header-title" aria-live="polite">{{ currentMenuName }}</span>
+            </transition>
 
             <el-autocomplete
               v-if="!isMobile"
@@ -159,15 +161,6 @@
               :fetch-suggestions="queryMenuSearch"
               @select="selectSearchResult"
             />
-            <el-tooltip content="高级地址设置" placement="bottom">
-              <router-link
-                :to="{ name: 'MyApi' }"
-                class="address-shortcut hidden md:grid"
-                aria-label="高级地址设置"
-              >
-                <svg-icon icon-class="server" class="w-5 h-5" />
-              </router-link>
-            </el-tooltip>
             <el-tooltip :content="restartTooltip" placement="bottom">
               <el-badge :value="pendingRestartCount" :hidden="!pendingRestartCount" class="restart-badge">
                 <button
@@ -334,20 +327,24 @@
           :style="{ backgroundColor: 'var(--bg-color)' }"
           @click="handleMainClick"
         >
-          <bot-required-state
-            v-if="routeBlockState"
-            :state="routeBlockState"
-            :has-supported-bot="hasSupportedBot"
-            @configure="navigateTo('/protocol')"
-            @retry="getBotInfo()"
-            @switch-supported="switchToSupportedBot"
-          />
-          <router-view
-            v-else
-            class="route-surface"
-            :style="{ backgroundColor: 'var(--bg-color-secondary)' }"
-            :key="routeRequiresBot ? botInfo.bot_key : undefined"
-          />
+          <transition name="route-fade" mode="out-in">
+            <bot-required-state
+              v-if="routeBlockState"
+              key="route-blocked"
+              :state="routeBlockState"
+              :has-supported-bot="hasSupportedBot"
+              @configure="navigateTo('/protocol')"
+              @retry="getBotInfo()"
+              @switch-supported="switchToSupportedBot"
+            />
+            <router-view
+              v-else
+              ref="routeSurface"
+              class="route-surface"
+              :style="{ backgroundColor: 'var(--bg-color-secondary)' }"
+              :key="routeRequiresBot ? botInfo.bot_key : undefined"
+            />
+          </transition>
         </main>
       </div>
     </div>
@@ -974,9 +971,20 @@ export default {
       const value = String(route || "/")
       return value.startsWith("/") ? value : `/${value}`
     },
+    /**
+     * 当前页面内容平滑滚动回顶部
+     */
+    scrollContentTop() {
+      const surface = this.$refs.routeSurface
+      const element = surface && (surface.$el || surface)
+      if (element && element.scrollTo) element.scrollTo({ top: 0, behavior: "smooth" })
+    },
     navigateTo(route) {
       const target = this.normalizeRoute(route)
-      if (target === this.$route.path) return Promise.resolve(false)
+      if (target === this.$route.path) {
+        this.scrollContentTop()
+        return Promise.resolve(false)
+      }
       return new Promise((resolve) => {
         this.$router.replace(
           target,
@@ -1237,7 +1245,9 @@ export default {
 }
 
 .header-title {
+  display: inline-block;
   min-width: 0;
+  max-width: 40vw;
   overflow: hidden;
   color: var(--text-color);
   font-size: 16px;
@@ -1293,6 +1303,38 @@ export default {
   overflow: auto;
 }
 
+.route-fade-enter-active {
+  transition: opacity 300ms ease-in-out, transform 300ms ease-in-out;
+}
+.route-fade-enter {
+  opacity: 0;
+  transform: translateY(20px);
+}
+.title-slide-enter-active,
+.title-slide-leave-active {
+  transition: opacity 300ms ease, transform 300ms ease;
+}
+.title-slide-enter {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+.title-slide-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-fade-enter-active,
+  .title-slide-enter-active,
+  .title-slide-leave-active {
+    transition: opacity 120ms ease;
+  }
+  .route-fade-enter,
+  .title-slide-enter,
+  .title-slide-leave-to {
+    transform: none;
+  }
+}
+
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -1319,16 +1361,6 @@ export default {
   border-radius: 10px;
   background: var(--bg-color);
   color: var(--text-color);
-}
-
-.address-shortcut {
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  color: var(--primary-color);
-  background: var(--bg-color);
 }
 
 .socket-status,

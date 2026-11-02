@@ -101,6 +101,10 @@
         <section class="zx-panel"><AIKnowledge :providers="providers" /></section>
       </el-tab-pane>
 
+      <el-tab-pane label="长期记忆" name="memory" lazy>
+        <section class="zx-panel"><AIMemory /></section>
+      </el-tab-pane>
+
       <el-tab-pane label="角色识别" name="characters" lazy>
         <section class="zx-panel"><AICharacters /></section>
       </el-tab-pane>
@@ -161,7 +165,7 @@
           <div v-if="sandbox.sessions.length > 1" class="add-rule"><el-button size="small" type="danger" plain :loading="busy === 'clean-all'" @click="cleanSandbox()">全部清理</el-button></div>
         </section>
         <section class="zx-panel">
-          <div class="zx-section-heading"><div><h2>运行记录</h2><p>开启 Agent 后记录超级用户的对话和所有主动发言（插话、任务）的输入、输出、用量与工具调用，保留 30 天；展开一行查看工具参数与结果。</p></div><div class="heading-actions"><el-select v-model="runQuery.source" size="small" clearable placeholder="全部来源" class="run-filter" @change="loadAgent()"><el-option label="QQ" value="qq" /><el-option label="控制台" value="webui" /><el-option v-for="(label, value) in proactiveSources" :key="value" :label="label" :value="value" /></el-select><el-select v-model="runQuery.status" size="small" clearable placeholder="全部状态" class="run-filter" @change="loadAgent()"><el-option v-for="(label, value) in statusNames" :key="value" :label="label" :value="value" /></el-select><el-button size="small" icon="el-icon-refresh" @click="loadAgent()">刷新</el-button></div></div>
+          <div class="zx-section-heading"><div><h2>运行记录</h2><p>开启 Agent 后记录超级用户的对话、所有主动发言（插话、任务）以及监听、偷表情判断与记忆整理的输入、输出、用量与工具调用，保留 30 天；展开一行查看工具参数与结果。</p></div><div class="heading-actions"><el-select v-model="runQuery.source" size="small" clearable placeholder="全部来源" class="run-filter" @change="loadAgent()"><el-option label="QQ" value="qq" /><el-option label="控制台" value="webui" /><el-option v-for="(label, value) in proactiveSources" :key="value" :label="label" :value="value" /></el-select><el-select v-model="runQuery.status" size="small" clearable placeholder="全部状态" class="run-filter" @change="loadAgent()"><el-option v-for="(label, value) in statusNames" :key="value" :label="label" :value="value" /></el-select><el-button size="small" icon="el-icon-refresh" @click="loadAgent()">刷新</el-button></div></div>
           <el-table :data="agent.runs" size="small" row-key="run_id" empty-text="暂无运行记录" @expand-change="loadRun">
             <el-table-column type="expand"><template #default="{ row }"><div class="call-detail">
               <strong>输入</strong><pre>{{ row.input }}</pre><strong>输出</strong><pre>{{ row.error || row.output || "无" }}</pre>
@@ -195,7 +199,7 @@
             <el-table-column label="用户" min-width="120"><template #default="{ row }">{{ row.user_id || (row.group_id ? "全群" : "") }}</template></el-table-column>
             <el-table-column prop="messages" label="消息数" width="80" />
             <el-table-column label="最后消息" min-width="160"><template #default="{ row }">{{ formatTime(row.last_at) }}</template></el-table-column>
-            <el-table-column label="" width="240"><template #default="{ row }"><el-button size="mini" @click="viewSession(row)">查看</el-button><el-button size="mini" @click="exportSession(row)">导出</el-button><el-button size="mini" type="danger" plain @click="resetSession(row)">重置</el-button></template></el-table-column>
+            <el-table-column label="" width="330"><template #default="{ row }"><el-button size="mini" @click="viewSession(row)">查看</el-button><el-button size="mini" @click="exportSession(row)">导出</el-button><el-button size="mini" :loading="summarizing === row.session_id" @click="summarizeSession(row)">整理记忆</el-button><el-button size="mini" type="danger" plain @click="resetSession(row)">重置</el-button></template></el-table-column>
           </el-table>
           <el-pagination layout="total, prev, pager, next" :total="sessions.total" :page-size="sessionQuery.page_size" :current-page.sync="sessionQuery.page" @current-change="loadSessions" />
         </section>
@@ -224,6 +228,7 @@ import AIProactive from "./AIProactive.vue"
 import AISocial from "./AISocial.vue"
 import AISkills from "./AISkills.vue"
 import AIKnowledge from "./AIKnowledge.vue"
+import AIMemory from "./AIMemory.vue"
 import AICharacters from "./AICharacters.vue"
 import AIMcp from "./AIMcp.vue"
 import { apiErrorDetail } from "@/utils/api-error"
@@ -239,7 +244,7 @@ const emptyDraft = () => ({ id: null, name: "", enabled: true, prompt: "", style
 
 export default {
   name: "AIChat",
-  components: { UpdateDialog, AgentConsole, AIStats, AIProactive, AISocial, AISkills, AIKnowledge, AICharacters, AIMcp },
+  components: { UpdateDialog, AgentConsole, AIStats, AIProactive, AISocial, AISkills, AIKnowledge, AIMemory, AICharacters, AIMcp },
   data() {
     return {
       tab: TABS.includes(this.$route.query.tab) ? this.$route.query.tab : "start",
@@ -247,7 +252,7 @@ export default {
       providers: [], defaultChat: "", chatEnabled: false, switchRevision: "",
       personas: [], tools: [], skillList: [], knowledgeBases: [], groups: [], groupSearch: "",
       draft: emptyDraft(), original: emptyDraft(), tested: false,
-      sessions: { total: 0, items: [] }, sessionQuery: { keyword: "", page: 1, page_size: 20 }, sessionLoading: false,
+      sessions: { total: 0, items: [] }, sessionQuery: { keyword: "", page: 1, page_size: 20 }, sessionLoading: false, summarizing: "",
       usage: { day: "", total: 0, users: 0, top: [] }, detail: null, detailVisible: false,
       consolePersona: null,
       agent: { enabled: false, sandbox: { ready: false, reason: "" }, runs: [] },
@@ -257,7 +262,7 @@ export default {
       agentDraft: { enabled: false }, agentSaved: "", agentTimer: null,
       decisionNames: { auto: "自动放行", approved: "已批准", rejected: "已拒绝", timeout: "超时" }, decisionTypes: { auto: "info", approved: "success", rejected: "danger", timeout: "warning" },
       statusNames: { ok: "完成", silent: "未发言", error: "出错", stopped: "已停止" }, statusTypes: { ok: "success", silent: "info", error: "danger", stopped: "info" },
-      proactiveSources: { interject: "插话", task: "任务" },
+      proactiveSources: { interject: "插话", task: "任务", listen: "监听", steal: "偷表情", memory: "记忆整理" },
       voiceNames: { off: "关闭", voice: "语音提问时", always: "总是" },
       runnerNames: { local: "本地 Agent", dsh: "DeepSeek Harness" },
     }
@@ -541,6 +546,16 @@ export default {
         link.download = `${row.session_id.replace(/:/g, "_")}.json`
         link.click(); URL.revokeObjectURL(link.href)
       } catch (error) { this.fail(error, "导出失败。") }
+    },
+    /**
+     * 立即把会话中尚未整理的对话整理成长期记忆
+     * @param {object} row 会话
+     */
+    async summarizeSession(row) {
+      this.summarizing = row.session_id
+      try {
+        this.$message.success((await this.request("post", "/memory/summarize", { session_id: row.session_id })).info)
+      } catch (error) { this.fail(error, "整理失败。") } finally { this.summarizing = "" }
     },
     async resetSession(row) {
       if (!(await this.confirm("清空该会话的短期记忆？用户下次聊天将从头开始。", "重置会话"))) return

@@ -2,8 +2,8 @@
   <div v-loading="loading" class="ai-proactive">
     <div class="zx-section-heading">
       <div>
-        <h2>按群主动插话</h2>
-        <p>群里没人叫 Bot 时按概率让 AI 决定是否插话，不合适时 AI 会选择不说。这里可为每个群设置冷却和每日预算，留空使用“聊天设置”中的全局值，0 为不限制。今日插话共用 {{ overview.used_tokens }} tokens。</p>
+        <h2>按群主动对话</h2>
+        <p>群里没人叫 Bot 时，概率模式按概率让 AI 决定是否插话，监听模式攒够一批新消息后由监听模型判断该不该接话；偷表情会自动收集群里的表情包。这里可按群设置模式和限额，留空使用“聊天设置”中的全局值，0 为不限制。今日插话与监听共用 {{ overview.used_tokens }} tokens，偷表情判断 {{ overview.steal_judges }} 次。</p>
       </div>
       <div class="heading-actions">
         <el-input v-model="search" size="small" clearable placeholder="搜索群号或群名" class="search" />
@@ -12,9 +12,12 @@
     </div>
     <el-table :data="filteredRows" size="small" row-key="group_id" empty-text="暂无群">
       <el-table-column label="群" min-width="160"><template #default="{ row }"><div>{{ row.group_name || "未命名" }}</div><small class="muted">{{ row.group_id }}<template v-if="!row.enabled"> · AI 已关闭</template></small></template></el-table-column>
-      <el-table-column label="冷却（秒）" width="130"><template #default="{ row }"><el-input-number v-model="row.form.cooldown" size="mini" :min="0" :max="86400" :controls="false" placeholder="全局" /></template></el-table-column>
-      <el-table-column label="本群日预算" width="130"><template #default="{ row }"><el-input-number v-model="row.form.daily_tokens" size="mini" :min="0" :controls="false" placeholder="不限" /></template></el-table-column>
-      <el-table-column label="运行状态" min-width="240"><template #default="{ row }"><span v-if="!row.states.length" class="muted">本次运行以来该群还没有消息</span><div v-for="item in row.states" :key="item.bot_id"><small>Bot {{ item.bot_id }} · 今日 {{ item.used_tokens }} tokens<template v-if="item.last_proactive_at"> · 上次插话 {{ formatTime(item.last_proactive_at * 1000) }}</template><template v-if="item.cooldown_left"> · 冷却剩 {{ item.cooldown_left }} 秒</template></small></div></template></el-table-column>
+      <el-table-column label="插话" width="110"><template #default="{ row }"><el-select v-model="row.form.mode" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in modeNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
+      <el-table-column label="冷却（秒）" width="110"><template #default="{ row }"><el-input-number v-model="row.form.cooldown" size="mini" :min="0" :max="86400" :controls="false" placeholder="全局" /></template></el-table-column>
+      <el-table-column label="每日次数" width="110"><template #default="{ row }"><el-input-number v-model="row.form.daily_count" size="mini" :min="0" :controls="false" placeholder="全局" /></template></el-table-column>
+      <el-table-column label="本群日预算" width="110"><template #default="{ row }"><el-input-number v-model="row.form.daily_tokens" size="mini" :min="0" :controls="false" placeholder="不限" /></template></el-table-column>
+      <el-table-column label="偷表情" width="110"><template #default="{ row }"><el-select v-model="row.form.steal" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in modeNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
+      <el-table-column label="运行状态" min-width="240"><template #default="{ row }"><span v-if="!row.states.length" class="muted">本次运行以来该群还没有消息</span><div v-for="item in row.states" :key="item.bot_id"><small>Bot {{ item.bot_id }} · {{ modeNames[item.mode] }} · 今日插话 {{ item.count }} 次、{{ item.used_tokens }} tokens<template v-if="item.stolen"> · 偷了 {{ item.stolen }} 张表情</template><template v-if="item.mode === 'listen'"> · 待判断 {{ item.pending }} 条</template><template v-if="item.unanswered"> · 连续 {{ item.unanswered }} 次没人理</template><template v-if="item.last_proactive_at"> · 上次插话 {{ formatTime(item.last_proactive_at * 1000) }}</template><template v-if="item.cooldown_left"> · 冷却剩 {{ item.cooldown_left }} 秒</template></small></div></template></el-table-column>
       <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }"><el-button type="text" size="mini" :loading="row.saving" @click="save(row)">保存</el-button></template></el-table-column>
     </el-table>
 
@@ -63,12 +66,20 @@ import { apiErrorDetail } from "@/utils/api-error"
 
 const QUIET = { suppressErrorToast: true }
 const number = (value) => (value === undefined || value === null || value === "" ? null : value)
+const FIELDS = ["mode", "cooldown", "daily_count", "daily_tokens", "steal"]
+/**
+ * 群设置转为表单，未设置的项为 undefined 以显示占位
+ * @param {object} proactive 群的主动对话设置
+ * @returns {object} 表单
+ */
+const formOf = (proactive) => Object.fromEntries(FIELDS.map((key) => [key, proactive[key] ?? undefined]))
 
 export default {
   name: "AIProactive",
   data() {
     return {
-      loading: false, search: "", rows: [], tasks: [], bots: [], overview: { used_tokens: 0 },
+      loading: false, search: "", rows: [], tasks: [], bots: [], overview: { used_tokens: 0, steal_judges: 0 },
+      modeNames: { off: "关闭", probability: "概率", listen: "监听" },
       taskForm: { visible: false, saving: false, id: null, name: "", prompt: "", kind: "cron", value: "", bot_id: "", target: "group", target_id: "" },
       runNames: { ok: "已发送", silent: "无内容", error: "出错", stopped: "已停止" },
       runTypes: { ok: "success", silent: "info", error: "danger", stopped: "info" },
@@ -100,7 +111,7 @@ export default {
         this.overview = state.data
         this.rows = groups.data.map((item) => ({
           group_id: item.group_id, group_name: item.group_name, enabled: item.enabled, saving: false,
-          form: { cooldown: (item.proactive || {}).cooldown ?? undefined, daily_tokens: (item.proactive || {}).daily_tokens ?? undefined },
+          form: formOf(item.proactive || {}),
           states: state.data.groups.filter((s) => s.group_id === item.group_id),
         }))
         this.tasks = tasks.data.tasks
@@ -108,14 +119,14 @@ export default {
       } catch (error) { this.fail(error, "主动对话加载失败。") } finally { this.loading = false }
     },
     /**
-     * 保存一个群的主动插话设置，全部为空时清除覆盖
+     * 保存一个群的主动对话设置，全部为空时清除覆盖
      * @param {object} row 群
      */
     async save(row) {
-      const payload = { cooldown: number(row.form.cooldown), daily_tokens: number(row.form.daily_tokens) }
+      const payload = Object.fromEntries(FIELDS.map((key) => [key, number(row.form[key])]))
       row.saving = true
       try { this.$message.success((await this.request("put", `/chat/groups/${encodeURIComponent(row.group_id)}/proactive`, payload)).info) }
-      catch (error) { this.fail(error, "主动插话设置保存失败。") } finally { row.saving = false }
+      catch (error) { this.fail(error, "主动对话设置保存失败。") } finally { row.saving = false }
     },
     /**
      * 打开任务编辑框，不传任务时新建
@@ -157,7 +168,7 @@ export default {
 <style scoped>
 .heading-actions { display: flex; gap: 8px; align-items: center; }
 .search { width: 180px; }
-.el-input-number { width: 100px; }
+.el-input-number, .el-select { width: 90px; }
 .tasks-heading { margin-top: 24px; }
 .value-input { width: 200px; margin-left: 8px; }
 .bot-select { width: 130px; margin-right: 8px; }

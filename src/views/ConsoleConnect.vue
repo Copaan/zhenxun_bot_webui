@@ -17,7 +17,6 @@
 
 <script>
 import logoUrl from "@/assets/image/logo.png"
-import { syncApiWithBrowserLocation } from "@/utils/api"
 import { establishSession } from "@/utils/auth-session"
 
 const RESTART_RECEIPT_KEY = "zhenxunSetupRestartReceipt"
@@ -34,9 +33,6 @@ export default {
     }
   },
   async mounted() {
-    // Console links are issued by the worker serving this page. A saved API
-    // address may point at an older worker after a port or host migration.
-    syncApiWithBrowserLocation()
     this.connectionCode = String(this.$route.query.code || "")
     try {
       await this.$router.replace({ path: "/connect" })

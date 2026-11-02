@@ -5,8 +5,8 @@ import { MessageBox } from "element-ui"
 import Login from "@/views/Login"
 import Home from "@/views/Home"
 import { clearDirtyStatesFor, hasDirtyState } from "@/utils/dirty-state"
+import { finishRouteProgress, startRouteProgress } from "@/utils/route-progress"
 
-const MyApi = () => import(/* webpackChunkName: "address" */ "@/views/MyApi")
 const PluginManage = () =>
   import(/* webpackChunkName: "plugins" */ "@/views/plugin/PluginManage")
 const StoreManage = () =>
@@ -45,11 +45,6 @@ const routes = [
     path: "/",
     name: "Login",
     component: Login,
-  },
-  {
-    path: "/myapi",
-    name: "MyApi",
-    component: MyApi,
   },
   {
     path: "/configure",
@@ -117,6 +112,7 @@ function isChunkLoadError(error) {
 }
 
 router.onError((error) => {
+  finishRouteProgress()
   if (!isChunkLoadError(error)) {
     console.error(error)
     return
@@ -167,15 +163,20 @@ router.beforeEach(async (to, from, next) => {
   }
 
   if (
-    !["/", "/myapi", "/configure", "/connect"].includes(to.path) &&
+    !["/", "/configure", "/connect"].includes(to.path) &&
     (!isAuthenticated || !hasToken)
   ) {
     clearAuthToken()
     window.sessionStorage.removeItem("isAuthenticated")
     next({ path: "/", query: { redirect: to.fullPath } })
   } else {
+    if (to.path !== from.path && from.matched.length) startRouteProgress()
     next()
   }
+})
+
+router.afterEach(() => {
+  finishRouteProgress()
 })
 
 export default router

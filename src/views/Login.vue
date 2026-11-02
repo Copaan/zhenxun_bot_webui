@@ -42,14 +42,6 @@
 
         <div class="login-actions">
           <CuteButton
-            type="secondary"
-            icon="server"
-            @click="changeApi"
-            iconColor="var(--button-icon-color-default)"
-          >
-            地址设置
-          </CuteButton>
-          <CuteButton
             type="primary"
             icon="login"
             @click="submitLogin"
@@ -124,7 +116,6 @@
 <script>
 import qs from "qs"
 import logoUrl from "@/assets/image/logo.png"
-import { syncApiWithBrowserLocation } from "@/utils/api"
 import { establishSession } from "@/utils/auth-session"
 import { clearAuthenticationState } from "@/utils/auth-session"
 import CuteButton from "@/components/ui/CuteButton.vue"
@@ -253,10 +244,6 @@ export default {
       }
     },
 
-    changeApi() {
-      this.$router.replace("/myapi")
-    },
-
     // 忘记密码按钮相关方法
     startButtonDance() {
       if (this.isButtonMoving) return
@@ -324,7 +311,6 @@ export default {
   mounted() {
     if (this.$route.query.reauth === "1") {
       clearAuthenticationState()
-      syncApiWithBrowserLocation()
     }
     this.checkFirstRun()
 

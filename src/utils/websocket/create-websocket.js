@@ -1,7 +1,4 @@
-import {
-  getBaseUrl,
-  syncApiWithBrowserLocation,
-} from "@/utils/api"
+import { getBaseUrl } from "@/utils/api"
 import { handleAuthenticationExpired } from "@/utils/auth-session"
 import { getAuthToken, hasValidAuthToken } from "@/utils/auth-token"
 import { businessNetworkEpoch, isBusinessNetworkFrozen } from "@/utils/restart-network"
@@ -39,12 +36,7 @@ export const emitWebSocketState = (channel, status) => {
 export const createAuthenticatedWebSocket = (path) => {
   if (isBusinessNetworkFrozen() || !hasValidAuthToken()) return null
   const epoch = businessNetworkEpoch()
-  let url = new URL(getBaseUrl())
-  if (window.location.protocol === "https:" && url.protocol !== "https:") {
-    syncApiWithBrowserLocation()
-    emitWebSocketState(path, "mixed-content-address-reset")
-    url = new URL(getBaseUrl())
-  }
+  const url = new URL(getBaseUrl())
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   url.pathname = path
   url.search = ""

@@ -83,6 +83,9 @@
             <el-tag v-else-if="policyScope === 'group'" size="small" type="info">Bot 独立群设置</el-tag>
             <el-tag v-else-if="account.mode === 'linked'" size="small" type="warning">{{ account.policy.name }}</el-tag>
             <el-tag v-else size="small" type="info">独立设置</el-tag>
+            <el-tooltip v-if="!editingPolicy && policyScope === 'account'" :disabled="!account.connected" content="在线账号不能删除" placement="top">
+              <span><el-button size="small" type="danger" plain icon="el-icon-delete" :disabled="account.connected || saving" :loading="deletingAccount" @click="deleteAccount">删除账号</el-button></span>
+            </el-tooltip>
           </div>
         </div>
         <el-alert v-if="botDisabled" class="bot-off-alert" type="warning" show-icon :closable="false" title="此账号的全局开关已关闭，功能暂停响应，超级用户的指令不受影响。在首页打开全局开关后恢复。" />
@@ -254,7 +257,7 @@ export default {
       policyScope: "account", groups: [], groupAccount: null, selectedGroupKey: "", privateAccount: null, selectionRequest: 0, listRequest: 0, destroyed: false,
       draft: { plugins: [], tasks: [] },
       activeKind: "plugins", accountSearch: "", featureSearch: "", statusFilter: "all", selectedModules: [], visibleCount: FEATURE_PAGE_SIZE,
-      createDialogVisible: false, policyDialogVisible: false, bindDialogVisible: false, copyDialogVisible: false,
+      deletingAccount: false, createDialogVisible: false, policyDialogVisible: false, bindDialogVisible: false, copyDialogVisible: false,
       createForm: { name: "", description: "", bindCurrent: true },
         bindingPolicy: null, bindTargets: [], copyTargets: [], bindImpacts: [], copyImpacts: [], impactRequest: 0,
     }
@@ -575,6 +578,28 @@ export default {
     async openCopyDialog() { if (this.saving || this.policyScope !== "account") return; this.copyTargets = []; this.copyImpacts = []; this.copyDialogVisible = true },
     loadCopyImpacts() { if (this.account) this.loadImpacts(this.copyTargets, this.account, "copyImpacts") },
     async copyAccount() { this.dialogSaving = true; try { const resp = await this.postRequest(`${this.$root.prefix}/plugin-policy/copy`, { source_bot_id: this.account.bot_id, source_revision: this.account.revision, target_bot_ids: this.copyTargets, expected_revisions: this.targetRevisions(this.copyTargets) }); if (resp.suc) { this.$message.success(resp.info); this.copyDialogVisible = false; await this.loadAll() } } finally { this.dialogSaving = false } },
+    async deleteAccount() {
+      const account = this.account
+      if (!account || account.connected || this.deletingAccount || this.saving) return
+      try {
+        await this.$confirm(`确定删除账号「${this.accountLabel(account)}」？将同时清除它的插件设置、群聊与私聊设置和已知群记录，账号重新连接后按默认设置重新创建。`, "删除账号", { type: "warning", confirmButtonText: "删除", confirmButtonClass: "el-button--danger" })
+      } catch (_) { return }
+      if (this.destroyed) return
+      this.deletingAccount = true
+      try {
+        const resp = await this.deleteRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(account.bot_id)}?expected_revision=${account.revision}`, {}, { suppressErrorToast: true })
+        if (resp.suc) {
+          this.$message.success(resp.info)
+          this.selectedBotId = ""; this.account = null
+          if (this.$route.query.bot_id) this.navigate({})
+          if (!this.destroyed) await this.loadAll()
+        }
+      } catch (error) {
+        this.$message.error(error?.response?.data?.detail?.code === "plugin_policy_revision_conflict" ? "账号设置已变化，请重新加载后再试" : apiErrorDetail(error, "删除账号失败"))
+      } finally {
+        this.deletingAccount = false
+      }
+    },
     async deletePolicy(policy) {
       if (this.deletingPolicyId || this.deleteConfirming || this.saving || this.dialogSaving || policy.bound_bot_ids.length > 0) return
       this.deleteConfirming = true
@@ -615,7 +640,7 @@ export default {
 .policy-workbench { display: grid; min-height: 680px; grid-template-columns: 280px minmax(0, 1fr); border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
 .account-pane { min-width: 0; padding: 16px; border-right: 1px solid var(--border-color); }.pane-heading { display: flex; justify-content: space-between; margin-bottom: 12px; }.pane-heading span { color: var(--text-color-secondary); }
 .account-list { display: flex; max-height: 610px; flex-direction: column; gap: 4px; margin-top: 10px; overflow-y: auto; }.account-list button { display: grid; width: 100%; min-height: 66px; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.account-list button:hover { background: var(--bg-color-hover); }.account-list .bot-off { color: var(--danger-color); }.bot-off-alert { margin-bottom: 12px; }.account-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.account-list span, .policy-list-row > span { display: flex; min-width: 0; flex-direction: column; gap: 4px; }.account-list strong, .account-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.account-list small, .account-list em, .policy-list-row small { color: var(--text-color-secondary); font-size: 11px; font-style: normal; }.connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-color-disabled); }.connection-dot.online { background: var(--success-color); }
-.editor-pane { min-width: 0; padding: 20px 22px 24px; container-type: inline-size; }.editor-heading { min-height: 46px; justify-content: space-between; gap: 12px; }.editor-heading > div:first-child { min-width: 0; }.back-button { width: 34px; height: 34px; margin-right: 10px; border: 0; border-radius: 4px; color: var(--text-color); background: var(--bg-color-hover); cursor: pointer; }.editor-status { flex: none; }
+.editor-pane { min-width: 0; padding: 20px 22px 24px; container-type: inline-size; }.editor-heading { min-height: 46px; justify-content: space-between; gap: 12px; }.editor-heading > div:first-child { min-width: 0; }.back-button { width: 34px; height: 34px; margin-right: 10px; border: 0; border-radius: 4px; color: var(--text-color); background: var(--bg-color-hover); cursor: pointer; }.editor-status { display: flex; flex: none; align-items: center; gap: 8px; }
 .policy-meta-form { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr); gap: 12px; margin-top: 16px; }.policy-meta-form .el-form-item { margin-bottom: 0; }
 .feature-sticky { position: sticky; top: 0; z-index: 5; margin-top: 8px; padding-top: 10px; background: var(--bg-color-secondary); }.feature-toolbar { gap: 10px; }.feature-toolbar .el-input { max-width: 330px; margin-left: auto; }.feature-toolbar .el-select { width: 150px; }.batch-toolbar { min-height: 48px; gap: 10px; margin-top: 12px; border-top: 1px solid var(--border-color-light); border-bottom: 1px solid var(--border-color-light); }.batch-toolbar span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }
 .feature-table { min-width: 560px; }.feature-row { display: grid; min-height: 64px; grid-template-columns: 34px minmax(160px, 1fr) 110px 110px 110px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border-color-light); }.feature-head { min-height: 42px; color: var(--text-color-secondary); font-size: 12px; }.feature-name { display: flex; min-width: 0; flex-direction: column; gap: 5px; }.feature-name strong, .feature-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.feature-name small { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 11px; }.feature-row .el-tag { max-width: 100%; height: auto; line-height: 1.5; white-space: normal; }.layer-cell { display: flex; align-items: center; gap: 6px; }.layer-cell .el-button { padding: 0; color: var(--text-color-secondary); font-size: 15px; }.layer-cell .el-button.is-locked { color: var(--danger-color); }.load-more { display: flex; justify-content: center; padding: 16px 0 4px; }.empty-state, .empty-editor { display: grid; min-height: 140px; place-items: center; color: var(--text-color-secondary); }

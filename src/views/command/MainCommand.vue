@@ -6,7 +6,7 @@
       background: 'var(--bg-color)',
     }"
   >
-    <el-row :gutter="1" class="h-full">
+    <el-row :gutter="1" class="command-row" :style="{ height: rowHeight + 'px' }">
       <el-col :xs="24" :sm="24" :md="8" :lg="6" class="h-full">
         <div class="command-panel h-full pr-0 md:pr-0">
           <LeftInfo class="h-full" />
@@ -33,6 +33,10 @@ import LeftInfo from "@/components/command/LeftInfo.vue"
 import MidInfo from "@/components/command/MidInfo.vue"
 import RightInfo from "@/components/command/RightInfo.vue"
 import { getHeaderHeight } from "@/utils/utils"
+
+/** 窗口较矮或浏览器放大时三栏按此高度排版，超出部分由页面滚动 */
+const MIN_HEIGHT = 680
+
 export default {
   name: "MainCommand",
   data() {
@@ -45,6 +49,9 @@ export default {
   computed: {
     computedHeight() {
       return this.windowHeight - getHeaderHeight()
+    },
+    rowHeight() {
+      return Math.max(this.computedHeight - 20, MIN_HEIGHT)
     },
   },
   created() {},
@@ -77,6 +84,10 @@ export default {
 
 /* 响应式设计 */
 @media (max-width: 1024px) {
+  .command-row {
+    height: auto !important;
+  }
+
   .el-col {
     &:nth-child(1),
     &:nth-child(2),

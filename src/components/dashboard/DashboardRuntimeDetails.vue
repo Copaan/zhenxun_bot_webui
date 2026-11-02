@@ -29,6 +29,7 @@
               <el-button size="mini" title="恢复默认字号" @click="setLogScale(100)">{{ logScale }}%</el-button>
               <el-button size="mini" icon="el-icon-plus" title="放大字号" :disabled="logScale >= 200" @click="setLogScale(logScale + 10)" />
             </el-button-group>
+            <el-button size="mini" :type="autoScroll ? 'primary' : ''" :plain="autoScroll" :class="{ 'is-paused': !autoScroll }" :icon="autoScroll ? 'el-icon-video-pause' : 'el-icon-video-play'" :title="autoScroll ? '暂停自动滚动，停在当前位置查看' : '恢复自动滚动到最新日志'" @click="toggleAutoScroll"><span class="action-label">{{ autoScroll ? "自动滚动" : "已暂停滚动" }}</span></el-button>
             <el-button size="mini" :icon="logExpanded ? 'el-icon-close' : 'el-icon-full-screen'" :title="logExpanded ? '退出放大（Esc）' : '放大查看'" @click="logExpanded = !logExpanded"><span class="action-label">{{ logExpanded ? "退出放大" : "放大查看" }}</span></el-button>
             <el-dropdown trigger="click" @command="exportLog">
               <el-button size="mini" icon="el-icon-download" title="导出日志" :loading="exporting"><span class="action-label">导出</span></el-button>
@@ -54,6 +55,9 @@ import { getBaseUrl } from "@/utils/api"
 import { getAuthToken } from "@/utils/auth-token"
 
 const LOG_SCALE_KEY = "zhenxun-log-scale"
+const LOG_AUTO_SCROLL_KEY = "zhenxun-log-auto-scroll"
+const LOG_LIMIT = 150
+const PAUSED_LOG_LIMIT = 1000
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g")
 
 export default {
@@ -67,6 +71,7 @@ export default {
     logState: "connecting",
     logScale: Math.min(200, Math.max(70, Number(localStorage.getItem(LOG_SCALE_KEY)) || 100)),
     logExpanded: false,
+    autoScroll: localStorage.getItem(LOG_AUTO_SCROLL_KEY) !== "0",
     exporting: false,
     ansi: new AnsiUp(),
   }),
@@ -118,11 +123,22 @@ export default {
       let html = this.ansi.ansi_to_html(raw)
       html = html.replace("color:rgb(0,0,187)", "color:rgb(55,186,255)")
       this.logs.push({ id: ++this.logSequence, html, text: raw.replace(ANSI_PATTERN, "") })
-      if (this.logs.length > 150) this.logs.shift()
+      if (this.logs.length > (this.autoScroll ? LOG_LIMIT : PAUSED_LOG_LIMIT)) this.logs.shift()
       this.$nextTick(this.scrollLogToEnd)
     },
     scrollLogToEnd() {
-      if (this.$refs.logBox) this.$refs.logBox.scrollTop = this.$refs.logBox.scrollHeight
+      if (this.autoScroll && this.$refs.logBox) this.$refs.logBox.scrollTop = this.$refs.logBox.scrollHeight
+    },
+    /**
+     * 切换新日志到达时是否自动滚动到底部，暂停期间最多保留 1000 条
+     */
+    toggleAutoScroll() {
+      this.autoScroll = !this.autoScroll
+      localStorage.setItem(LOG_AUTO_SCROLL_KEY, this.autoScroll ? "1" : "0")
+      if (this.autoScroll) {
+        this.logs.splice(0, Math.max(0, this.logs.length - LOG_LIMIT))
+        this.$nextTick(this.scrollLogToEnd)
+      }
     },
     /**
      * 调整日志字号比例并记住设置
@@ -195,6 +211,7 @@ export default {
 .socket-label { font-size: 12px; color: var(--el-color-warning); }
 .socket-label.is-connected { color: var(--el-color-success); }
 .log-title { display: flex; align-items: center; gap: 10px; }
+.log-actions .is-paused, .log-actions .is-paused:hover, .log-actions .is-paused:focus { border-color: #e6a23c; color: #e6a23c; background: transparent; }
 .log-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .log-panel .detail-title { flex-wrap: wrap; gap: 8px; padding-top: 8px; padding-bottom: 8px; }
 .log-panel.is-expanded { position: fixed; inset: 16px; z-index: 1990; display: flex; flex-direction: column; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45); }

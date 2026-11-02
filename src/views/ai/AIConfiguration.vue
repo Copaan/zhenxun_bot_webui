@@ -117,7 +117,7 @@
 
       <el-tab-pane label="默认与路由" name="routing">
         <section class="settings-section routing-defaults"><div class="section-title"><div><h2>默认任务模型</h2><p>只显示适合对应任务的已启用模型，以及所含模型全部适合该任务的路由组。</p></div></div>
-          <el-form label-position="top" class="default-grid"><el-form-item v-for="task in defaultTasks" :key="task.key" :label="task.label" :error="operationError(`default_models.${task.key}`)"><el-select :value="sectionDrafts.default_models[task.key]" clearable filterable placeholder="未配置" class="full-control" @change="setDefaultModel(task.key, $event)"><el-option-group label="模型"><el-option v-for="model in modelsForTask(task.key)" :key="model.fullName" :label="model.fullName" :value="model.fullName" /></el-option-group><el-option-group label="路由组"><el-option v-for="group in groupsForTask(task.key)" :key="group" :label="group" :value="group" /></el-option-group></el-select></el-form-item></el-form>
+          <el-form label-position="top" class="default-grid"><el-form-item v-for="task in defaultTasks" :key="task.key" :error="operationError(`default_models.${task.key}`)"><template #label><el-tooltip v-if="task.tip" :content="task.tip" placement="top"><span class="task-label">{{ task.label }} <i class="el-icon-question"></i></span></el-tooltip><span v-else>{{ task.label }}</span></template><el-select :value="sectionDrafts.default_models[task.key]" clearable filterable placeholder="未配置" class="full-control" @change="setDefaultModel(task.key, $event)"><el-option-group label="模型"><el-option v-for="model in modelsForTask(task.key)" :key="model.fullName" :label="model.fullName" :value="model.fullName" /></el-option-group><el-option-group label="路由组"><el-option v-for="group in groupsForTask(task.key)" :key="group" :label="group" :value="group" /></el-option-group></el-select></el-form-item></el-form>
         </section>
         <section class="settings-section route-section">
           <div class="section-title"><div><h2>模型路由组</h2><p>按主模型和后备顺序尝试；路由组可以作为默认模型或其他路由组的目标。</p></div><el-button size="small" icon="el-icon-plus" @click="addGroup">添加路由组</el-button></div>
@@ -238,7 +238,7 @@ export default {
       discovering: false, upstreamOpen: false, catalog: {}, catalogUpdating: false, providerProbeResults: {}, testingModelKey: "", batchChecking: false,
       connectionOpen: false, editorVisible: false, editorModel: null, editorIndex: null, settingsTab: "context",
       taskLabels: TASK_LABELS,
-      defaultTasks: [{ key: "chat", label: "对话" }, { key: "vision", label: "视觉（对话模型不支持图片时转述图片）" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "stt", label: "语音转文字" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
+      defaultTasks: [{ key: "chat", label: "对话" }, { key: "vision", label: "视觉", tip: "对话模型不支持图片时，用视觉模型把图片转述成文字" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "stt", label: "语音转文字" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
       schemaTabs: [
         { name: "context", label: "上下文", saveLabel: "保存上下文设置", effect: "保存后立即热加载", link: { text: "群聊背景消息数、分段发送与长回复在 AI 聊天的「聊天设置」中。", label: "打开聊天设置", route: { path: "/ai/chat", query: { settings: "ai_chat" } } } },
         { name: "agent", label: "Agent", saveLabel: "保存 Agent 设置", effect: "保存后立即热加载", link: { text: "Agent 开关、MCP 服务与沙箱在 AI 聊天的「Agent」页。", label: "打开 Agent 页", route: { path: "/ai/chat", query: { tab: "agent" } } } },
@@ -993,6 +993,7 @@ export default {
 .models-toolbar .el-button + .el-button, .models-toolbar span + .el-button { margin-left: 0; }
 .routing-defaults { min-height: 0; margin-bottom: 14px; }
 .routing-defaults .default-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); margin-top: 12px; }
+.task-label { cursor: help; }.task-label i { color: var(--text-color-secondary); }
 .settings-switch { margin-bottom: 14px; }
 .settings-link { display: flex; align-items: center; gap: 6px; margin: 0 0 12px; color: var(--text-color-secondary); font-size: 12px; }
 .settings-link .el-button { padding: 0; }

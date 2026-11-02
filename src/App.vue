@@ -1,13 +1,14 @@
 <template>
   <div id="app" :style="{ height: computedHeight + 'px' }">
     <router-view />
+    <route-progress />
     <restart-recovery-overlay />
   </div>
 </template>
 
 <script>
-import { getBaseUrlLocalStorage, setBaseApiUrl } from "@/utils/api"
 import RestartRecoveryOverlay from "@/components/system/RestartRecoveryOverlay"
+import RouteProgress from "@/components/ui/RouteProgress"
 
 const THEMES = [
   { value: "pink", label: "真寻可爱", icon: "el-icon-present", color: "#F59E0B" },
@@ -18,7 +19,7 @@ const THEMES = [
 
 export default {
   name: "App",
-  components: { RestartRecoveryOverlay },
+  components: { RestartRecoveryOverlay, RouteProgress },
   data() {
     return {
       windowHeight: window.innerHeight,
@@ -28,12 +29,6 @@ export default {
     computedHeight() {
       return this.windowHeight - 1
     },
-  },
-  created() {
-    const savedBaseUrl = getBaseUrlLocalStorage()
-    if (savedBaseUrl) {
-      setBaseApiUrl(savedBaseUrl)
-    }
   },
   mounted() {
     window.addEventListener("resize", this.handleResize)

@@ -92,7 +92,7 @@
             <i class="el-icon-user" v-if="!data.ava_url"></i>
           </el-avatar>
 
-          <div class="ml-3 min-w-0">
+          <div class="ml-3 min-w-0 flex-1">
             <p
               class="font-semibold truncate"
               :style="{
@@ -105,7 +105,7 @@
               {{ data.remark || data.nickname || data.group_name }}
             </p>
             <p
-              class="text-sm mt-1"
+              class="text-sm mt-1 truncate"
               :style="{
                 color:
                   detailId === data.id

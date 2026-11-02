@@ -117,7 +117,7 @@ axios.interceptors.response.use(
     const suppressToast = Boolean(error.config?.suppressErrorToast)
     if (!response) {
       if (!suppressToast) {
-        showErrorOnce("无法连接到真寻服务，请检查服务状态和地址设置。")
+        showErrorOnce("无法连接到真寻服务，请检查服务状态。")
       }
       return Promise.reject(error)
     }
@@ -150,71 +150,8 @@ axios.interceptors.response.use(
   }
 )
 
-const pageUrl = new URL(window.location.origin)
-const formatHostname = (hostname) => {
-  const normalized = String(hostname || "localhost").replace(/^\[|\]$/g, "")
-  return normalized.includes(":") ? `[${normalized}]` : normalized
-}
-const pageHostname = formatHostname(pageUrl.hostname)
-const pageBaseUrl = `${pageUrl.protocol}//${pageHostname}`
-const pagePort =
-  pageUrl.port || (pageUrl.protocol === "https:" ? "443" : "80")
-const originStorageSuffix = window.location.origin
-const baseUrlStorageKey = `baseUrl:${originStorageSuffix}`
-const portStorageKey = `port:${originStorageSuffix}`
-
-let baseApiUrl = pageBaseUrl
-
-export const getBrowserBaseApiUrl = () => pageBaseUrl
-
-export const getBrowserPort = () => pagePort
-
-export const getBaseUrl = () => {
-  return getBaseApiUrl() + ":" + getPort()
-}
-
-export const setPort = (port) => {
-  localStorage.setItem(portStorageKey, String(port))
-}
-
-export const getPort = () => {
-  return localStorage.getItem(portStorageKey) || pagePort
-}
-
-export const setBaseApiUrl = (url) => {
-  let normalized = String(url || "").trim()
-  if (
-    normalized[normalized.length - 1] == "/" ||
-    normalized[normalized.length - 1] == "\\"
-  ) {
-    normalized = normalized.slice(0, -1)
-  }
-  if (normalized != "") {
-    const value = normalized.includes("://")
-      ? normalized
-      : `http://${normalized}`
-    const parsed = new URL(value)
-    const hostname = formatHostname(parsed.hostname)
-    baseApiUrl = `${parsed.protocol}//${hostname}`
-    if (parsed.port) {
-      setPort(parsed.port)
-    }
-    setBaseUrlLocalStorage(baseApiUrl)
-  } else {
-    baseApiUrl = pageBaseUrl
-    setBaseUrlLocalStorage(baseApiUrl)
-    setPort(pagePort)
-  }
-}
-
-export const syncApiWithBrowserLocation = () => {
-  setBaseApiUrl(getBrowserBaseApiUrl())
-  setPort(getBrowserPort())
-}
-
-export const getBaseApiUrl = () => {
-  return baseApiUrl
-}
+// 接口与页面同源
+export const getBaseUrl = () => window.location.origin
 
 //传送json格式的post请求
 export const postRequest = (url, params, config = {}) => {
@@ -278,55 +215,6 @@ export const deleteRequest = (url, params, config = {}) => {
     url: url,
     data: params,
   })
-}
-
-//设置localStorage
-export const setBaseUrlLocalStorage = (value) => {
-  localStorage.setItem(baseUrlStorageKey, value)
-}
-//取出localStorage
-export const getBaseUrlLocalStorage = () => {
-  let savedUrl = localStorage.getItem(baseUrlStorageKey)
-  if (!savedUrl) {
-    const legacyUrl = localStorage.getItem("baseUrl")
-    const legacyPort = localStorage.getItem("port")
-    localStorage.removeItem("baseUrl")
-    localStorage.removeItem("port")
-    if (legacyUrl) {
-      try {
-        const legacyTarget = new URL(legacyUrl)
-        legacyTarget.port = legacyPort || legacyTarget.port
-        if (legacyTarget.origin === pageUrl.origin) {
-          savedUrl = `${legacyTarget.protocol}//${formatHostname(
-            legacyTarget.hostname
-          )}`
-          localStorage.setItem(baseUrlStorageKey, savedUrl)
-          localStorage.setItem(portStorageKey, legacyTarget.port || pagePort)
-        }
-      } catch (error) {
-        // Invalid legacy addresses are discarded during the one-time migration.
-      }
-    }
-  }
-  if (savedUrl && pageUrl.protocol === "https:") {
-    try {
-      if (new URL(savedUrl).protocol !== "https:") {
-        localStorage.removeItem(baseUrlStorageKey)
-        localStorage.removeItem(portStorageKey)
-        const diagnosticKey = `mixed-content-reset:${originStorageSuffix}`
-        if (!sessionStorage.getItem(diagnosticKey)) {
-          sessionStorage.setItem(diagnosticKey, "1")
-          Message.warning("已清除旧的 HTTP 服务地址，WebSocket 将使用当前 HTTPS 地址。")
-        }
-        return null
-      }
-    } catch (error) {
-      localStorage.removeItem(baseUrlStorageKey)
-      localStorage.removeItem(portStorageKey)
-      return null
-    }
-  }
-  return savedUrl
 }
 
 //设置cookie方法

@@ -142,7 +142,7 @@
               </div>
               <div v-if="hasWebhookBots && qqForm.webhook_mode === 'builtin_https'" class="builtin-settings">
                 <div class="section-heading compact"><div><h3>内置 HTTPS</h3><p>需要通过 <code>zx run</code> 启动，并提供可信 PEM 证书。</p></div><el-tag size="mini" :type="configuration.launcher_managed ? 'success' : 'warning'">{{ configuration.launcher_managed ? "Launcher 已托管" : "需要 Launcher" }}</el-tag></div>
-                <div class="form-grid"><el-form-item label="监听地址"><el-input v-model.trim="qqForm.listen_host" placeholder="0.0.0.0" /></el-form-item><el-form-item label="HTTPS 端口"><el-input-number v-model="qqForm.listen_port" :min="1" :max="65535" controls-position="right" /></el-form-item><el-form-item label="证书链文件"><el-input v-model.trim="qqForm.tls_certfile" placeholder="C:\certs\fullchain.pem" /></el-form-item><el-form-item label="私钥文件"><el-input v-model.trim="qqForm.tls_keyfile" placeholder="C:\certs\privkey.pem" /></el-form-item></div>
+                <div class="form-grid"><el-form-item label="监听地址"><el-input v-model.trim="qqForm.listen_host" placeholder="0.0.0.0" /></el-form-item><el-form-item label="HTTPS 端口"><el-input-number v-model="qqForm.listen_port" :min="1" :max="65535" controls-position="right" /></el-form-item><el-form-item v-for="item in tlsFields" :key="item.key" :label="item.label"><el-input v-model.trim="qqForm[item.key]" :placeholder="item.placeholder"><el-button slot="append" icon="el-icon-folder-opened" :aria-label="`选择${item.label}`" @click="pickTls(item.key)" /></el-input><span class="tls-hint">{{ tlsFiles[item.key] ? `${tlsFiles[item.key].name} · 保存时上传到 Bot` : "可选择本机文件，保存时上传到 Bot" }}</span></el-form-item></div><input ref="tlsInput" type="file" :accept="tlsAccept" hidden @change="tlsSelected" />
               </div>
             </el-form>
             <div v-if="hasWebhookBots" class="callback-panel" :class="{ ready: callbackReady }"><div class="callback-state"><i :class="callbackReady ? 'el-icon-circle-check' : 'el-icon-warning-outline'"></i></div><div><strong>Webhook 入口状态</strong><p>{{ callbackDescription }}</p><p>运行配置：{{ status.qq_webhook_callback_url ? '已配置' : '未配置' }} · 入口：{{ status.qq_webhook_mode === 'external' ? '外部反代未验证' : status.qq_webhook_ingress?.state === 'ready' ? '已监听' : '未确认监听' }} · 账号：{{ status.qq_bots.some(bot => bot.mode === 'webhook' && bot.connected) ? '已连接' : '未连接' }} · 公网验证：未知</p><code v-if="callbackUrl">{{ callbackUrl }}</code></div><el-button v-if="callbackUrl" size="small" icon="el-icon-document-copy" @click="copyText(callbackUrl)">复制回调地址</el-button></div>
@@ -168,6 +168,7 @@ import QQDiagnostic from "@/components/protocol/QQDiagnostic.vue"
 import { apiErrorDetail, apiErrorDiagnostic } from "@/utils/api-error"
 import { handleApplyResult, notifyRestartStatusChanged } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
+import { TLS_ACCEPT, uploadTlsFile } from "@/utils/tls-upload"
 import logoUrl from "@/assets/image/logo.png"
 import {
   requestRestartWithRecovery,
@@ -198,6 +199,8 @@ export default {
       telegramEnabled: false,
       qqForm: { enabled: false, proactive_fallback: true, bots: [], webhook_mode: "external", public_base_url: "", listen_host: "0.0.0.0", listen_port: 443, tls_certfile: "", tls_keyfile: "" },
       originalProtocol: "",
+      tlsAccept: TLS_ACCEPT, tlsFiles: {}, tlsPickKey: "",
+      tlsFields: [{ key: "tls_certfile", kind: "cert", label: "证书链文件", placeholder: "C:\\certs\\fullchain.pem" }, { key: "tls_keyfile", kind: "key", label: "私钥文件", placeholder: "C:\\certs\\privkey.pem" }],
     }
   },
   computed: {
@@ -249,7 +252,7 @@ export default {
       const sequence = ++this.configurationSequence
       const snapshot = this.protocolSnapshot()
       this.loading = true
-      try { const response = await this.getRequest(`${this.$root.prefix}/protocol/configuration`, {}, { suppressErrorToast: true }); if (sequence !== this.configurationSequence || snapshot !== this.protocolSnapshot()) return; if (!response || !response.suc) throw new Error(response && response.info); this.configuration = response.data; this.onebotHost = response.data.onebot.reverse_ws_host || ""; this.onebotToken = response.data.onebot.access_token || ""; this.telegramEnabled = Boolean(response.data.telegram?.enabled); const qq = response.data.qq; this.qqForm = { enabled: qq.enabled, proactive_fallback: qq.proactive_fallback !== false, bots: (qq.bots || []).map((bot) => ({ ...emptyBot(), ...bot, saved: true, use_websocket: Boolean(qq.bot_modes?.[bot.id]) })), webhook_mode: qq.webhook_mode || "external", public_base_url: qq.public_base_url || "", listen_host: qq.listen_host || "0.0.0.0", listen_port: qq.listen_port || 443, tls_certfile: qq.tls_certfile || "", tls_keyfile: qq.tls_keyfile || "" }; this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration") }
+      try { const response = await this.getRequest(`${this.$root.prefix}/protocol/configuration`, {}, { suppressErrorToast: true }); if (sequence !== this.configurationSequence || snapshot !== this.protocolSnapshot()) return; if (!response || !response.suc) throw new Error(response && response.info); this.configuration = response.data; this.onebotHost = response.data.onebot.reverse_ws_host || ""; this.onebotToken = response.data.onebot.access_token || ""; this.telegramEnabled = Boolean(response.data.telegram?.enabled); const qq = response.data.qq; this.qqForm = { enabled: qq.enabled, proactive_fallback: qq.proactive_fallback !== false, bots: (qq.bots || []).map((bot) => ({ ...emptyBot(), ...bot, saved: true, use_websocket: Boolean(qq.bot_modes?.[bot.id]) })), webhook_mode: qq.webhook_mode || "external", public_base_url: qq.public_base_url || "", listen_host: qq.listen_host || "0.0.0.0", listen_port: qq.listen_port || 443, tls_certfile: qq.tls_certfile || "", tls_keyfile: qq.tls_keyfile || "" }; this.tlsFiles = {}; this.originalProtocol = this.protocolSnapshot(); clearDirtyState("protocol-configuration") }
       catch (error) { if (sequence === this.configurationSequence) this.$message.error(apiErrorDetail(error, "机器人配置读取失败。")) } finally { if (sequence === this.configurationSequence) this.loading = false }
     },
     async loadStatus() {
@@ -265,7 +268,7 @@ export default {
         if (sequence === this.statusSequence) this.statusConfirmed = false
       } finally { if (sequence === this.statusSequence) this.statusLoading = false }
     },
-    protocolSnapshot() { return JSON.stringify({ onebotHost: this.onebotHost, onebotToken: this.onebotToken, telegramEnabled: this.telegramEnabled, qq: { ...this.qqForm, bots: this.qqForm.bots.map(({ probing, removing, probeResult, probeError, localKey, saved, ...bot }) => bot) } }) },
+    protocolSnapshot() { return JSON.stringify({ onebotHost: this.onebotHost, onebotToken: this.onebotToken, telegramEnabled: this.telegramEnabled, tls: Object.keys(this.tlsFiles), qq: { ...this.qqForm, bots: this.qqForm.bots.map(({ probing, removing, probeResult, probeError, localKey, saved, ...bot }) => bot) } }) },
     updateDirtyState() { if (this.originalProtocol) setDirtyState("protocol-configuration", this.protocolSnapshot() !== this.originalProtocol) },
     clearRegistrationTimer() { if (this.registrationTimer) window.clearTimeout(this.registrationTimer); this.registrationTimer = null },
     async startRegistration() {
@@ -373,12 +376,26 @@ export default {
     },
     canProbeBot(bot) { return Boolean(bot.id && bot.secret) },
     async probeBot(bot) { bot.probing = true; bot.probeResult = ""; bot.probeError = null; try { const response = await this.postRequest(`${this.$root.prefix}/protocol/qq/probe`, { id: bot.id, secret: bot.secret || null }, { suppressErrorToast: true }); if (!response || !response.suc) throw new Error(response && response.info); bot.probeResult = response.data.username || response.data.bot_id || "凭据有效" } catch (error) { bot.probeError = apiErrorDiagnostic(error, "凭据验证失败。") } finally { bot.probing = false } },
+    pickTls(key) { this.tlsPickKey = key; this.$refs.tlsInput.click() },
+    tlsSelected(event) {
+      const [file] = event.target.files
+      event.target.value = ""
+      if (file && this.tlsPickKey) this.$set(this.tlsFiles, this.tlsPickKey, file)
+      this.updateDirtyState()
+    },
     async saveConfiguration() {
       if (this.saving) return
       ++this.configurationSequence
       this.loading = false
-      const submittedSnapshot = this.protocolSnapshot()
       this.saving = true
+      try {
+        for (const item of this.tlsFields) {
+          if (!this.tlsFiles[item.key]) continue
+          this.qqForm[item.key] = await uploadTlsFile(this, item.kind, this.tlsFiles[item.key])
+          this.$delete(this.tlsFiles, item.key)
+        }
+      } catch (error) { this.saving = false; return this.$message.error(apiErrorDetail(error, "证书上传失败。")) }
+      const submittedSnapshot = this.protocolSnapshot()
       try {
         const response = await this.putRequest(`${this.$root.prefix}/protocol/configuration`, {
           expected_revision: this.configuration.revision,
@@ -447,4 +464,5 @@ export default {
 .manual-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-color-light); }.manual-actions span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.qr-dialog-body { display: flex; align-items: center; flex-direction: column; text-align: center; }.qr-frame { display: grid; width: 282px; height: 282px; place-items: center; border: 1px solid var(--border-color-light); border-radius: 7px; background: #fff; }.qr-frame img { display: block; width: 260px; height: 260px; }.qr-frame > i { color: #8a9099; font-size: 38px; }.registered-bot { display: flex; align-items: center; flex-direction: column; gap: 7px; padding: 12px 0 4px; }.registered-bot span { color: var(--text-color-secondary); font-size: 12px; }.qr-dialog-body h3 { margin: 18px 0 7px; }.qr-dialog-body p { margin: 0 0 10px; color: var(--text-color-secondary); line-height: 1.6; }.qr-dialog-body .el-alert { margin-top: 8px; text-align: left; }
 @media (max-width: 900px) { .platform-grid, .form-grid, .bot-grid { grid-template-columns: 1fr; }.span-2 { grid-column: span 1; }.scan-panel { grid-template-columns: auto 1fr; }.scan-panel > .el-button { grid-column: 2; justify-self: start; }.callback-panel { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 640px) { .section-heading, .bot-list-heading, .qq-mode-toolbar, .adapter-controls { align-items: stretch; flex-direction: column; }.configuration-section, .scan-panel, .connected-list, .manual-settings { padding: 16px; }.scan-panel { display: flex; align-items: stretch; flex-direction: column; }.scan-icon { width: 48px; height: 48px; }.scan-copy ul { display: block; }.connection-row { grid-template-columns: auto 1fr auto; }.connection-row > span:nth-child(3) { display: none; }.connection-row > .danger-text { grid-column: 3; grid-row: 1; }.connection-error { grid-column: 1 / -1; }.manual-actions { align-items: stretch; flex-direction: column; }.manual-actions span { margin: 0; }.field-actions, .probe-row { align-items: flex-start; flex-direction: column; }.qr-frame { width: min(282px, 78vw); height: min(282px, 78vw); }.qr-frame img { width: min(260px, 72vw); height: min(260px, 72vw); } }
+.tls-hint { display: block; margin-top: 4px; font-size: 11px; line-height: 1.5; color: var(--text-color-secondary); overflow-wrap: anywhere; }
 </style>

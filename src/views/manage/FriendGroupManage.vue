@@ -144,6 +144,16 @@ export default {
   min-height: 0;
 }
 
+@media (min-width: 769px) {
+  .data-list-container {
+    min-width: 260px;
+  }
+
+  .detail-container {
+    min-width: 280px;
+  }
+}
+
 .mobile-bar {
   display: none;
 }
