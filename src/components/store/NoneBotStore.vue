@@ -86,7 +86,22 @@
       <el-alert v-if="repairError" :title="repairError" type="error" :closable="false" class="repair-error" />
       <div v-for="group in repairPreview ? repairPreview.groups || [] : []" :key="group.id" class="repair-group">
         <el-checkbox v-model="repairSelected" :label="group.id" :disabled="group.status !== 'repairable'">{{ group.roots.join('、') }}</el-checkbox>
-        <el-tag size="mini" :type="group.status === 'repairable' ? 'success' : 'danger'">{{ group.status === 'repairable' ? '可定向修复' : '需要处理约束或环境问题' }}</el-tag>
+        <el-tag size="mini" :type="group.status === 'repairable' ? 'success' : group.leftover ? 'warning' : 'danger'">{{ group.status === 'repairable' ? '可定向修复' : group.leftover ? '残留包，建议卸载' : '无法自动修复' }}</el-tag>
+        <div v-if="group.status !== 'repairable'" class="repair-reason">
+          <p v-if="group.leftover">提出要求的 <code>{{ group.owners.join('、') }}</code> 不被任何依赖来源需要，源码中没有导入，当前进程也未加载，是旧版本留下的残留，补装 <code>{{ group.roots.join('、') }}</code> 没有意义。连同只为它们安装的包共 {{ group.removable.length }} 个一起卸载即可消除冲突：</p>
+          <p v-else>{{ reasonText(group.code) }}</p>
+          <div v-if="group.uninstall_command" class="repair-command"><pre>{{ group.uninstall_command }}</pre><el-button size="mini" icon="el-icon-document-copy" @click="copyText(group.uninstall_command)">复制</el-button></div>
+          <table v-if="(group.usage || []).length" class="usage-table">
+            <thead><tr><th>包</th><th>依赖来源</th><th>源码导入</th><th>已加载</th><th>被谁要求</th></tr></thead>
+            <tbody><tr v-for="item in group.usage" :key="item.name">
+              <td><code>{{ item.name }}</code> {{ item.version || '未安装' }}</td>
+              <td>{{ item.declared ? '需要' : '不需要' }}</td>
+              <td>{{ Object.keys(item.imported_by).length ? Object.entries(item.imported_by).map(([module, file]) => `${module}（${file}）`).join('、') : '无' }}</td>
+              <td>{{ item.loaded.length ? item.loaded.join('、') : '否' }}</td>
+              <td>{{ item.dependents.length ? item.dependents.join('、') : '无' }}</td>
+            </tr></tbody>
+          </table>
+        </div>
         <div v-for="item in group.changes" :key="item.name" class="dependency-change"><code>{{ item.name }}</code><span>{{ item.from || '缺失' }} → {{ item.to }}</span></div>
         <details v-if="group.issues.length"><summary>约束来源</summary><p v-for="(item, index) in group.issues" :key="index">{{ item.owner || '真寻' }}：{{ item.requirement }}；实际 {{ item.actual || '缺失' }}</p></details>
         <pre v-if="group.diagnostic">{{ group.diagnostic }}</pre>
@@ -358,7 +373,7 @@
 import { isBusinessNetworkFrozen, onBusinessNetworkChange } from '@/utils/restart-network'
 import { notifyRestartStatusChanged } from "@/utils/apply-result"
 import { apiErrorDetail } from "@/utils/api-error"
-import { newOperationId, pluginOperationResult, reasonLabels, rememberPluginOperation } from "@/utils/plugin-operation"
+import { newOperationId, pluginOperationResult, reasonLabels, reasonText, rememberPluginOperation } from "@/utils/plugin-operation"
 
 
 export default {
@@ -534,6 +549,10 @@ export default {
         blocked: { label: "不可安装", type: "danger" }, failed: { label: "失败", type: "danger" },
       }
       return states[plugin.install_state] || { label: plugin.install_state, type: "info" }
+    },
+    reasonText,
+    async copyText(value) {
+      try { await navigator.clipboard.writeText(value); this.$message.success("已复制") } catch (_) { this.$message.error("复制失败，请手动选择命令") }
     },
     reasonLabel(reason) { return reasonLabels[reason?.code] || reason?.message || reason?.code || "当前环境不兼容" },
     warningTag(warning) { return { registry_plugin_invalid: "未通过官方测试", registry_plugin_untested: "官方未测试", adapter_incompatible: "适配器不匹配" }[warning?.code] || "提示" },
@@ -818,6 +837,12 @@ export default {
 .environment-details summary, .repair-group summary { cursor: pointer; }
 .repair-group { padding: 16px 0; border-bottom: 1px solid var(--border-color); }
 .repair-group .el-checkbox { max-width: 100%; white-space: normal; margin-bottom: 10px; }
+.repair-reason p { margin: 6px 0; color: var(--text-color-secondary); font-size: 13px; line-height: 1.6; }
+.repair-command { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0; }
+.repair-command pre { flex: 1; min-width: 0; margin: 0; padding: 8px 10px; border-radius: 4px; background: var(--bg-color-secondary); }
+.usage-table { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: 12px; }
+.usage-table th, .usage-table td { padding: 6px 8px; border-bottom: 1px solid var(--border-color-light); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.usage-table th { color: var(--text-color-secondary); font-weight: 500; white-space: nowrap; }
 .repair-group pre, .repair-error { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 .verification-status { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 </style>

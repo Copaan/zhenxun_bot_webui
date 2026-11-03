@@ -44,8 +44,10 @@
     <div v-loading="loading && plugins.length > 0" class="store-content">
       <div v-if="loading && !plugins.length" class="plugin-grid" aria-busy="true" aria-label="正在加载插件">
         <div v-for="index in 6" :key="index" class="plugin-card is-skeleton">
-          <span class="zx-skeleton skeleton-title"></span>
-          <span class="zx-skeleton skeleton-module"></span>
+          <div class="skeleton-head">
+            <span class="zx-skeleton skeleton-avatar"></span>
+            <div><span class="zx-skeleton skeleton-title"></span><span class="zx-skeleton skeleton-module"></span></div>
+          </div>
           <span class="zx-skeleton skeleton-line"></span>
           <span class="zx-skeleton skeleton-line is-short"></span>
           <div class="skeleton-meta"><span v-for="cell in 4" :key="cell" class="zx-skeleton"></span></div>
@@ -55,6 +57,7 @@
       <div v-else-if="pagedPlugins.length" class="plugin-grid">
         <article v-for="plugin in pagedPlugins" :key="plugin.store_key || plugin.id" class="plugin-card">
           <div class="plugin-card__head">
+            <span class="plugin-avatar" :style="{ '--hue': avatarHue(plugin) }" aria-hidden="true">{{ (plugin.name || plugin.module || "?").slice(0, 1) }}</span>
             <div class="plugin-title">
               <el-tooltip :content="plugin.name" placement="top"><h2>{{ plugin.name }}</h2></el-tooltip>
               <span>{{ plugin.module }}</span>
@@ -63,24 +66,21 @@
             <el-tag v-else-if="plugin.update_available" size="mini" type="warning" effect="plain">可更新</el-tag>
             <el-tag v-else-if="plugin.install_state === 'local_ahead'" size="mini" type="info" effect="plain">本地版本较新</el-tag>
             <el-tag v-else-if="plugin.install_state === 'version_unknown'" size="mini" type="info" effect="plain">版本未知</el-tag>
-            <el-tag v-else-if="plugin.installed" size="mini" type="success" effect="plain">已安装</el-tag>
           </div>
           <p class="plugin-description">{{ plugin.description || "暂无简介" }}</p>
-          <dl class="plugin-meta">
-            <div><dt>作者</dt><dd>{{ plugin.author || "未知" }}</dd></div>
-            <div><dt>版本</dt><dd>v{{ plugin.version || "-" }}</dd></div>
-            <div><dt>类型</dt><dd>{{ plugin.plugin_type || "其他" }}</dd></div>
-            <div><dt>来源</dt><dd>{{ { official: "官方", community: "社区", local: "本地" }[plugin.source] || "社区" }}</dd></div>
-          </dl>
-          <div v-if="plugin.installed && !plugin.local" class="reload-diagnostic">
-            <el-tag
-              size="mini"
-              :type="plugin.stopped ? 'warning' : plugin.reload_support === 'hot_reloadable' ? 'success' : 'info'"
-              effect="plain"
-            >
-              {{ reloadLabel(plugin) }}
-            </el-tag>
+          <div class="plugin-meta">
+            <span class="meta-author" :title="`作者：${plugin.author || '未知'}`"><i class="el-icon-user"></i>{{ plugin.author || "未知" }}</span>
+            <span class="meta-version">v{{ plugin.version || "-" }}</span>
+            <span class="meta-chip" title="插件类型">{{ plugin.plugin_type || "其他" }}</span>
+            <span class="meta-chip" title="来源">{{ { official: "官方", community: "社区", local: "本地" }[plugin.source] || "社区" }}</span>
           </div>
+          <p
+            v-if="plugin.installed && !plugin.local"
+            class="reload-state"
+            :class="plugin.stopped ? 'is-warning' : plugin.reload_support === 'hot_reloadable' ? 'is-success' : 'is-info'"
+          >
+            {{ reloadLabel(plugin) }}
+          </p>
           <div v-else-if="plugin.catalog_status === 'missing'" class="catalog-blocked">
             目录中的插件路径已失效，暂时不能安装
           </div>
@@ -158,7 +158,7 @@ export default {
   data() {
     let source = "auto"
     try { source = localStorage.getItem("zhenxun_plugin_download_source") || "auto" } catch (_) { /* Storage may be disabled. */ }
-    return { downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", filtersOpen: false, page: 1, pageSize: 18, actionId: null, actionType: "", pendingActionKey: "", drawerVisible: false, selectedPlugin: null }
+    return { downloadSource: ["auto", "ali", "git"].includes(source) ? source : "auto", plugins: [], loading: false, error: "", search: "", statusFilter: "all", typeFilter: "all", sortBy: "default", filtersOpen: false, page: 1, pageSize: 24, actionId: null, actionType: "", pendingActionKey: "", drawerVisible: false, selectedPlugin: null }
   },
   computed: {
     pluginOperation() { return this.$store.state.pluginOperation },
@@ -190,6 +190,17 @@ export default {
     saveDownloadSource() {
       try { localStorage.setItem("zhenxun_plugin_download_source", this.downloadSource) } catch (_) { /* Optional preference. */ }
       this.loadPlugins()
+    },
+    /**
+     * 根据模块名生成固定的图标色相，同一插件每次颜色一致
+     * @param {object} plugin 插件信息
+     * @returns {number} 0-359 的色相
+     */
+    avatarHue(plugin) {
+      const text = String(plugin.module || plugin.name || "")
+      let hash = 0
+      for (let index = 0; index < text.length; index++) hash = (hash * 31 + text.charCodeAt(index)) % 360
+      return hash
     },
     repositoryUrl(plugin) { return plugin.github_url || plugin.ali_url || "" },
     openRepository(plugin) { window.open(this.repositoryUrl(plugin), "_blank", "noopener,noreferrer") },
@@ -330,23 +341,36 @@ export default {
 .store-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .store-header h1 { margin: 0; font-size: 24px; }.store-header p { margin: 5px 0 0; color: var(--text-color-secondary); }
 .store-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) 150px 150px 150px 230px; gap: 10px; margin-bottom: 16px; }
-.store-content { min-height: 260px; }.plugin-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.plugin-card { display: flex; min-width: 0; min-height: 244px; flex-direction: column; padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
-.plugin-card.is-skeleton { gap: 10px; }.skeleton-title { width: 45%; height: 18px; }.skeleton-module { width: 30%; }.skeleton-line { width: 92%; }.skeleton-line.is-short { width: 60%; }
-.skeleton-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin-top: 8px; }.skeleton-meta .zx-skeleton { width: 70%; }.skeleton-action { width: 72px; height: 28px; margin-top: auto; margin-left: auto; }
-.plugin-card__head { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 10px; }.plugin-title { min-width: 0; }
-.plugin-title h2 { margin: 0; overflow: hidden; color: var(--text-color); font-size: 16px; line-height: 24px; text-overflow: ellipsis; white-space: nowrap; }
+.store-content { min-height: 260px; }.plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+.plugin-card { display: flex; min-width: 0; flex-direction: column; padding: 14px 16px 10px; border: 1px solid var(--border-color-light); border-radius: 12px; background: var(--bg-color-secondary); transition: border-color 0.15s, box-shadow 0.15s; }
+.plugin-card:hover { border-color: var(--border-color); box-shadow: var(--card-shadow); }
+.plugin-card.is-skeleton { gap: 10px; }.skeleton-head { display: flex; align-items: center; gap: 12px; }.skeleton-head > div { display: flex; flex: 1; flex-direction: column; gap: 6px; }.skeleton-avatar { width: 40px; height: 40px; border-radius: 10px; }.skeleton-title { width: 45%; height: 16px; }.skeleton-module { width: 30%; }.skeleton-line { width: 92%; }.skeleton-line.is-short { width: 60%; }
+.skeleton-meta { display: flex; gap: 10px; }.skeleton-meta .zx-skeleton { width: 56px; }.skeleton-action { width: 72px; height: 28px; margin-top: 4px; margin-left: auto; }
+.plugin-card__head { display: flex; min-width: 0; align-items: center; gap: 12px; }.plugin-title { flex: 1; min-width: 0; }
+.plugin-card__head .el-tag { flex: none; align-self: flex-start; }
+.plugin-avatar { display: flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; color: hsl(var(--hue) 62% 48%); background: hsl(var(--hue) 75% 55% / 0.14); font-size: 18px; font-weight: 600; }
+[data-theme="dark"] .plugin-avatar, [data-theme="one-dark"] .plugin-avatar { color: hsl(var(--hue) 70% 70%); background: hsl(var(--hue) 60% 60% / 0.18); }
+[data-theme="dark"] .plugin-actions .el-button--default, [data-theme="one-dark"] .plugin-actions .el-button--default { border-color: var(--border-color); color: var(--text-color); background: var(--bg-color-secondary); }
+[data-theme="dark"] .plugin-actions .el-button--default:hover, [data-theme="one-dark"] .plugin-actions .el-button--default:hover { border-color: var(--primary-color); color: var(--primary-color); }
+.plugin-title h2 { margin: 0; overflow: hidden; color: var(--text-color); font-size: 15px; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-title span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-title span, .detail-module { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 12px; }
-.plugin-description { display: -webkit-box; min-height: 44px; margin: 14px 0; overflow: hidden; color: var(--text-color-secondary); line-height: 22px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.plugin-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin: 0 0 14px; }.plugin-meta div { min-width: 0; }.plugin-meta dt { color: var(--text-color-secondary); font-size: 11px; }.plugin-meta dd { margin: 2px 0 0; overflow: hidden; color: var(--text-color); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.reload-diagnostic { min-height: 24px; margin-bottom: 8px; }
-.catalog-blocked { margin-bottom: 8px; color: var(--danger-color); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.plugin-actions { display: flex; min-height: 34px; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: auto; padding-top: 12px; border-top: 0; }.action-spacer { flex: 1; }.icon-action { width: 32px; height: 32px; padding: 0; }.plugin-actions .el-dropdown-menu { min-height: 0; padding: 4px 0; }.plugin-actions .el-dropdown-menu__item { line-height: 30px; }
+.plugin-description { display: -webkit-box; min-height: 42px; margin: 12px 0 10px; overflow: hidden; color: var(--text-color); font-size: 13px; line-height: 21px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.plugin-meta { display: flex; min-width: 0; align-items: center; gap: 6px; color: var(--text-color-secondary); font-size: 12px; }
+.meta-author { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.meta-author i { margin-right: 3px; }
+.meta-version { flex: none; margin-right: auto; font-family: Consolas, monospace; }
+.meta-chip { flex: none; padding: 0 6px; border-radius: 4px; background: var(--bg-color-hover); line-height: 18px; }
+.reload-state { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; color: var(--text-color-secondary); font-size: 12px; line-height: 18px; }
+.reload-state::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--info-color); }
+.reload-state.is-success::before { background: var(--success-color); }.reload-state.is-warning { color: var(--warning-color); }.reload-state.is-warning::before { background: var(--warning-color); }
+.catalog-blocked { margin: 8px 0 0; color: var(--danger-color); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.plugin-actions { display: flex; min-height: 34px; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: auto; padding-top: 10px; }
+.plugin-card > .plugin-actions { margin-top: 12px; border-top: 1px dashed var(--border-color-light); }.action-spacer { flex: 1; }.icon-action { width: 32px; height: 32px; padding: 0; }.plugin-actions .el-dropdown-menu { min-height: 0; padding: 4px 0; }.plugin-actions .el-dropdown-menu__item { line-height: 30px; }
 .inline-state, .empty-state { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 96px; color: var(--text-color-secondary); }.inline-state.is-error { margin-bottom: 14px; border: 1px solid var(--el-color-danger-light-7); border-radius: 6px; color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
 .empty-state { min-height: 300px; flex-direction: column; }.empty-state i { font-size: 34px; }.empty-state h2, .empty-state p { margin: 0; }.store-pagination { margin-top: 20px; text-align: center; }
 .detail-drawer { padding: 0 22px 24px; color: var(--text-color); }.detail-drawer h3 { margin: 22px 0 8px; font-size: 14px; }.detail-drawer p, .detail-drawer pre { margin: 0; color: var(--text-color-secondary); line-height: 1.7; white-space: pre-wrap; word-break: break-word; }.detail-drawer a { word-break: break-all; }
-@media (max-width: 1180px) { .plugin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.store-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 680px) { .store-shell { padding: 14px; }.store-header { align-items: flex-start; }.plugin-grid { grid-template-columns: 1fr; }.plugin-card { min-height: 224px; } }
+@media (max-width: 1180px) { .store-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) { .store-shell { padding: 14px; }.store-header { align-items: flex-start; }.plugin-grid { grid-template-columns: 1fr; } }
 .store-filters { display: contents; }.filter-toggle { display: none; }
 .filter-count { display: inline-block; min-width: 18px; height: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; color: #fff; background: var(--primary-color); font-size: 11px; line-height: 18px; text-align: center; box-sizing: border-box; }
 @media (max-width: 767px) {

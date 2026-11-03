@@ -3,10 +3,12 @@
     <div class="zx-section-heading">
       <div>
         <h2>长期记忆</h2>
-        <p>开启后，AI 会在后台把群聊和私聊整理成记忆片段，之后聊到相关内容时召回；群记忆整群共享，私聊记忆按用户区分。自动整理的记忆每天淡忘一点，被召回时加深，淡忘到很低时归档；归档的记忆不再召回，可以恢复。开关与整理间隔在“聊天设置”的“长期记忆”分组。</p>
+        <p>开启后，AI 会在后台把群聊和私聊整理成记忆片段，之后聊到相关内容时召回；群记忆整群共享，私聊记忆按用户区分。自动整理的记忆每天淡忘一点，被召回时加深，淡忘到很低时归档；归档的记忆不再召回，可以恢复。整理间隔、召回条数等在“聊天设置”的“长期记忆”分组。</p>
       </div>
       <div class="heading-actions">
-        <el-tag size="small" :type="status.mode === 'off' ? 'info' : 'success'">{{ modeNames[status.mode] || status.mode }}</el-tag>
+        <el-radio-group :value="status.mode" size="small" :disabled="switching" aria-label="长期记忆模式" @input="changeMode">
+          <el-radio-button v-for="(label, value) in modeNames" :key="value" :label="value">{{ label }}</el-radio-button>
+        </el-radio-group>
         <span class="embedding-switch">
           <span class="muted">向量召回</span>
           <el-switch :value="status.embedding_enabled" :disabled="switching" @change="toggleEmbedding" />
@@ -110,7 +112,7 @@ export default {
       query: "", source: "", archived: false,
       recallQuery: "", recalled: null, recalling: false,
       form: { visible: false, saving: false, id: null, kind: "group", target: "", content: "", facts: [], topics: [], importance: 0.6, archived: false },
-      modeNames: { off: "未开启", inject: "自动召回", tool: "按需召回" },
+      modeNames: { off: "关闭", inject: "自动召回", tool: "按需召回" },
       sourceNames: { auto: "自动整理", tool: "AI 记下", webui: "手动添加" },
     }
   },
@@ -203,6 +205,13 @@ export default {
       try {
         this.recalled = (await this.request("post", "/memory/recall", { ...this.scopeParams(this.current), query: this.recallQuery.trim() })).data
       } catch (error) { this.fail(error, "召回失败。") } finally { this.recalling = false }
+    },
+    async changeMode(mode) {
+      this.switching = true
+      try {
+        this.$message.success((await this.request("put", "/memory/mode", { mode })).info)
+        await this.loadStatus()
+      } catch (error) { this.fail(error, "切换失败。") } finally { this.switching = false }
     },
     async toggleEmbedding(enabled) {
       this.switching = true
