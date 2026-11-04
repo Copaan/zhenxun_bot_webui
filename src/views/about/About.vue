@@ -78,6 +78,10 @@
             <span>{{ jobStateLabel(jobFor(component.key)) }}</span>
             <span>{{ jobSourceLabel(jobFor(component.key)) }}</span>
           </div>
+          <div v-if="isPendingUpdate(component.key)" class="restart-required-note">
+            <i class="el-icon-warning-outline"></i>
+            <span>{{ jobFor(component.key).restart_available ? "更新已就绪，需要重启真寻后才能生效" : "更新已就绪，需要手动重启真寻后才能生效" }}</span>
+          </div>
           <div v-if="component.key === 'webui' && !component.manifestAvailable" class="compatibility-note">
             {{ officialSourceUnavailable ? "无法读取远端版本清单，暂不允许更新 WebUI。" : "远端尚无版本清单，只显示 dist 提交摘要，暂不允许更新 WebUI。" }}
           </div>
@@ -248,13 +252,35 @@ function updateErrorText(error) {
   return detail ? `${label}（${detail}）` : label
 }
 
+const UPDATE_OPTIONS_KEY = "zhenxun_update_options"
+
+/**
+ * 读取上次选择的更新渠道、方式和来源
+ * @returns {{channel: string, method: string, source: string}}
+ */
+function loadUpdateOptions() {
+  const defaults = { channel: "main", method: "git", source: "aliyun" }
+  try {
+    const saved = JSON.parse(localStorage.getItem(UPDATE_OPTIONS_KEY) || "{}")
+    const options = {
+      channel: ["main", "release"].includes(saved.channel) ? saved.channel : defaults.channel,
+      source: ["github", "aliyun"].includes(saved.source) ? saved.source : defaults.source,
+      method: ["git", "download"].includes(saved.method) ? saved.method : defaults.method,
+    }
+    if (options.source === "aliyun") options.method = "git"
+    return options
+  } catch (error) {
+    return defaults
+  }
+}
+
 export default {
   name: "AboutPage",
   components: { BackupPanel },
   data() {
     return {
       logoUrl, checking: false, updateInfo: null, updateError: "",
-      options: { channel: "main", method: "git", source: "aliyun", force: false },
+      options: { ...loadUpdateOptions(), force: false },
       jobs: {}, pollTimer: null, pollSequence: 0, restarting: false, applyingJobId: "", cancellingJobId: "", destroyed: false, statusStale: false, unsubscribeNetwork: null,
       restartStatus: { launcher_managed: false, pending_restart: false, pending_count: 0, pending_reasons: [], pending_items: [] },
     }
@@ -275,6 +301,14 @@ export default {
     pendingReasonText() {
       const labels = [...new Set((this.restartStatus.pending_reasons || []).map(restartReasonLabel))]
       return labels.join("、") || "启动期配置已经保存"
+    },
+  },
+  watch: {
+    options: {
+      deep: true,
+      handler({ channel, method, source }) {
+        try { localStorage.setItem(UPDATE_OPTIONS_KEY, JSON.stringify({ channel, method, source })) } catch (error) { /* 浏览器禁用存储时不记忆选择 */ }
+      },
     },
   },
   mounted() {
@@ -340,11 +374,13 @@ export default {
     },
     jobFor(component) { return this.jobs[component] },
     versionTagType(component) {
+      if (this.isPendingUpdate(component.key)) return "warning"
       if (component.blocked) return "danger"
       if (component.updateAvailable) return "warning"
       return component.comparable ? "success" : "info"
     },
     versionTagLabel(component) {
+      if (this.isPendingUpdate(component.key)) return "待重启"
       if (component.blocked) return "已屏蔽"
       if (component.updateAvailable) return "可更新"
       return component.comparable ? "已是最新" : "版本未知"
@@ -432,6 +468,24 @@ export default {
       } catch (error) { this.$message.error(error.response?.data?.detail || error.message || "取消更新失败。") }
       finally { this.cancellingJobId = "" }
     },
+    /**
+     * 更新包就绪后提示重启，launcher 托管时可直接重启应用
+     * @param {object} job 等待重启应用的更新任务
+     */
+    async promptRestart(job) {
+      const name = COMPONENT_META[job.component]?.name || "组件"
+      if (!job.restart_available) {
+        this.$alert(`${name}更新已下载并校验，需要手动重启真寻后才能生效。`, "需要重启", { type: "warning", confirmButtonText: "知道了" }).catch(() => {})
+        return
+      }
+      try { await this.$confirm(`${name}更新已下载并校验，需要重启真寻后才能生效。是否立即重启应用？`, "需要重启", { type: "warning", confirmButtonText: "立即重启", cancelButtonText: "稍后" }) } catch (error) { return }
+      if (this.jobFor(job.component)?.job_id === job.job_id && this.isPendingUpdate(job.component)) this.applyUpdate(job)
+    },
+    /** WebUI 文件更新后提示刷新页面 */
+    async promptRefresh() {
+      try { await this.$confirm("WebUI 已更新，刷新页面后生效。是否立即刷新？", "需要刷新", { type: "success", confirmButtonText: "立即刷新", cancelButtonText: "稍后" }) } catch (error) { return }
+      window.location.reload()
+    },
     pollJob(jobId, immediate = false, retryCount = 0) {
       if (this.destroyed || document.hidden || isBusinessNetworkFrozen()) return
       if (this.pollTimer) window.clearTimeout(this.pollTimer)
@@ -441,9 +495,17 @@ export default {
         try {
           const response = await this.getRequest(`${this.$root.prefix}/system/update/jobs/${jobId}`, {}, { suppressErrorToast: true })
           if (!response || !response.suc) throw new Error(response && response.info)
-          const job = response.data; this.$set(this.jobs, job.component, job)
+          const job = response.data
+          const previousState = this.jobs[job.component]?.state
+          this.$set(this.jobs, job.component, job)
           if (!["completed", "failed", "pending_restart", "cancelled"].includes(job.state)) this.pollJob(jobId, false, 0)
-          else if (job.state === "completed") { sessionStorage.removeItem("zhenxun_update_job_id"); this.$message.success(job.apply_mode === "hot_reloaded" ? "资源已热更新，无需重启。" : `${COMPONENT_META[job.component].name}更新完成。`); await this.checkUpdates(true); await this.loadRestartStatus() }
+          else if (job.state === "pending_restart") { await this.loadRestartStatus(); if (previousState && previousState !== "pending_restart") this.promptRestart(job) }
+          else if (job.state === "completed") {
+            sessionStorage.removeItem("zhenxun_update_job_id")
+            if (job.apply_mode === "webui_refresh") this.promptRefresh()
+            else this.$message.success(job.apply_mode === "hot_reloaded" ? "资源已热更新，无需重启。" : `${COMPONENT_META[job.component].name}更新完成。`)
+            await this.checkUpdates(true); await this.loadRestartStatus()
+          }
           else if (job.state === "failed") { sessionStorage.removeItem("zhenxun_update_job_id"); this.$message.error(this.jobStateLabel(job)) }
         } catch (error) {
           if (this.destroyed || sequence !== this.pollSequence || document.hidden || isBusinessNetworkFrozen()) return
@@ -460,6 +522,7 @@ export default {
 .about-page { min-height: 100%; padding: 4px 8px 34px; color: var(--text-color); }
 .about-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .about-actions { display: flex; align-items: center; gap: 10px; }.restart-notice { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 14px; padding: 12px 14px; border-left: 3px solid #c59027; background: rgba(197,144,39,.09); }.restart-notice strong, .restart-notice p { margin: 0; }.restart-notice p, .restart-notice > span { margin-top: 4px; color: var(--text-color-secondary); font-size: 12px; }
+.restart-required-note { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 7px 10px; border-radius: 4px; background: rgba(230,162,60,.12); color: #b7791f; font-size: 12px; }
 .pending-items { display: grid; gap: 4px; margin: 9px 0 0; padding: 0; list-style: none; }.pending-items li { display: flex; min-width: 0; align-items: baseline; gap: 8px; font-size: 12px; }.pending-items code { overflow-wrap: anywhere; color: var(--text-color-secondary); }
 .about-heading { padding-bottom: 24px; border-bottom: 1px solid var(--border-color-light); }
 .brand-block { display: flex; align-items: center; gap: 22px; min-width: 0; }.brand-block img { width: 190px; height: auto; }

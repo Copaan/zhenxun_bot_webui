@@ -811,7 +811,7 @@ export default {
     },
     operationLabel(operation) {
       const labels = {
-        "warmup:renderer": "浏览器与渲染准备",
+        "warmup:renderer": "渲染准备",
         "warmup:resources": "资源完整性检查",
         "warmup:runtime_index": "运行索引准备",
         "warmup:ai": "AI 服务准备",

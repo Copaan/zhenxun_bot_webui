@@ -10,13 +10,20 @@
           <span><i class="legend chat"></i>消息<i class="legend call"></i>调用</span>
         </div>
         <div v-if="trendRows.length" class="trend-bars">
-          <div v-for="row in trendRows" :key="row.date" class="trend-day">
-            <div class="bar-stack">
-              <span class="bar chat" :style="{ height: `${row.chatHeight}%` }"></span>
-              <span class="bar call" :style="{ height: `${row.callHeight}%` }"></span>
+          <el-tooltip v-for="row in trendRows" :key="row.date" placement="top" :open-delay="80" :enterable="false">
+            <div slot="content" class="trend-tip">
+              <strong>{{ row.date }}</strong>
+              <span><i class="legend chat"></i>消息 {{ row.chat }}</span>
+              <span><i class="legend call"></i>调用 {{ row.call }}</span>
             </div>
-            <small>{{ row.label }}</small>
-          </div>
+            <div class="trend-day">
+              <div class="bar-stack">
+                <span class="bar chat" :style="{ height: `${row.chatHeight}%` }"></span>
+                <span class="bar call" :style="{ height: `${row.callHeight}%` }"></span>
+              </div>
+              <small>{{ row.label }}</small>
+            </div>
+          </el-tooltip>
         </div>
         <div v-else class="feedback">近30天暂无统计记录</div>
       </section>
@@ -73,6 +80,8 @@ export default {
       return dates.map((date, index) => ({
         date,
         label: index % 5 === 0 || index === dates.length - 1 ? date : "",
+        chat: chat[index] || 0,
+        call: call[index] || 0,
         chatHeight: Math.max(2, Math.round(((chat[index] || 0) / maximum) * 100)),
         callHeight: Math.max(2, Math.round(((call[index] || 0) / maximum) * 100)),
       }))
@@ -122,6 +131,9 @@ export default {
 .trend-day { display: flex; height: 100%; min-width: 0; flex-direction: column; justify-content: flex-end; text-align: center; }
 .bar-stack { display: flex; height: 150px; align-items: flex-end; justify-content: center; gap: 2px; border-bottom: 1px solid var(--border-color); }
 .bar { display: block; width: 35%; min-height: 2px; }
+.trend-day:hover .bar-stack { background: var(--el-fill-color-light); }
+.trend-tip { display: flex; flex-direction: column; gap: 4px; line-height: 1.4; }
+.trend-tip .legend { margin: 0 6px 0 0; }
 .trend-day small { height: 20px; overflow: visible; white-space: nowrap; margin-top: 6px; color: var(--text-color-secondary); font-size: 10px; }
 .ranking-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 .ranking-list { display: flex; flex-direction: column; gap: 11px; }

@@ -82,10 +82,9 @@
 
     <!-- 图表区域 -->
     <div
-      class="metric-panel chart-area p-4 flex-1 min-h-[100px]"
+      class="metric-panel chart-area p-4"
       ref="chartArea"
       :style="{
-        height: compact ? 'auto' : computedChartHeight + 'px',
         backgroundColor: 'var(--bg-color-secondary)',
         border: '1px solid var(--border-color-light)',
         background:
@@ -94,10 +93,8 @@
     >
       <div
         ref="chart"
-        class="w-full h-full"
-        :style="{
-          height: (compact ? 240 : computedChartHeight - 20) + 'px',
-        }"
+        class="chart-canvas w-full"
+        :style="{ height: compact ? '240px' : '100%' }"
       ></div>
     </div>
   </div>
@@ -148,7 +145,7 @@ export default {
       strokeWidth: 8,
       fontSize: 14,
       areaHeight: 300,
-      chartBorderHeight: 0,
+      chartObserver: null,
       compact: window.innerWidth < 768,
       botInfo: null,
       chCnt: { num: 0, day: 0, week: 0, month: 0, year: 0 },
@@ -183,6 +180,11 @@ export default {
     this.countInterval = setInterval(() => this.loadCounts(statsBotId, true), 30000)
     this.handleResize()
     this.renderChart()
+    if (window.ResizeObserver && this.$refs.chartArea) {
+      const resizeChart = debounce(() => this.chart?.resize(), 100)
+      this.chartObserver = new ResizeObserver(resizeChart)
+      this.chartObserver.observe(this.$refs.chartArea)
+    }
     this.sidebarResizeHandler = debounce(this.handleResize, 200)
     this.themeChangeHandler = debounce(this.renderChart, 200)
     EventBus.$on("sidebar-aside", this.sidebarResizeHandler)
@@ -198,17 +200,13 @@ export default {
         { title: "功能调用", className: "function-area", counts: this.callCnt },
       ]
     },
-    computedChartHeight() {
-      if (!this.chartBorderHeight) {
-        this.handleResize()
-      }
-      return this.chartBorderHeight
-    },
   },
   beforeDestroy() {
     this.destroyed = true
     clearInterval(this.countInterval)
     window.removeEventListener("resize", this.handleResize)
+    this.chartObserver?.disconnect()
+    this.chartObserver = null
     if (this.sidebarResizeHandler) {
       EventBus.$off("sidebar-aside", this.sidebarResizeHandler)
       this.sidebarResizeHandler.cancel()
@@ -277,12 +275,7 @@ export default {
       this.updateAreaHeight()
 
       this.$nextTick(() => {
-        if (this.destroyed || !this.$refs.midInfo || !this.chart) return
-        this.chartBorderHeight =
-          this.$refs.midInfo.offsetHeight - this.areaHeight * 2 - 100
-        this.chartBorderHeight = Math.max(this.chartBorderHeight, 180)
-
-        this.chart.resize()
+        if (!this.destroyed && this.chart) this.chart.resize()
       })
     },
     percentage(counts, key) {
@@ -395,9 +388,27 @@ export default {
 }
 
 .message-area,
-.function-area,
-.chart-area {
+.function-area {
   transition: height 0.3s ease, font-size 0.3s ease;
+}
+
+.chart-area {
+  flex: 1 1 0;
+  min-height: 180px;
+}
+
+@media (max-width: 1024px) {
+  .chart-area {
+    flex: none;
+    height: 320px;
+  }
+}
+
+@media (max-width: 767px) {
+  .chart-area {
+    height: auto;
+    min-height: 0;
+  }
 }
 
 .title-box {

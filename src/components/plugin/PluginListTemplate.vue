@@ -22,22 +22,13 @@
             <span class="version">v{{ data.version }}</span>
           </div>
           <div class="plugin-switch" @click.stop>
-            <el-select
-              :value="runState(data)"
-              size="mini"
+            <el-switch
+              :value="runState(data) === 'on'"
               :disabled="!data.allow_switch || data.switching"
-              aria-label="插件状态"
-              @change="onStateChange(data, $event)"
-            >
-              <el-option label="开启" value="on" />
-              <el-option label="关闭" value="off" title="插件保持加载，超级群与超级用户仍可使用" />
-              <el-option
-                label="停用"
-                value="unloaded"
-                :disabled="data.is_builtin"
-                :title="data.is_builtin ? '内置插件不可停用' : '关闭并卸载插件代码以释放资源，超级群与超级用户也无法使用；重新开启时自动加载'"
-              />
-            </el-select>
+              :title="data.parked ? '插件已停用，开启时自动加载' : '关闭后插件保持加载，超级群与超级用户仍可使用'"
+              aria-label="插件开关"
+              @change="onStateChange(data, $event ? 'on' : 'off')"
+            />
           </div>
         </div>
 
@@ -72,6 +63,14 @@
             :disabled="!data.uninstall_supported"
             @click="uninstallPlugin(data)"
           >卸载</el-button>
+          <el-button
+            type="text"
+            size="mini"
+            :icon="data.parked ? 'el-icon-video-play' : 'el-icon-video-pause'"
+            :title="parkTitle(data)"
+            :disabled="!data.allow_switch || data.is_builtin || data.switching"
+            @click="togglePark(data)"
+          >{{ data.parked ? "恢复加载" : "停用" }}</el-button>
         </div>
       </article>
     </div>
@@ -201,6 +200,18 @@ export default {
         this.$set(data, "switching", false)
         await this.getPluginList()
       }
+    },
+    parkTitle(data) {
+      if (data.is_builtin) return "内置插件不可停用"
+      if (data.parked) return "重新加载插件代码，加载后保持关闭"
+      return "关闭并卸载插件代码以释放资源，超级群与超级用户也无法使用；重新开启时自动加载"
+    },
+    async togglePark(data) {
+      if (data.parked) return this.onStateChange(data, "off")
+      try {
+        await this.$confirm(`停用会关闭并卸载插件 "${data.plugin_name}" 的代码，超级群与超级用户也无法使用；重新开启时自动加载。是否继续？`, "停用插件", { type: "warning", confirmButtonText: "停用" })
+      } catch (error) { return }
+      return this.onStateChange(data, "unloaded")
     },
     openSetting(data) {
       this.pluginModule = data.module
@@ -404,8 +415,10 @@ export default {
   cursor: default;
 }
 
-.plugin-switch .el-select {
-  width: 76px;
+.plugin-switch {
+  display: flex;
+  align-items: center;
+  height: 22px;
 }
 
 .card-module {
