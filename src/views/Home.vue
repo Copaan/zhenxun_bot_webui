@@ -19,7 +19,7 @@
       >
         <div class="flex flex-col h-full overflow-hidden">
           <!-- 顶部内容 -->
-          <div class="flex-1 overflow-y-auto">
+          <div class="sidebar-scroll flex-1 overflow-y-auto">
             <div
               class="brand-area flex"
               :class="{ 'is-collapsed': isCollapsed }"
@@ -1591,7 +1591,7 @@ export default {
 
 /* 折叠菜单样式 */
 ::v-deep .el-menu--collapse {
-  width: 73px;
+  width: 100%;
 }
 ::v-deep .el-menu--collapse .el-menu-item {
   display: flex;
@@ -1600,6 +1600,16 @@ export default {
 }
 ::v-deep .el-menu--collapse .el-menu-item .svg-icon {
   margin-right: 0;
+}
+::v-deep .el-menu--collapse .el-menu-item > div {
+  justify-content: center;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent !important;
 }
 
 @media (max-width: 767px) {
