@@ -77,6 +77,9 @@
             <el-progress :percentage="jobFor(component.key).progress || 0" :status="jobProgressStatus(jobFor(component.key))" />
             <span>{{ jobStateLabel(jobFor(component.key)) }}</span>
             <span>{{ jobSourceLabel(jobFor(component.key)) }}</span>
+            <span v-if="jobFor(component.key).startup_resource">启动自动升级 · 备份后覆盖包内同名文件，保留额外文件</span>
+            <span v-if="jobFor(component.key).next_retry_at">下次重试：{{ new Date(jobFor(component.key).next_retry_at).toLocaleString() }}</span>
+            <span v-if="jobFor(component.key).backup_path" style="overflow-wrap:anywhere">恢复备份：{{ jobFor(component.key).backup_path }}</span>
           </div>
           <div v-if="isPendingUpdate(component.key)" class="restart-required-note">
             <i class="el-icon-warning-outline"></i>
@@ -369,6 +372,16 @@ export default {
         this.statusStale = false
         if (response.data.errors && response.data.errors.length) this.updateError = "官方版本服务暂时不可用，请稍后重试。"
         if (response.data.pending_job && response.data.pending_job.job_id) this.pollJob(response.data.pending_job.job_id)
+        const automatic = response.data.resource_startup_job
+        const currentResource = this.jobs.resource
+        const activeJobId = sessionStorage.getItem("zhenxun_update_job_id")
+        if (automatic && !this.destroyed && (!currentResource || !currentResource.created_at || currentResource.created_at <= automatic.created_at)) {
+          this.$set(this.jobs, "resource", automatic)
+          if (!response.data.pending_job && (!activeJobId || activeJobId === automatic.job_id || (currentResource?.startup_resource && activeJobId === currentResource.job_id)) && (automatic.next_retry_at || !["completed", "failed", "cancelled", "recovery_required"].includes(automatic.state) || (automatic.state === "completed" && !automatic.runtime_ready))) {
+            sessionStorage.setItem("zhenxun_update_job_id", automatic.job_id)
+            this.pollJob(automatic.job_id)
+          }
+        }
       } catch (error) { this.updateError = error.response?.data?.detail || error.message || "版本信息获取失败。" }
       finally { this.checking = false }
     },
@@ -386,11 +399,15 @@ export default {
       return component.comparable ? "已是最新" : "版本未知"
     },
     isPendingUpdate(component) { return this.jobFor(component)?.state === "pending_restart" },
-    isUpdating(component) { const job = this.jobFor(component); return Boolean(job && !["completed", "failed", "cancelled"].includes(job.state)) },
+    isUpdating(component) { const job = this.jobFor(component); return Boolean(job && !["completed", "failed", "cancelled", "recovery_required"].includes(job.state)) },
     updateButtonLabel(component) { if (!component.updateAvailable) return "重新安装"; return component.key === "resource" ? "更新资源" : component.key === "webui" ? "更新并刷新" : "下载更新" },
-    canUpdate(component) { if (component.blocked || this.isUpdating(component.key) || component.latestVersion === "未知") return false; return component.key !== "webui" || (component.manifestAvailable && component.compatible) },
-    jobProgressStatus(job) { if (job.state === "failed") return "exception"; if (job.state === "completed") return "success"; return undefined },
+    canUpdate(component) { if (this.jobFor(component.key)?.state === "recovery_required" || component.blocked || this.isUpdating(component.key) || component.latestVersion === "未知") return false; return component.key !== "webui" || (component.manifestAvailable && component.compatible) },
+    jobProgressStatus(job) { if (["failed", "recovery_required"].includes(job.state)) return "exception"; if (job.state === "completed") return "success"; return undefined },
     jobStateLabel(job) {
+      if (job.retry_resolved) return "后续操作已使资源就绪，本次失败记录保留"
+      if (job.state === "recovery_required") return "资源恢复结果待核验，已暂停自动覆盖，请保留备份并处理"
+      if (job.startup_resource && job.state === "completed" && !job.runtime_ready) return "资源已应用，等待渲染组件恢复"
+      if (job.startup_resource && job.state === "failed" && job.next_retry_at) return "本轮更新失败，等待自动重试：" + updateErrorText(job.error)
       const labels = { queued: "等待执行", preparing: "正在下载并校验", staged: "更新包已就绪", pending_restart: job.fallback_reason ? `${FALLBACK_REASON_LABELS[job.fallback_reason] || "资源热更新未完成"}，等待重启应用` : job.restart_available ? "已下载，等待确认重启应用" : "已下载，等待手动重启应用", restart_requested: "正在重启并应用", applying: job.component === "resource" ? "正在热更新资源" : "正在应用更新", verifying: "正在验证新版本", completed: job.apply_mode === "hot_reloaded" ? "资源已热更新" : "更新完成", cancelled: "已取消，暂存的更新文件已删除", failed: `更新失败：${updateErrorText(job.error)}` }
       return labels[job.state] || job.state
     },
@@ -496,9 +513,16 @@ export default {
           const response = await this.getRequest(`${this.$root.prefix}/system/update/jobs/${jobId}`, {}, { suppressErrorToast: true })
           if (!response || !response.suc) throw new Error(response && response.info)
           const job = response.data
+          if (this.destroyed || sequence !== this.pollSequence || document.hidden || isBusinessNetworkFrozen()) return
+          if (job.retry_job_id) {
+            sessionStorage.setItem("zhenxun_update_job_id", job.retry_job_id)
+            this.pollJob(job.retry_job_id)
+            return
+          }
           const previousState = this.jobs[job.component]?.state
           this.$set(this.jobs, job.component, job)
-          if (!["completed", "failed", "pending_restart", "cancelled"].includes(job.state)) this.pollJob(jobId, false, 0)
+          if (job.startup_resource && job.state !== "recovery_required" && (job.next_retry_at || (job.state === "completed" && !job.runtime_ready))) this.pollJob(jobId, false, 0)
+          else if (!["completed", "failed", "pending_restart", "cancelled", "recovery_required"].includes(job.state)) this.pollJob(jobId, false, 0)
           else if (job.state === "pending_restart") { await this.loadRestartStatus(); if (previousState && previousState !== "pending_restart") this.promptRestart(job) }
           else if (job.state === "completed") {
             sessionStorage.removeItem("zhenxun_update_job_id")

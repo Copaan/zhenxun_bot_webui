@@ -26,7 +26,9 @@ const manifest = {
   source: "official-dist",
 }
 
-const dist = path.join(root, "dist")
+const dist = process.env.WEBUI_BUILD_OUTPUT
+  ? path.resolve(process.env.WEBUI_BUILD_OUTPUT)
+  : path.join(root, "dist")
 fs.mkdirSync(dist, { recursive: true })
 fs.writeFileSync(
   path.join(dist, "version.json"),
