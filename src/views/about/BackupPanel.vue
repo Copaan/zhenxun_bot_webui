@@ -14,11 +14,17 @@
     <el-progress v-if="uploading !== null" class="backup-upload" :percentage="uploading" />
     <div v-if="restore.state !== 'idle'" :class="['backup-restore', `is-${restoreView.type}`]" role="status">
       <div>
-        <strong><i v-if="restoring" class="el-icon-loading"></i> {{ restoreView.title }}</strong>
+        <strong><i v-if="restoreWorking" class="el-icon-loading"></i> {{ restoreView.title }}</strong>
         <p v-if="restoreView.detail">{{ restoreView.detail }}</p>
         <p v-for="note in restoreNotes" :key="note.text" :class="`is-${note.type}`">{{ note.text }}</p>
       </div>
-      <el-button v-if="!restoring" size="mini" @click="dismiss">知道了</el-button>
+      <div v-if="restore.state === 'preparing' && restore.preparation" class="preparation-status">
+        <p v-for="note in (restore.preparation.checks || {}).deferred || []" :key="note">切换时核验：{{ note }}</p>
+        <pre v-if="restore.preparation.confirmation_required">{{ preparationChanges }}</pre>
+        <el-button v-if="restore.preparation.retryable" type="primary" size="mini" :loading="retrying" :disabled="retrying || restore.cancel_requested" @click="retryPreparation">{{ restore.preparation.confirmation_required ? '确认变更并继续' : '重试原任务' }}</el-button>
+      </div>
+      <el-button v-if="restoring && restore.state !== 'committing'" size="mini" :loading="canceling" :disabled="canceling || (restore.cancel_requested && restore.preparation?.phase !== 'cleanup_pending')" @click="cancelRestore">{{ restore.preparation?.phase === 'cleanup_pending' ? '重试候选清理' : '在安全点取消' }}</el-button>
+      <el-button v-else-if="!restoring" size="mini" @click="dismiss">知道了</el-button>
     </div>
     <div v-if="running" class="backup-progress" role="status">
       <span>{{ status.stage === "files" ? "正在打包文件" : "正在导出数据库" }}</span>
@@ -90,6 +96,7 @@
 </template>
 
 <script>
+import { isAuthenticationExpired } from "@/utils/auth-session"
 import axios from "axios"
 import { getBaseUrl } from "@/utils/api"
 import { apiErrorDetail } from "@/utils/api-error"
@@ -100,7 +107,7 @@ import { formatBytes } from "@/utils/utils"
 import BackupRestoreDialog from "./BackupRestoreDialog.vue"
 import BackupSwitchDialog from "./BackupSwitchDialog.vue"
 
-const RESTORING = ["pending", "importing", "failed_import", "rollback_import"]
+const RESTORING = ["preparing", "pending", "snapshot_ready", "applying", "awaiting_orm", "importing", "verifying", "committing", "failed_import", "rollback_import", "rollback_target", "rollback_verifying"]
 const DEPENDENCY_KINDS = {
   nonebot_plugin: "NoneBot 商店插件",
   manual: "手动依赖",
@@ -134,6 +141,7 @@ export default {
       uploading: null,
       restore: { state: "idle" },
       restoreTimer: null,
+      canceling: false, retrying: false, restartHandoff: "",
       restoreItem: null,
       switching: false,
       categoryLabels: { configuration: "配置", data: "插件数据", plugins: "插件代码", resources: "资源文件" },
@@ -159,16 +167,25 @@ export default {
       const report = this.restore.dependencies || {}
       const layer = report.layer || {}
       const notes = []
+      if (this.restore.historical_result) notes.push({ type: "warning", text: "这是历史记录，不代表已通过当前版本的迁移验证。" })
+      if (this.restore.cancel_requested) notes.push({ type: "info", text: "已收到取消请求，将在安全点完成处理；不会强制中断写入。" })
+      if (this.restore.cleanup_error) notes.push({ type: "warning", text: "已确认的结果保持不变，临时材料待清理：" + this.restore.cleanup_error })
+      const rollbackLabels = { target_database: "目标数据库", original_instance: "原实例启动", dependencies: "依赖层", files: "文件", orm: "插件 ORM" }
+      const rollbackStates = { confirmed: "已确认", pending: "等待核验", unconfirmed: "结果未确认", not_applicable: "无需回退" }
+      Object.entries(this.restore.rollback_components || {}).forEach(([name, state]) => {
+        notes.push({ type: state === "unconfirmed" ? "warning" : "info", text: (rollbackLabels[name] || name) + "：" + (rollbackStates[state] || state) })
+      })
+      if (this.restore.report?.preserved_tables?.length) notes.push({ type: "info", text: "已保留目标独有表：" + this.restore.report.preserved_tables.join("、") })
       if (layer.state === "failed") {
         notes.push({ type: "error", text: `插件依赖层安装失败，商店插件与恢复的依赖都未生效：${reasonText(layer.error_code)}${layer.detail ? `（${layer.detail}）` : ""}。请在插件商店查看依赖事务后处理。` })
       } else if (layer.state === "pending") {
-        notes.push({ type: "info", text: "插件依赖正在安装或等待启动验证。" })
+        notes.push({ type: "info", text: this.restore.state === "preparing" ? "依赖候选尚未生效，原实例仍使用当前依赖；准备通过后自动切换。" : "插件依赖正在应用或等待启动验证。" })
       } else if (layer.warnings?.length) {
         notes.push({ type: "warning", text: `插件依赖已安装，但有以下问题未解决：${layer.warnings.join("；")}` })
       }
       const nearby = Object.entries(report.nearby || {})
       if (nearby.length) {
-        notes.push({ type: "info", text: `以下依赖备份时的版本不可用，已改装其他版本：${nearby.map(([name, [from, to]]) => `${name} ${from} → ${to}`).join("、")}` })
+        notes.push({ type: "info", text: `以下备份版本不可用，本任务选择的替代版本：${nearby.map(([name, [from, to]]) => `${name} ${from} → ${to}`).join("、")}` })
       }
       const implied = Object.entries(report.implied || {})
       if (implied.length) {
@@ -202,13 +219,34 @@ export default {
       if (!restore.error_code || !reasonLabels[restore.error_code]) return restore.error
       return `依赖无法安装：${reasonLabels[restore.error_code]}${restore.error_detail ? `（${restore.error_detail}）` : ""}`
     },
+    restoreWorking() {
+      if (!this.restoring || ["awaiting_orm", "recovery_required"].includes(this.restore.state)) return false
+      return this.restore.state !== "preparing" || !["blocked", "interrupted", "waiting_confirmation", "waiting_credentials", "cleanup_pending"].includes(this.restore.preparation?.phase)
+    },
+    preparationChanges() {
+      const changes = this.restore.preparation?.changes || {}
+      return JSON.stringify({ 版本调整: changes.nearby || {}, 跳过插件: changes.skipped_plugins || [], 其他平台声明: changes.platform_only || {}, 影响文件: changes.files || [], 目标结构指纹: changes.structure }, null, 2)
+    },
     restoreView() {
       const restore = this.restore
       const action = restore.kind === "switch" ? "切换数据库" : "恢复"
       const progress = restore.progress ? `正在导入 ${restore.progress.table}（${restore.progress.rows} 行）` : ""
       const incomplete = this.restoreNotes.some(note => note.type !== "info")
+      const preparation = restore.preparation || {}
+      const phases = { waiting_credentials: "等待补充备份包密码", orm_check: "核对 ORM 状态（只读）", checking: "正在只读检查", dependencies: "正在解析依赖", building: "正在后台构建候选", rechecking: "正在切换前复核", switching: "即将短暂停机切换", waiting_confirmation: "影响摘要发生变化，请确认", blocked: "准备未完成，原实例未变更", interrupted: "准备已暂停，原实例未变更", cleanup_pending: "原实例未变更，候选清理待重试" }
       return {
-        pending: { type: "info", title: `正在准备${action}`, detail: "正在安装依赖并写入文件" },
+        preparing: { type: preparation.error || preparation.confirmation_required ? "warning" : "info", title: phases[preparation.phase] || "正在在线准备", detail: preparation.error || "原实例继续运行；候选通过后自动短暂停机切换，无需手动重启。" },
+        awaiting_orm: { type: "warning", title: "等待控制台处理插件数据库", detail: restore.error },
+        snapshot_ready: { type: "info", title: "最终快照已保存", detail: "等待旧进程退出后应用" },
+        applying: { type: "info", title: "正在应用依赖和文件" },
+        verifying: { type: "info", title: "数据已导入，正在验证新进程", detail: "验证完成前业务入口保持关闭，回滚材料仍保留" },
+        committing: { type: "info", title: "验证通过，正在结算提交", detail: "中断后继续结算，不会重复导入" },
+        rollback_verifying: { type: "warning", title: "正在验证回滚后的原实例" },
+        rollback_target: { type: "warning", title: "正在回退目标数据库", detail: "仅撤销本任务变化，保留原有表和无关数据" },
+        recovery_required: { type: "error", title: "结果待核验，未报告成功或已回滚", detail: restore.rollback_error || restore.error },
+        done_partial: { type: "warning", title: "已完成经确认的部分恢复", detail: "未恢复内容见明细" },
+        canceled: { type: "info", title: "任务已取消" },
+        pending: { type: "info", title: `正在准备${action}`, detail: "候选已准备，正在停写排空并保存最终快照" },
         importing: { type: "info", title: `正在${action}：导入数据`, detail: progress },
         failed_import: { type: "warning", title: "导入失败，正在回滚", detail: restore.error },
         rollback_import: { type: "warning", title: "导入失败，正在回滚", detail: restore.error },
@@ -219,35 +257,51 @@ export default {
       }[restore.state] || { type: "info", title: restore.state }
     },
   },
-  mounted() { this.refresh() },
-  beforeDestroy() { clearTimeout(this.timer); clearTimeout(this.restoreTimer) },
+  mounted() { this.requestGeneration = 0; window.addEventListener("zhenxun-auth-expired", this.stopReads); document.addEventListener("visibilitychange", this.visibilityChanged); this.refresh() },
+  beforeDestroy() { this.requestGeneration += 1; this.disposed = true; window.removeEventListener("zhenxun-auth-expired", this.stopReads); document.removeEventListener("visibilitychange", this.visibilityChanged); clearTimeout(this.timer); clearTimeout(this.restoreTimer) },
   methods: {
+    stopReads() {
+      this.requestGeneration += 1
+      clearTimeout(this.timer); clearTimeout(this.restoreTimer)
+      this.loading = false
+    },
+    visibilityChanged() {
+      this.requestGeneration += 1
+      clearTimeout(this.timer); clearTimeout(this.restoreTimer)
+      if (!document.hidden && !this.disposed) this.refresh()
+    },
     formatBytes,
     api(path) { return `${this.$root.prefix}/backup${path}` },
     formatTime(value) { return new Date(value).toLocaleString() },
     async refresh() {
+      if (this.disposed || document.hidden || isAuthenticationExpired()) return
+      const generation = ++this.requestGeneration
+      const operationId = sessionStorage.getItem("zhenxun_restore_operation") || undefined
       this.loading = true; this.error = ""
       try {
         const [list, status, restore] = await Promise.all([
           this.getRequest(this.api("/list")),
           this.getRequest(this.api("/export")),
-          this.getRequest(this.api("/restore")),
+          this.getRequest(this.api("/restore"), { operation_id: operationId }),
         ])
+        if (this.disposed || generation !== this.requestGeneration) return
         if (!list?.suc) throw new Error(list?.info)
         this.items = list.data
         this.track(status?.data)
         this.trackRestore(restore?.data)
-      } catch (error) { this.error = error.message || "备份列表读取失败" }
-      finally { this.loading = false }
+      } catch (error) { if (!this.disposed && generation === this.requestGeneration) this.error = error.message || "备份列表读取失败" }
+      finally { if (!this.disposed && generation === this.requestGeneration) this.loading = false }
     },
     track(status) {
+      if (this.disposed || document.hidden || isAuthenticationExpired()) return
+      const generation = this.requestGeneration
       const wasRunning = this.running
       this.status = status || { state: "idle" }
       clearTimeout(this.timer)
       if (this.running) {
         this.timer = setTimeout(async () => {
           const response = await this.getRequest(this.api("/export"), {}, { suppressErrorToast: true }).catch(() => null)
-          this.track(response?.data || this.status)
+          if (!this.disposed && generation === this.requestGeneration && !isAuthenticationExpired()) this.track(response?.data || this.status)
         }, 1000)
       } else if (wasRunning) {
         if (this.status.state === "done") this.$message.success("备份导出完成")
@@ -255,22 +309,71 @@ export default {
       }
     },
     trackRestore(restore) {
+      if (this.disposed || document.hidden || isAuthenticationExpired()) return
       this.restore = restore || { state: "idle" }
+      if (restore?.operation_id) sessionStorage.setItem("zhenxun_restore_operation", restore.operation_id)
       clearTimeout(this.restoreTimer)
       if (!this.restoring) return
+      if (restore.restart_info?.boot_id && (restore.state !== "preparing" || restore.preparation?.phase === "switching") && this.restartHandoff !== restore.operation_id) {
+        this.restartHandoff = restore.operation_id
+        this.handoff(restore.restart_info, "正在自动切换，完成后返回迁移结果。")
+      }
+      const generation = this.requestGeneration
       this.restoreTimer = setTimeout(async () => {
-        const response = await this.getRequest(this.api("/restore"), {}, { suppressErrorToast: true }).catch(() => null)
-        this.trackRestore(response?.data || this.restore)
+        const response = await this.getRequest(this.api("/restore"), { operation_id: this.restore.operation_id || undefined }, { suppressErrorToast: true }).catch(() => null)
+        if (!this.disposed && generation === this.requestGeneration && !isAuthenticationExpired()) this.trackRestore(response?.suc ? response.data : this.restore)
       }, 2000)
+    },
+    async retryPreparation() {
+      if (this.retrying || !this.restore.preparation?.retryable || isAuthenticationExpired()) return
+      const generation = this.requestGeneration
+      this.retrying = true
+      try {
+        let password
+        if (this.restore.preparation.password_required) {
+          try {
+            const answer = await this.$prompt("请输入原备份包密码，继续同一任务", "补充解密密码", { inputType: "password", inputValidator: value => !!value || "请输入密码" })
+            password = answer.value
+          } catch { return }
+        }
+        if (this.disposed || generation !== this.requestGeneration || isAuthenticationExpired()) return
+        const response = await this.postRequest(this.api("/restore"), {
+          operation_id: this.restore.operation_id, retry: true,
+          password,
+          confirmation_digest: this.restore.preparation.confirmation_required ? this.restore.preparation.impact_digest : null,
+        }, { suppressErrorToast: true })
+        if (this.disposed || generation !== this.requestGeneration || isAuthenticationExpired()) return
+        if (!response?.suc) throw new Error(response?.info || "准备未能继续")
+        this.trackRestore(response.data.restore)
+      } catch (error) {
+        if (!this.disposed && generation === this.requestGeneration) this.error = error.message || "重试失败，请查询原任务"
+      } finally { this.retrying = false }
+    },
+    async cancelRestore() {
+      if (this.canceling || !this.restore.operation_id || isAuthenticationExpired()) return
+      const generation = this.requestGeneration
+      this.canceling = true
+      try {
+        const response = await this.deleteRequest(this.api(`/restore?operation_id=${encodeURIComponent(this.restore.operation_id)}`))
+        if (this.disposed || generation !== this.requestGeneration || isAuthenticationExpired()) return
+        if (!response?.suc) throw new Error(response?.info || "取消请求未接受")
+        this.trackRestore({ ...this.restore, cancel_requested: true })
+      } catch (error) {
+        if (!this.disposed && generation === this.requestGeneration) this.error = error.message || "取消请求失败，可重试查询原任务"
+      } finally { this.canceling = false }
     },
     async dismiss() {
       const response = await this.deleteRequest(this.api("/restore"))
-      if (response?.suc) this.restore = { state: "idle" }
+      if (response?.suc) { this.restore = { state: "idle" }; sessionStorage.removeItem("zhenxun_restore_operation") }
       else this.$message.error(response?.info || "清除失败")
     },
     restarted(data, message) {
       this.restoreItem = null; this.switching = false
-      this.restore = data.restore
+      this.trackRestore(data.restore)
+      this.handoff(data, message)
+    },
+    handoff(data, message) {
+      if (!data.boot_id) return
       const username = data.restored_access?.username
       if (username) message += `恢复后请使用备份中的管理员账号 ${username} 登录。`
       startRestartRecovery({
@@ -379,6 +482,8 @@ export default {
 .backup-warning { color: #a8662a; font-size: 13px; margin-top: 8px; }
 @media (max-width: 600px) {
   .backup-section { padding: 22px 0; }
+  .backup-restore { flex-direction: column; align-items: flex-start; }
+  .backup-restore > div { width: 100%; min-width: 0; }
   .backup-item { grid-template-columns: 1fr; }
   .backup-item-actions { grid-row: auto; grid-column: 1; }
 }

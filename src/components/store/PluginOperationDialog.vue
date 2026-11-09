@@ -17,7 +17,7 @@
       </div>
     </div>
     <span v-if="!operation.active" slot="footer">
-      <template v-if="operation.applyMode === 'restart_pending'">
+      <template v-if="canApplyRestart">
         <el-button @click="close">稍后处理</el-button>
         <el-button v-if="operation.restartAvailable" type="primary" :loading="restarting" @click="restart">立即重启</el-button>
       </template>
@@ -34,6 +34,10 @@ export default {
   name: "PluginOperationDialog",
   data() { return { restarting: false } },
   computed: {
+    canApplyRestart() {
+      const status = this.$store.state.restartStatus
+      return this.operation.applyMode === 'restart_pending' && status.known && !status.snapshot.reconciliation_pending
+    },
     operation() {
       return this.$store.state.pluginOperation
     },
@@ -46,7 +50,7 @@ export default {
   },
   methods: {
     async restart() {
-      if (this.restarting) return
+      if (this.restarting || !this.canApplyRestart) return
       this.restarting = true
       try {
         const started = await requestRestartWithRecovery(this, {
@@ -69,7 +73,7 @@ export default {
     close(done) {
       if (this.operation.active) return
       if (this.operation.applyMode === 'restart_pending') dismissPluginOperation()
-      else if (!['restart_requested', 'preparing', 'verifying', 'unknown', 'recovery_required'].includes(this.operation.applyMode)) sessionStorage.removeItem("zhenxun_plugin_operation")
+      else if (!['restart_requested', 'preparing', 'applying', 'verifying', 'attention_required', 'unknown', 'recovery_required'].includes(this.operation.applyMode)) sessionStorage.removeItem("zhenxun_plugin_operation")
       this.$store.commit("CLEAR_PLUGIN_OPERATION")
       if (typeof done === "function") done()
     },

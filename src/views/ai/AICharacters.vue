@@ -20,8 +20,8 @@
         <strong>本地模型</strong>
         <small class="muted">已占用 {{ status.local.disk_mb }} MB<template v-if="status.local.library"> · 角色库 {{ status.local.library.characters }} 个角色，生成于 {{ formatTime(status.local.library.built_at) }}</template></small>
       </div>
-      <el-alert v-if="!status.component.installed" type="warning" :closable="false" :title="`需要先安装组件“${status.component.title}”（${status.component.packages.join(' ')}），安装后重启生效。`">
-        <el-button size="mini" icon="el-icon-download" @click="dependencyVisible = true">安装组件</el-button>
+      <el-alert v-if="!status.component.installed || (status.component.install_operation_ids || []).length" type="warning" :closable="false" :title="componentMessage">
+        <el-button size="mini" icon="el-icon-download" @click="dependencyVisible = true">{{ (status.component.install_operation_ids || []).length ? "查看依赖任务" : "准备安装组件" }}</el-button>
       </el-alert>
       <div class="actions">
         <el-button size="small" type="primary" :disabled="!status.component.installed || running" :loading="running" @click="install(false)">{{ status.local.tiers[form.tier] ? "检查并补全模型" : `下载${tierTitle(form.tier)}模型` }}</el-button>
@@ -91,7 +91,7 @@
       </div>
     </section>
 
-    <ManualDependencyDialog :visible.sync="dependencyVisible" :packages="status.component.packages" />
+    <ManualDependencyDialog :visible.sync="dependencyVisible" :packages="status.component.packages" component-key="characters" :operation-ids="status.component.install_operation_ids || []" @changed="refreshComponents" />
   </div>
 </template>
 
@@ -126,6 +126,14 @@ export default {
     }
   },
   computed: {
+    componentMessage() {
+      const state = this.status.component.install_state
+      if (state === "installed") return "角色识别组件已生效，可查看依赖任务记录。模型下载完成无需再次重启。"
+      if (state === "restart_pending" && this.status.component.install_target_ready === false) return "角色识别部分依赖已加入待重启变更，请继续准备完整组件依赖，再手动重启一次统一生效。"
+      if (state === "restart_pending") return "角色识别组件已加入待重启变更，可继续准备知识库组件，最后手动重启一次统一生效。模型文件在组件生效后下载，下载完成无需再次重启。"
+      const labels = { preparing: "角色识别组件正在准备，请等待任务结果。", verifying: "正在验证角色识别组件生效结果。", attention_required: "角色识别依赖需要处理，请查看任务诊断。", recovery_required: "角色识别依赖需要恢复处理，请查看任务诊断。", unknown: "角色识别依赖状态暂不可确认，请刷新任务状态。" }
+      return labels[state] || "需要先准备角色识别组件依赖；可与知识库组件一起准备，最后手动重启一次生效，再下载模型。"
+    },
     localTier() { return ["lite", "full"].includes(this.form.tier) },
     sourceRows() { return Object.entries(this.status.sources).map(([key, s]) => ({ key, ...s })).filter((row) => this.form.sources[row.key]) },
     task() { return this.status.local.task },
@@ -161,6 +169,9 @@ export default {
     },
     async load() {
       try { this.apply((await this.request("get", "/characters/status")).data, true) } catch (error) { this.fail(error, "角色识别状态加载失败。") }
+    },
+    async refreshComponents() {
+      try { this.apply((await this.request("get", "/characters/status")).data, false) } catch (error) { this.fail(error, "组件状态暂不可确认，请重新加载。") }
     },
     async poll() {
       try { this.apply((await this.request("get", "/characters/status")).data, false) } catch (error) { this.timer = setTimeout(() => this.poll(), POLL_MS * 2) }
@@ -214,7 +225,7 @@ export default {
 </script>
 
 <style scoped>
-.tier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.tier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 12px; margin-bottom: 14px; }
 .tier { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; border: 1px solid transparent; color: var(--text-color); text-align: left; cursor: pointer; }
 .tier.active { border-color: var(--primary-color); }
 .block { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
@@ -227,7 +238,7 @@ export default {
 .file-input { display: none; }
 .result { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
 .preview { width: 180px; max-width: 100%; border-radius: 8px; }
-.result-body { flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 6px; }
+.result-body { flex: 1; min-width: min(260px, 100%); display: flex; flex-direction: column; gap: 6px; }
 .candidate { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .source-table { margin-top: 6px; }
 .note { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--bg-color-hover); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
@@ -235,4 +246,8 @@ export default {
 .mono { font-family: var(--font-mono, monospace); overflow-wrap: anywhere; }
 .muted { color: var(--text-color-secondary, #909399); }
 .danger { color: var(--danger-color); }
+@media (max-width: 600px) {
+  .form ::v-deep .el-form-item__label { float: none; display: block; width: auto !important; text-align: left; padding: 0; }
+  .form ::v-deep .el-form-item__content { margin-left: 0 !important; }
+}
 </style>

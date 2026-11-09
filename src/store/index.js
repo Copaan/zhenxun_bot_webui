@@ -5,10 +5,12 @@ import statusWebSocket from "@/utils/websocket/status-websocket"
 import logWebSocket from "@/utils/websocket/log-websocket"
 import chatWebSocket from "@/utils/websocket/chat-websocket"
 import { handleWebuiRevision } from "@/utils/webui-revision"
+import restartStatus from "./restart-status"
 
 Vue.use(Vuex)
 
 export default new Vuex.Store({
+  modules: { restartStatus },
   plugins: [
     createPersistedState({
       reducer: (state) => {

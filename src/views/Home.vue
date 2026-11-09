@@ -127,7 +127,7 @@
           :style="{ backgroundColor: 'var(--bg-color-secondary)' }"
         >
           <!-- 左侧功能区 -->
-          <div class="header-group">
+          <div class="header-group header-primary">
             <button
               v-if="isMobile"
               type="button"
@@ -177,7 +177,7 @@
           </div>
 
           <!-- 右侧功能区 -->
-          <div class="header-group">
+          <div class="header-group header-actions">
             <el-tooltip :content="startupSummary.detail" placement="bottom" :disabled="startupDrawerVisible">
               <button
                 type="button"
@@ -503,7 +503,7 @@ import PluginOperationDialog from "@/components/store/PluginOperationDialog"
 import logoUrl from "@/assets/image/logo.png"
 import EventBus from "@/utils/event-bus"
 import { clearAuthenticationState } from "@/utils/auth-session"
-import { hasValidAuthToken } from "@/utils/auth-token"
+import { getAuthToken, hasValidAuthToken } from "@/utils/auth-token"
 import { hasDirtyState } from "@/utils/dirty-state"
 import { requestRestartWithRecovery } from "@/utils/restart-flow"
 import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
@@ -526,7 +526,7 @@ export default {
       },
       startupDrawerVisible: false,
       startupReportLoading: false,
-      startupPollTimer: null,
+      startupPollTimer: null, startupReadSequence: 0, startupController: null,
       pluginOperationTimer: null, pluginOperationController: null, pluginReadSequence: 0,
       asideShow: false,
       isCollapsed: false,
@@ -537,12 +537,7 @@ export default {
       botState: "loading",
       botInitialized: false,
       botRequestSequence: 0,
-      restartAvailable: false,
       restartLoading: false,
-      pendingRestartCount: 0,
-      restartStatusUnknown: false,
-      restartRequestSequence: 0,
-      pendingRestartReasons: [],
       windowHeight: window.innerHeight,
     }
   },
@@ -663,17 +658,12 @@ export default {
         .slice(0, 8)
         .map((component) => component.component_id)
     },
-    restartTooltip() {
-      if (this.restartStatusUnknown) return this.pendingRestartCount ? `有 ${this.pendingRestartCount} 项修改等待重启应用；当前状态暂不可确认` : "重启状态暂不可确认"
-      if (this.pendingRestartCount) {
-        return this.restartAvailable
-          ? `有 ${this.pendingRestartCount} 项修改等待重启应用`
-          : `有 ${this.pendingRestartCount} 项修改等待重启应用；当前不是 launcher 托管模式，请手动重启`
-      }
-      return this.restartAvailable
-        ? "重启真寻"
-        : "当前不是 launcher 托管模式，请手动重启"
-    },
+    restartSnapshot() { return this.$store.state.restartStatus.snapshot },
+    restartAvailable() { return this.restartSnapshot.launcher_managed },
+    pendingRestartCount() { return this.restartSnapshot.pending_count },
+    pendingRestartReasons() { return this.restartSnapshot.pending_reasons },
+    restartStatusUnknown() { return !this.$store.state.restartStatus.known },
+    restartTooltip() { return this.$store.getters["restartStatus/message"] },
   },
   created() {
     this.getBotInfo()
@@ -696,6 +686,7 @@ export default {
     this.applyScreenState(true)
   },
   beforeDestroy() {
+    this.pauseStatusReads()
     this.pausePluginOperation()
     document.removeEventListener("visibilitychange", this.pluginOperationVisibility)
     this._stopNetworkWatch?.()
@@ -716,6 +707,7 @@ export default {
       return labels[reason] || `更新原因：${reason}`
     },
     handleRecoveryNetwork(frozen) {
+      this.pauseStatusReads()
       this.pausePluginOperation()
       if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
       this.startupPollTimer = null
@@ -764,24 +756,43 @@ export default {
       }
       this.$message.success("诊断ID已复制")
     },
-    async loadStartupStatus() {
-      if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
+    pauseStatusReads() {
+      this.startupReadSequence += 1
+      this.startupController?.abort()
+      this.startupController = null
+      window.clearTimeout(this.startupPollTimer)
       this.startupPollTimer = null
-      if (isBusinessNetworkFrozen() || !hasValidAuthToken() || this._isDestroyed || this._isBeingDestroyed) return
+      this.$store.dispatch("restartStatus/invalidate")
+    },
+    async loadStartupStatus() {
+      window.clearTimeout(this.startupPollTimer)
+      this.startupPollTimer = null
+      if (document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken() || this._isDestroyed || this._isBeingDestroyed) return
+      this.startupController?.abort()
+      const controller = new AbortController()
+      this.startupController = controller
+      const request = ++this.startupReadSequence
       const epoch = businessNetworkEpoch()
+      const token = getAuthToken()
+      const current = () => request === this.startupReadSequence && !document.hidden && !isBusinessNetworkFrozen() && hasValidAuthToken() && token === getAuthToken() && epoch === businessNetworkEpoch() && !this._isDestroyed && !this._isBeingDestroyed
       try {
-        const response = await this.getRequest(`${this.$root.prefix}/system/startup/status`, {}, { suppressErrorToast: true })
-        if (isBusinessNetworkFrozen() || !hasValidAuthToken() || epoch !== businessNetworkEpoch()) return
-        if (response?.suc && response.data) this.startupStatus = response.data
-        if (this.startupDrawerVisible && response?.suc && response.data) {
-          this.startupReport = { ...this.startupReport, ...response.data }
+        const response = await this.getRequest(this.$root.prefix + "/system/startup/status", {}, { signal: controller.signal, suppressErrorToast: true })
+        if (!current()) return
+        if (response?.suc && response.data) {
+          if (this.startupStatus.boot_id !== response.data.boot_id) this.$store.dispatch("restartStatus/invalidate")
+          this.startupStatus = response.data
+          if (this.startupDrawerVisible) this.startupReport = { ...this.startupReport, ...response.data }
         }
       } catch (error) {
-        if (isBusinessNetworkFrozen() || !hasValidAuthToken() || epoch !== businessNetworkEpoch()) return
-        this.startupStatus = { state: "unknown", stages: {}, errors: [{ code: "status_unavailable" }] }
+        if (!current()) return
+        this.startupStatus = { ...this.startupStatus, state: "unknown", errors: [{ code: "status_unavailable" }] }
+      } finally {
+        if (request === this.startupReadSequence) this.startupController = null
       }
-      if (isBusinessNetworkFrozen() || !hasValidAuthToken() || this._isDestroyed || this._isBeingDestroyed) return
-      const settled = ["warmup_ready", "degraded", "failed", "unknown"].includes(this.startupStatus.state)
+      if (!current()) return
+      await this.loadRestartStatus()
+      if (!current()) return
+      const settled = ["warmup_ready", "degraded", "failed", "unknown"].includes(this.startupStatus.state) && (this.restartStatusUnknown || !this.restartSnapshot.reconciliation_pending)
       this.startupPollTimer = window.setTimeout(this.loadStartupStatus, settled ? 10000 : 1200)
     },
     async openStartupReport() {
@@ -835,7 +846,10 @@ export default {
       this.pluginReadSequence++; clearTimeout(this.pluginOperationTimer); this.pluginOperationTimer = null
       this.pluginOperationController?.abort(); this.pluginOperationController = null
     },
-    pluginOperationVisibility() { if (document.hidden) this.pausePluginOperation(); else this.restorePluginOperation() },
+    pluginOperationVisibility() {
+      if (document.hidden) { this.pauseStatusReads(); this.pausePluginOperation() }
+      else { this.loadStartupStatus(); this.restorePluginOperation() }
+    },
     schedulePluginOperation() {
       clearTimeout(this.pluginOperationTimer)
       if (!this._isDestroyed && !this._isBeingDestroyed && !document.hidden && !isBusinessNetworkFrozen() && hasValidAuthToken()) this.pluginOperationTimer = setTimeout(() => this.restorePluginOperation(), 1500)
@@ -848,7 +862,9 @@ export default {
       try { saved = JSON.parse(raw || "null") } catch (error) { saved = null }
       if (!saved?.operationId) return
       const sequence = this.pluginReadSequence
-      const current = () => sequence === this.pluginReadSequence && raw === sessionStorage.getItem('zhenxun_plugin_operation') && !document.hidden && !isBusinessNetworkFrozen() && hasValidAuthToken()
+      const epoch = businessNetworkEpoch()
+      const token = getAuthToken()
+      const current = () => sequence === this.pluginReadSequence && raw === sessionStorage.getItem('zhenxun_plugin_operation') && !document.hidden && !isBusinessNetworkFrozen() && hasValidAuthToken() && token === getAuthToken() && epoch === businessNetworkEpoch() && !this._isDestroyed && !this._isBeingDestroyed
       const controller = new AbortController(); this.pluginOperationController = controller
       const options = { signal: controller.signal, suppressErrorToast: true }
       const context = { action: saved.action || "install", pluginName: saved.pluginName || "插件" }
@@ -863,6 +879,11 @@ export default {
             return
           }
           const result = pluginOperationResult(entry, this.restartAvailable, saved.store)
+          if (['preparing', 'applying', 'verifying'].includes(result.applyMode)) {
+            this.$store.commit("START_PLUGIN_OPERATION", { ...context, title: result.title, message: result.message })
+            this.schedulePluginOperation()
+            return
+          }
           if (saved.dismissed && result.applyMode === 'restart_pending') return
           this.$store.commit("START_PLUGIN_OPERATION", { ...context, title: "插件操作结果", message: "正在恢复上次操作结果。" })
           this.$store.commit("FINISH_PLUGIN_OPERATION", result)
@@ -873,10 +894,10 @@ export default {
         const store = ['zhenxun', 'nonebot'].find(key => pendingResponse?.data?.[key]?.operations?.some(operation => operation.operation_id === saved.operationId))
         const transaction = store && pendingResponse.data[store]
         if (transaction) {
-          const mode = { pending_restart: 'restart_pending', migration_blocked: 'restart_pending', verification_pending: 'verifying', building: 'preparing', committed: 'applied', cleanup_pending: 'applied', recovery_required: 'recovery_required', failed: transaction.rollback_confirmed ? 'rolled_back' : 'failed' }[transaction.state]
+          const mode = { pending_restart: transaction.preparation_only ? 'preparing' : 'restart_pending', migration_blocked: 'attention_required', verification_pending: 'verifying', preparing: 'preparing', building: 'preparing', applying: 'applying', committing: 'verifying', settling: 'verifying', rolling_back: 'verifying', committed: 'applied', cleanup_pending: 'cleanup_pending', recovery_required: 'recovery_required', failed: transaction.rollback_confirmed ? 'rolled_back' : 'recovery_required' }[transaction.state]
           if (saved.dismissed && mode === 'restart_pending') return
           this.$store.commit("START_PLUGIN_OPERATION", { ...context, ...this.pluginTransactionNotice(transaction) })
-          if (['verifying', 'preparing'].includes(mode)) this.schedulePluginOperation()
+          if (['verifying', 'preparing', 'applying'].includes(mode)) this.schedulePluginOperation()
           else this.$store.commit("FINISH_PLUGIN_OPERATION", pluginOperationResult({ status: transaction.state, result: { apply_mode: mode, transaction_state: transaction.state, cleanup_error: transaction.cleanup_error } }, this.restartAvailable, store))
           return
         }
@@ -897,7 +918,7 @@ export default {
       const notices = {
         building: ["插件事务正在准备", "正在构建插件依赖，请等待完成。"],
         pending_restart: ["插件事务等待重启", "插件修改已暂存，重启后统一应用。"],
-        migration_blocked: ["插件事务被迁移阻塞", "数据库迁移未完成，插件修改暂未应用，请处理迁移后重启。"],
+        migration_blocked: ["等待手工数据库迁移", "数据库迁移未完成，插件修改暂未应用；完成手工处理后再验证。"],
         verification_pending: ["插件事务等待验证", "插件修改已应用，正在等待新进程启动验证。"],
         committed: ["插件事务已完成", "插件修改已生效。"],
         cleanup_pending: ["插件事务已完成", "插件修改已生效，旧文件清理待完成。"],
@@ -911,35 +932,27 @@ export default {
       const channel = event.detail?.channel
       if (channel && Object.prototype.hasOwnProperty.call(this.socketStates, channel)) {
         this.$set(this.socketStates, channel, event.detail.status)
+        if (channel === "status" && event.detail.status === "connected") this.loadStartupStatus()
       }
     },
-    async loadRestartStatus() {
-      if (isBusinessNetworkFrozen()) return
-      const request = ++this.restartRequestSequence
-      const epoch = businessNetworkEpoch()
-      try {
-        const response = await this.getRequest(`${this.$root.prefix}/system/restart/status`, {}, { suppressErrorToast: true })
-        if (request !== this.restartRequestSequence || isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
-        if (!response?.suc || !response.data || !Number.isInteger(response.data.pending_count) || response.data.pending_count < 0) throw new Error("restart_status_unavailable")
-        this.restartStatusUnknown = false
-        this.restartAvailable = Boolean(response && response.suc && response.data.launcher_managed)
-        this.pendingRestartCount = Number(response?.data?.pending_count || 0)
-        this.pendingRestartReasons = response?.data?.pending_reasons || []
-      } catch (error) {
-        if (request !== this.restartRequestSequence || isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
-        this.restartAvailable = false
-        this.restartStatusUnknown = true
-      }
+    loadRestartStatus(event) {
+      return this.$store.dispatch("restartStatus/refresh", {
+        request: options => this.getRequest(this.$root.prefix + "/system/restart/status", {}, options),
+        alive: () => !this._isDestroyed && !this._isBeingDestroyed,
+        bootId: this.startupStatus.boot_id || "",
+        force: event?.type === "zhenxun-restart-status-changed",
+      })
     },
     async restartWorker() {
       if (!this.restartAvailable || this.restartLoading) return
+      this.restartLoading = true
       const warning = hasDirtyState()
         ? "当前页面有尚未保存的修改，重启后这些修改会丢失。是否继续重启？"
         : "重启会短暂断开所有 Bot 和 WebUI 连接，是否继续？"
       try {
         await this.$confirm(warning, "确认重启", { type: "warning", confirmButtonText: "确认重启" })
-      } catch (error) { return }
-      this.restartLoading = true
+      } catch (error) { this.restartLoading = false; return }
+      if (this._isDestroyed || this._isBeingDestroyed) { this.restartLoading = false; return }
       try {
         await requestRestartWithRecovery(this, {
           request: () => this.postRequest(`${this.$root.prefix}/system/restart`, {}),
@@ -1001,6 +1014,8 @@ export default {
       }
     },
     closeSockets() {
+      this.pauseStatusReads()
+      this.$store.dispatch("restartStatus/invalidate", true)
       this.pausePluginOperation()
       window.clearTimeout(this.startupPollTimer)
       this.startupPollTimer = null
@@ -1256,6 +1271,10 @@ export default {
   white-space: nowrap;
 }
 
+.header-primary { flex: 1 1 0; }
+.header-actions { flex: 0 0 auto; }
+.header-actions > *, .header-primary > .restart-badge { flex-shrink: 0; }
+
 .header-icon-button {
   display: inline-flex;
   min-width: 38px;
@@ -1271,6 +1290,7 @@ export default {
   background: var(--bg-color);
   font-size: 16px;
   cursor: pointer;
+  white-space: nowrap;
   transition: background-color 0.2s, border-color 0.2s;
 }
 
@@ -1352,7 +1372,14 @@ export default {
 }
 
 .global-search {
-  width: min(28vw, 330px);
+  flex: 1 1 180px;
+  width: 180px;
+  min-width: 0;
+  max-width: 330px;
+}
+
+@media (max-width: 1199px) {
+  .global-search { display: none; }
 }
 
 ::v-deep .global-search .el-input__inner {

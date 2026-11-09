@@ -6,6 +6,10 @@
   z-index: 100000 !important;
 }
 
+.el-dialog:not(.is-fullscreen) {
+  max-width: calc(100vw - 24px);
+}
+
 /* 全局消息样式 */
 .anime-message {
   border-radius: 12px !important;

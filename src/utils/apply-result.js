@@ -1,4 +1,5 @@
 import { confirmAndRestart } from "@/utils/restart-flow"
+import { restartChangeText } from "@/store/restart-status"
 
 const STATUS_EVENT = "zhenxun-restart-status-changed"
 
@@ -11,6 +12,10 @@ export async function handleApplyResult(vm, response, options = {}) {
   const mode = data.apply_mode || (data.restart_required ? "restart_pending" : "config_reloaded")
 
   notifyRestartStatusChanged()
+  if (["preparing", "applying", "verifying", "attention_required", "recovery_required", "unknown"].includes(mode)) {
+    vm.$message.warning(restartChangeText(data.restart_change || { state: mode }))
+    return true
+  }
   if (mode === "failed") {
     vm.$message.error(response?.info || options.failedMessage || "应用失败，修改已回滚。")
     return false
@@ -24,6 +29,10 @@ export async function handleApplyResult(vm, response, options = {}) {
     return true
   }
   if (mode === "restart_pending") {
+    if (vm.$store?.state?.restartStatus?.snapshot?.reconciliation_pending) {
+      vm.$message.warning(restartChangeText({ state: "verifying" }))
+      return true
+    }
     if (!data.restart_available) {
       vm.$message.warning(options.manualRestartMessage || "配置已保存，请手动重启真寻后生效。")
       return true

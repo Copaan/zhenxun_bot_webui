@@ -189,24 +189,26 @@ export const recoverySessionIsCurrent = (state) => {
 export const recoveryStatusMatches = (state, payload) => {
   const data = payload?.data
   return Boolean(payload?.suc !== false && data?.boot_id && data.boot_id !== state.bootId &&
-    !data.transaction_verification_pending)
+    data.transaction_verification_known !== false && !data.transaction_verification_pending)
 }
 
 export const recoveryProbeTargets = (state, sourceOrigin = window.location.origin) => {
-  const candidates = uniqueTargets([state.preferredOrigin, ...(state.fallbackUrls || [])])
+  let candidates = uniqueTargets([state.preferredOrigin, ...(state.fallbackUrls || [])])
     .filter(url => state.accessUrls.includes(url))
-  if (state.policy === 'preserve' && state.preferredOrigin === sourceOrigin && candidates.includes(sourceOrigin)) return [sourceOrigin]
-  if (new URL(sourceOrigin).protocol !== "https:") return candidates
-  const httpListeners = new Set(state.accessUrls.filter(url => new URL(url).protocol === "http:")
-    .map(url => {
+  if (new URL(sourceOrigin).protocol === "https:") {
+    const httpListeners = new Set(state.accessUrls.filter(url => new URL(url).protocol === "http:")
+      .map(url => {
+        const target = new URL(url)
+        return `${target.hostname}:${target.port || "80"}`
+      }))
+    candidates = candidates.filter(url => {
       const target = new URL(url)
-      return `${target.hostname}:${target.port || "80"}`
-    }))
-  return candidates.filter(url => {
-    const target = new URL(url)
-    return target.protocol === "https:" &&
-      !httpListeners.has(`${target.hostname}:${target.port || "443"}`)
-  })
+      return target.protocol === "https:" &&
+        !httpListeners.has(`${target.hostname}:${target.port || "443"}`)
+    })
+  }
+  if (state.policy === 'preserve' && state.preferredOrigin === sourceOrigin && candidates.includes(sourceOrigin)) return [sourceOrigin]
+  return candidates
 }
 
 export const RESTART_RECOVERY_EVENT = EVENT_NAME

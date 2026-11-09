@@ -83,7 +83,7 @@ export default {
 }
 
 /* 响应式设计 */
-@media (max-width: 1024px) {
+@media (max-width: 1199px) {
   .command-row {
     height: auto !important;
   }

@@ -23,21 +23,23 @@
         <p v-if="access.moved">恢复后 WebUI 改为通过 <b>{{ access.urls[0] }}</b> 访问，当前地址将无法打开。</p>
         <p v-if="access.username">恢复后需使用备份中的管理员账号 <b>{{ access.username }}</b> 及其密码重新登录。</p>
       </el-alert>
-      <p class="backup-hint">同名文件会被覆盖，备份中没有的文件保持不变。数据库总是整体替换，切换到其他类型的数据库请使用“切换数据库”。</p>
+      <p class="backup-hint">同名文件会被覆盖，备份中没有的文件保持不变。数据库仅替换包内表，目标独有表保留，切换到其他类型的数据库请使用“切换数据库”。</p>
       <h3>依赖</h3>
       <el-checkbox v-model="skipFailed">依赖无法安装时跳过对应插件继续恢复</el-checkbox>
       <p class="backup-hint">不勾选时，任何依赖无法安装都会中止恢复，不做任何改动。</p>
-      <p class="backup-warning">恢复前会自动保存当前数据库和被覆盖的文件，数据导入失败时自动回滚。Bot 将重启，期间 WebUI 暂时无法访问。</p>
+      <p class="backup-warning">确认后先在线校验并准备依赖，原实例继续运行。准备通过后自动短暂停机、保存最终快照并切换；只有实际写入失败才执行回退。</p>
     </template>
     <span slot="footer">
       <el-button @click="$emit('close')">取消</el-button>
       <el-button v-if="!summary" type="primary" :loading="loading" :disabled="item && item.encrypted && !password" @click="load">读取备份</el-button>
-      <el-button v-else type="danger" :loading="submitting" @click="submit">开始恢复</el-button>
+      <el-button v-else type="danger" :loading="submitting" :disabled="confirming" @click="submit">开始恢复</el-button>
     </span>
   </el-dialog>
 </template>
 
 <script>
+import { isAuthenticationExpired } from "@/utils/auth-session"
+import { newOperationId } from "@/utils/plugin-operation"
 export default {
   name: "BackupRestoreDialog",
   props: {
@@ -46,7 +48,7 @@ export default {
     labels: { type: Object, default: () => ({}) },
   },
   data() {
-    return { password: "", summary: null, categories: [], skipFailed: false, loading: false, submitting: false, error: "" }
+    return { operationId: "", operationInput: "", confirming: false, password: "", summary: null, categories: [], skipFailed: false, loading: false, submitting: false, error: "" }
   },
   computed: {
     access() {
@@ -62,35 +64,53 @@ export default {
   },
   watch: {
     visible(value) {
+      this.requestGeneration += 1
+      this.loading = false; this.submitting = false; this.confirming = false
       if (!value) return
-      Object.assign(this, { password: "", summary: null, categories: [], skipFailed: false, error: "" })
+      Object.assign(this, { password: "", summary: null, categories: [], skipFailed: false, error: "", operationId: "" })
       if (this.item && !this.item.encrypted) this.load()
     },
   },
+  created() { this.requestGeneration = 0; this.expired = () => { this.requestGeneration += 1; this.submitting = false; this.loading = false }; window.addEventListener("zhenxun-auth-expired", this.expired) },
+  beforeDestroy() { this.requestGeneration += 1; this.disposed = true; window.removeEventListener("zhenxun-auth-expired", this.expired) },
   methods: {
     api(path) { return `${this.$root.prefix}/backup${path}` },
     async load() {
+      if (this.loading || !this.item || isAuthenticationExpired()) return
+      const generation = this.requestGeneration
       this.loading = true; this.error = ""
       try {
         const response = await this.postRequest(this.api("/inspect"), { name: this.item.name, password: this.password || null })
         if (!response?.suc) throw new Error(response?.info)
+        if (this.disposed || generation !== this.requestGeneration || isAuthenticationExpired()) return
         this.summary = response.data
         this.categories = [...response.data.categories]
-      } catch (error) { this.error = error.message || "读取备份失败" }
-      finally { this.loading = false }
+      } catch (error) { if (!this.disposed && generation === this.requestGeneration) this.error = error.message || "读取备份失败" }
+      finally { if (!this.disposed && generation === this.requestGeneration) this.loading = false }
     },
     async submit() {
+      if (this.submitting || this.confirming) return
+      const confirmationGeneration = this.requestGeneration
+      this.confirming = true
       const moved = this.access?.moved ? `恢复后请通过 ${this.access.urls[0]} 访问 WebUI。` : ""
-      try { await this.$confirm(`当前数据库会被备份中的数据整体替换，确定开始恢复？${moved}`, "确认恢复", { type: "warning", confirmButtonText: "开始恢复" }) } catch { return }
+      try { await this.$confirm(`包内数据表会被替换，目标独有表保留；保留表的外键冲突会在写入前提示，确定开始恢复？${moved}`, "确认恢复", { type: "warning", confirmButtonText: "开始恢复" }) } catch { return } finally { this.confirming = false }
+      if (this.submitting || confirmationGeneration !== this.requestGeneration) return
+      if (this.disposed || !this.visible || isAuthenticationExpired()) return
+      const generation = this.requestGeneration
+      const input = JSON.stringify([this.item.name, this.password, [...this.categories].sort(), this.skipFailed])
+      if (input !== this.operationInput) { this.operationId = ""; this.operationInput = input }
+      this.operationId = this.operationId || newOperationId()
+      sessionStorage.setItem("zhenxun_restore_operation", this.operationId)
       this.submitting = true; this.error = ""
       try {
         const response = await this.postRequest(this.api("/restore"), {
-          name: this.item.name, password: this.password || null, categories: this.categories, skip_failed: this.skipFailed,
+          operation_id: this.operationId, name: this.item.name, password: this.password || null, categories: this.categories, skip_failed: this.skipFailed,
         }, { timeout: 0 })
+        if (this.disposed || generation !== this.requestGeneration || isAuthenticationExpired()) return
         if (!response?.suc) throw new Error(response?.info)
         this.$emit("submitted", response.data)
-      } catch (error) { this.error = error.message || "恢复失败" }
-      finally { this.submitting = false }
+      } catch (error) { if (!this.disposed && generation === this.requestGeneration) this.error = error.message || "恢复失败" }
+      finally { if (!this.disposed && generation === this.requestGeneration) this.submitting = false }
     },
   },
 }

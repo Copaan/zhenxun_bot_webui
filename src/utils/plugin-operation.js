@@ -1,3 +1,5 @@
+import { restartChangeText } from "@/store/restart-status"
+
 export const reasonLabels = {
   registry_module_invalid: "Registry 中的模块名不是有效的 Python 导入路径。",
   registry_plugin_invalid: "NoneBot 官方商店的自动加载测试未通过此插件，可能已过时或缺少配置。",
@@ -35,6 +37,16 @@ export const reasonLabels = {
   dependency_python: "依赖不支持当前 Python 版本。",
   dependency_disk_full: "依赖解析所需磁盘空间不足。",
   dependency_resolver_configuration: "依赖解析器参数配置异常，未执行版本放宽。",
+  dependency_tool_unavailable: "找不到或无法加载 uv 可执行程序，请检查 Bot 进程的安装工具路径后重试。",
+  dependency_working_directory_missing: "依赖操作的实例工作目录不存在，请检查实例目录后重试。",
+  dependency_process_start_failed: "依赖工具未能启动，请检查执行权限和操作诊断。",
+  dependency_source_missing: "依赖声明文件已缺失，请重新获取完整插件源码后重试。",
+  dependency_source_unreadable: "无法读取依赖声明文件，请检查文件权限。",
+  plugin_source_missing: "插件下载或复制的源文件缺失，请重新下载完整源码后重试。",
+  plugin_candidate_missing: "待发布的插件候选文件已缺失，请重新准备更新。",
+  plugin_publish_failed: "插件候选发布失败，请查看发布阶段与恢复诊断。",
+  plugin_file_access_failed: "无法复制插件文件，请检查目录权限和可用空间。",
+  plugin_download_failed: "插件源码下载失败，请检查下载源与网络；这不表示依赖版本冲突。",
   external_install_not_managed: "同名包在 WebUI 之外安装，不能自动接管。",
   dependency_repair_requires_launcher: "需通过 launcher（uv run zx）启动后才能准备依赖。",
   plugin_not_managed: "该插件不由 WebUI 管理。",
@@ -93,6 +105,9 @@ export function dismissPluginOperation() {
 export function storeOperationResult(response, fallback, action) {
   const data = response.data || {}
   const mode = data.apply_mode
+  if (['preparing', 'applying', 'verifying', 'attention_required', 'recovery_required', 'unknown', 'cleanup_pending', 'rolled_back'].includes(mode) || data.transaction_state || data.preparation_only || data.rollback_confirmed || data.verification_confirmed) {
+    return pluginOperationResult({ result: data }, data.restart_available, 'zhenxun')
+  }
   const reasons = data.reason_codes || []
   const staged = reasons.includes("plugin_dependencies_changed")
     ? "插件及依赖变更已暂存，依赖将在重启时安装。"
@@ -117,25 +132,35 @@ export function storeOperationResult(response, fallback, action) {
 
 export function pluginOperationResult(entry, restartAvailable = false, store = "nonebot") {
   const result = entry.result || {}
-  const mode = result.apply_mode
+  const transactionState = result.transaction_state
+  const manualMigration = transactionState === 'migration_blocked' || result.reason === 'external_database_manual_migration_required'
+  let mode = result.apply_mode
+  if (['settling', 'committing', 'rolling_back'].includes(transactionState)) mode = 'verifying'
+  else if (result.rollback_confirmed) mode = 'rolled_back'
+  else if (result.verification_confirmed || ['committed', 'cleanup_pending'].includes(transactionState)) mode = result.cleanup_error || transactionState === 'cleanup_pending' ? 'cleanup_pending' : 'applied'
+  else if (result.preparation_only || ['building', 'preparing'].includes(transactionState)) mode = 'preparing'
+  else if (manualMigration) mode = 'attention_required'
+  else if (transactionState === 'verification_pending') mode = 'verifying'
+  else if (['failed', 'recovery_required'].includes(transactionState)) mode = 'recovery_required'
   const pending = mode === 'restart_pending'
-  const manualMigration = pending && (result.transaction_state === 'migration_blocked' || result.reason === 'external_database_manual_migration_required')
+  const inProgress = ['preparing', 'applying', 'verifying'].includes(mode)
+  const attention = ['attention_required', 'unknown'].includes(mode)
   const recovery = mode === 'recovery_required' || entry.status === 'recovery_required'
   const failed = mode === 'failed' || ['failed', 'interrupted'].includes(entry.status)
   const canceled = (result.reason_codes || []).includes('transaction_canceled') || result.reason === 'transaction_canceled'
-  const applied = !recovery && !failed && (canceled || ['applied', 'hot_reloaded', 'no_change'].includes(mode))
+  const applied = !recovery && !failed && (canceled || ['applied', 'hot_reloaded', 'no_change', 'cleanup_pending'].includes(mode))
   const rolledBack = mode === 'rolled_back'
   const skipped = applied && Boolean(result.load_failed)
   const pendingMessage = store === 'zhenxun' ? '插件变更已暂存，重启后应用。' : '依赖已准备，重启验证后生效。'
   let message = canceled ? '待应用的插件变更已相互抵消，当前运行版本保持不变。' : pending ? pendingMessage : applied ? '插件变更已经生效。' : rolledBack ? '本次操作已回滚，原环境已恢复。' : recovery ? '回滚尚未确认，请保留事务记录并处理诊断。' : failed ? '操作未完成，请查看失败阶段和诊断。' : '操作结果待确认，正在继续查询原任务。'
-  if (manualMigration) message = '外部数据库需要手工迁移，当前运行版本未切换。完成数据库迁移后再重启验证。'
+  if (inProgress || attention || mode === 'cleanup_pending') message = restartChangeText({ state: mode, reason: manualMigration ? 'external_database_manual_migration_required' : result.reason })
   if (applied && result.remaining_conflicts?.length) message = `所选修复已生效；仍有 ${result.remaining_conflicts.length} 项依赖问题待处理。`
   if (skipped) message = '插件已安装，但未能加载，已跳过该插件。补全配置或资源后重启即可加载。'
-  if (result.cleanup_error && applied) message += ' 清理待重试，不影响已确认的生效结果。'
+  if (result.cleanup_error && applied && mode !== 'cleanup_pending') message += ' 清理待重试，不影响已确认的生效结果。'
   if (result.diagnostic) message += `\n${result.diagnostic}`
   return {
-    status: skipped ? 'pending' : applied ? 'success' : pending ? 'pending' : 'error',
-    title: manualMigration ? '等待手工数据库迁移' : pending ? '插件事务等待重启' : canceled ? '插件变更已抵消' : skipped ? '插件已安装但未加载' : applied ? '插件操作完成' : rolledBack ? '插件操作已回滚' : recovery ? '事务需要恢复处理' : failed ? '插件操作未完成' : '操作结果待确认',
+    status: skipped || pending || inProgress || attention ? 'pending' : applied || rolledBack ? 'success' : 'error',
+    title: manualMigration ? '等待手工数据库迁移' : inProgress || attention ? restartChangeText({ state: mode }) : pending ? '插件事务等待重启' : canceled ? '插件变更已抵消' : skipped ? '插件已安装但未加载' : applied ? '插件操作完成' : rolledBack ? '插件操作已回滚' : recovery ? '事务需要恢复处理' : failed ? '插件操作未完成' : '操作结果待确认',
     message, applyMode: mode || 'unknown',
     restartAvailable: pending && !manualMigration && (result.restart_available ?? restartAvailable),
     accessUrls: result.access_urls || [], accessTargets: result.access_targets || [],

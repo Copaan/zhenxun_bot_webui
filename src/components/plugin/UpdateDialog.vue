@@ -84,6 +84,32 @@
               </div>
             </div>
 
+            <div
+              v-if="typeof updateData.ignore_statistics === 'boolean'"
+              class="settings-row"
+            >
+              <div class="setting-card">
+                <div class="setting-icon">
+                  <i class="el-icon-data-analysis"></i>
+                </div>
+                <div class="setting-content">
+                  <div class="setting-label">调用统计</div>
+                  <div class="setting-control">
+                    <el-switch
+                      v-model="updateData.ignore_statistics"
+                      :active-value="false"
+                      :inactive-value="true"
+                      active-text="开启"
+                      inactive-text="关闭"
+                    />
+                  </div>
+                  <div class="setting-description">
+                    保存后立即生效，仅影响后续调用统计，已有记录保留。
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- 真寻特有设置 -->
             <template v-if="this.$store.state.botType == 'zhenxun'">
               <div class="settings-row">
@@ -794,6 +820,13 @@ $bg-color-overlay: var(--el-bg-color-overlay, #ffffff);
 
       .setting-content {
         flex: 1;
+
+        .setting-description {
+          margin-top: 8px;
+          color: $text-secondary;
+          font-size: 12px;
+          line-height: 1.6;
+        }
 
         .setting-label {
           font-size: 15px;

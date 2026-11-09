@@ -4,6 +4,7 @@
     <div
       v-for="group in metricGroups"
       :key="group.className"
+      ref="metricPanels"
       class="metric-panel p-4 mb-3"
       :class="group.className"
       :style="{
@@ -42,13 +43,13 @@
 
       <div
         v-else
-        class="grid grid-cols-2 md:grid-cols-5 gap-3"
+        class="progress-grid"
         :style="{ height: areaHeight - 80 + 'px' }"
       >
         <div
           v-for="(item, key) in progressItems"
           :key="key"
-          class="flex flex-col p-1 justify-center"
+          class="progress-item flex flex-col p-1 justify-center"
         >
           <div
             class="progress-container flex-col w-full flex justify-center items-center"
@@ -170,6 +171,12 @@ export default {
   },
   async mounted() {
     window.addEventListener("resize", this.handleResize)
+    this.handleResize()
+    if (window.ResizeObserver) {
+      this.chartObserver = new ResizeObserver(this.handleResize)
+      this.chartObserver.observe(this.$refs.midInfo)
+      this.chartObserver.observe(this.$refs.chartArea)
+    }
     if (!this.botInfo.self_id) return
     const echarts = await this.$loadEcharts()
     if (this.destroyed || !this.$refs.chart) return
@@ -180,11 +187,6 @@ export default {
     this.countInterval = setInterval(() => this.loadCounts(statsBotId, true), 30000)
     this.handleResize()
     this.renderChart()
-    if (window.ResizeObserver && this.$refs.chartArea) {
-      const resizeChart = debounce(() => this.chart?.resize(), 100)
-      this.chartObserver = new ResizeObserver(resizeChart)
-      this.chartObserver.observe(this.$refs.chartArea)
-    }
     this.sidebarResizeHandler = debounce(this.handleResize, 200)
     this.themeChangeHandler = debounce(this.renderChart, 200)
     EventBus.$on("sidebar-aside", this.sidebarResizeHandler)
@@ -238,41 +240,22 @@ export default {
       }
     },
 
+    /** 按统计卡片可用空间调整圆环和紧凑布局，并刷新图表尺寸。 */
     handleResize() {
       if (this.destroyed) return
-      const width = window.innerWidth
-      const height = window.innerHeight
-      const compact = width < 768
+      const panel = this.$refs.metricPanels?.[0]
+      const style = panel && window.getComputedStyle(panel)
+      const width = panel ? panel.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) : 0
+      const compact = window.innerWidth < 768 || width < 340
       if (compact !== this.compact) {
         this.compact = compact
         this.renderChart()
       }
 
-      // 进度环尺寸（仅桌面端渲染）
-      if (width < 1024) {
-        this.progressWidth = 75
-        this.strokeWidth = 7
-        this.fontSize = 12
-      } else {
-        this.progressWidth = 90
-        this.strokeWidth = 8
-        this.fontSize = 14
-      }
-
-      // 高分辨率适配
-      if (height > 1080) {
-        this.progressWidth = Math.floor(height * 0.15)
-        this.strokeWidth = Math.floor(this.progressWidth * 0.2)
-        this.fontSize = Math.floor(this.progressWidth * 0.15)
-      }
-
-      // 确保最小和最大值
-      this.progressWidth = Math.max(50, Math.min(this.progressWidth, 120))
-      this.strokeWidth = Math.max(6, Math.min(this.strokeWidth, 12))
-      this.fontSize = Math.max(10, Math.min(this.fontSize, 18))
-
-      // 调用更新高度方法
       this.updateAreaHeight()
+      this.progressWidth = Math.max(40, Math.min(120, this.areaHeight - 120, Math.floor((width - 48) / 5) - 8))
+      this.strokeWidth = Math.max(6, Math.min(12, Math.round(this.progressWidth / 10)))
+      this.fontSize = Math.max(10, Math.min(18, Math.round(this.progressWidth / 6)))
 
       this.$nextTick(() => {
         if (!this.destroyed && this.chart) this.chart.resize()
@@ -323,8 +306,8 @@ export default {
           borderWidth: 1,
           textStyle,
         },
-        legend: { data: ["消息统计", "调用统计"], textStyle },
-        grid: { left: "3%", right: "4%", bottom: "3%", containLabel: true, backgroundColor: getCssVar("--bg-color-secondary") },
+        legend: { data: ["消息统计", "调用统计"], top: 30, textStyle },
+        grid: { top: 86, left: "3%", right: "4%", bottom: "3%", containLabel: true, backgroundColor: getCssVar("--bg-color-secondary") },
         toolbox: {
           feature: { saveAsImage: { title: "保存图片", pixelRatio: 2 } },
           iconStyle: { borderColor: getCssVar("--primary-color-light") },
@@ -354,7 +337,7 @@ export default {
       const textStyle = { ...option.legend.textStyle, fontSize: 12 }
       option.title.textStyle.fontSize = 14
       option.tooltip.textStyle = textStyle
-      option.legend = { ...option.legend, bottom: 0, itemWidth: 16, itemHeight: 8, textStyle }
+      option.legend = { ...option.legend, top: 'auto', bottom: 0, itemWidth: 16, itemHeight: 8, textStyle }
       option.grid = { ...option.grid, top: 44, left: 0, right: 0, bottom: 28 }
       option.toolbox.itemSize = 12
       option.xAxis.axisLabel.fontSize = 10
@@ -434,9 +417,13 @@ export default {
 
 .progress-container {
   display: flex;
+  min-width: 0;
   justify-content: center;
   align-items: center;
 }
+
+.progress-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.progress-item { min-width: 0; }
 
 .stat-grid {
   display: grid;

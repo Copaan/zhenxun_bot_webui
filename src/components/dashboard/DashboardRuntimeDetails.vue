@@ -198,7 +198,7 @@ export default {
 .runtime-facts > div:last-child { border-right: 0; }
 .runtime-facts span, .runtime-facts strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .runtime-facts span { margin-bottom: 5px; color: var(--text-color-secondary); font-size: 12px; }
-.detail-grid { display: grid; grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr); gap: 16px; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
 .detail-grid section { min-width: 0; border: 1px solid var(--border-color); background: var(--bg-color); }
 .detail-title { display: flex; min-height: 48px; align-items: center; justify-content: space-between; padding: 0 14px; border-bottom: 1px solid var(--border-color); }
 .history-list > div { display: grid; grid-template-columns: 10px 1fr 45px 145px; gap: 8px; align-items: center; min-height: 42px; padding: 0 14px; border-bottom: 1px solid var(--border-color); font-size: 12px; }

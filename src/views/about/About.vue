@@ -12,12 +12,12 @@
       <div class="about-actions">
         <el-button icon="el-icon-refresh" :loading="checking" @click="checkUpdates(true)">检查更新</el-button>
         <el-badge :value="restartStatus.pending_count" :hidden="!restartStatus.pending_count">
-          <el-button type="warning" plain icon="el-icon-refresh-right" :loading="restarting" :disabled="!restartStatus.launcher_managed" @click="restartWorker">重启真寻</el-button>
+          <el-button type="warning" plain icon="el-icon-refresh-right" :loading="restarting" :disabled="!restartStatus.launcher_managed || restarting" @click="restartWorker">重启真寻</el-button>
         </el-badge>
       </div>
     </header>
 
-    <div v-if="restartStatus.pending_restart" class="restart-notice">
+    <div v-if="restartStatusKnown && restartStatus.pending_restart" class="restart-notice">
       <div>
         <strong>有 {{ restartStatus.pending_count }} 项修改等待重启</strong>
         <p>{{ pendingReasonText }}</p>
@@ -30,7 +30,17 @@
       </div>
       <span>{{ restartStatus.launcher_managed ? "可在此统一重启应用" : "当前不是 launcher 托管模式，请手动重启" }}</span>
     </div>
-    <div v-if="statusStale" class="inline-alert warning">重启状态暂不可确认，页面保留上次已知状态；请恢复连接后重新检查。</div>
+    <div v-if="!restartStatusKnown" class="inline-alert warning">
+      重启状态暂不可确认，页面保留上次已知状态。
+      <el-button type="text" :loading="restartStatusLoading" @click="loadRestartStatus">重新检查</el-button>
+    </div>
+    <div v-if="restartStatusKnown && restartStatus.reconciliation_pending" class="inline-alert warning">正在确认生效结果，请勿重复提交应用；普通手动重启仍可使用。</div>
+    <ul v-if="restartChanges.length" class="pending-items restart-changes" aria-live="polite">
+      <li v-for="(item, index) in restartChanges" :key="item.change_id || item.operation_id || item.source + index">
+        <span>{{ restartChangeText(item) }}</span><code>{{ item.store_key || item.source }}</code>
+      </li>
+    </ul>
+    <div v-if="statusStale" class="inline-alert warning">更新任务状态暂不可确认，保留上次已知结果。</div>
 
     <section class="update-section">
       <div class="section-heading">
@@ -62,6 +72,9 @@
       </div>
 
       <div v-if="updateError" class="inline-alert error">{{ updateError }}</div>
+      <div v-if="updateInfo && updateInfo.webui_startup_status && updateInfo.webui_startup_status.state && updateInfo.webui_startup_status.state !== 'completed'" class="inline-alert warning" aria-live="polite">
+        WebUI 启动更新：{{ updateInfo.webui_startup_status.reason || '正在核对并准备页面资源，现有可用页面仍可使用。' }}
+      </div>
       <div class="version-grid" v-loading="checking && !updateInfo">
         <article v-for="component in componentCards" :key="component.key" class="version-card">
           <div class="version-card-title">
@@ -138,11 +151,13 @@
 </template>
 
 <script>
+import { restartChangeText } from "@/store/restart-status"
+import { getAuthToken, hasValidAuthToken } from "@/utils/auth-token"
 import logoUrl from "@/assets/image/logo.png"
 import { hasDirtyState } from "@/utils/dirty-state"
 import { reasonText } from "@/utils/plugin-operation"
 import { requestRestartWithRecovery } from "@/utils/restart-flow"
-import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
+import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 import BackupPanel from "./BackupPanel.vue"
 
 const COMPONENT_META = {
@@ -194,6 +209,10 @@ const UPDATE_ERROR_LABELS = {
   webui_manifest_invalid: "WebUI 版本清单无效",
   webui_api_incompatible: "WebUI 与当前真寻 API 版本不兼容",
   webui_assets_incomplete: "WebUI 文件不完整",
+  webui_target_mismatch: "下载的 WebUI 与本次检查的发布版本不一致",
+  webui_publish_superseded: "页面已被另一项更新替换，将重新核对发布版本",
+  webui_check_superseded: "启动检查已由新的启动接管",
+  webui_refresh_failed: "页面已发布，刷新待重试，无需重启 Bot",
   dependency_tool_unavailable: "找不到 uv，无法同步依赖",
   dependency_sync_failed: "依赖同步失败",
   project_root_mismatch: "更新包与当前项目目录不一致",
@@ -284,11 +303,14 @@ export default {
     return {
       logoUrl, checking: false, updateInfo: null, updateError: "",
       options: { ...loadUpdateOptions(), force: false },
-      jobs: {}, pollTimer: null, pollSequence: 0, restarting: false, applyingJobId: "", cancellingJobId: "", destroyed: false, statusStale: false, unsubscribeNetwork: null,
-      restartStatus: { launcher_managed: false, pending_restart: false, pending_count: 0, pending_reasons: [], pending_items: [] },
+      jobs: {}, updateReadSequence: 0, updateController: null, pollController: null, pollTimer: null, pollSequence: 0, restarting: false, applyingJobId: "", cancellingJobId: "", destroyed: false, statusStale: false, unsubscribeNetwork: null,
     }
   },
   computed: {
+    restartStatus() { return this.$store.state.restartStatus.snapshot },
+    restartStatusKnown() { return this.$store.state.restartStatus.known },
+    restartStatusLoading() { return this.$store.state.restartStatus.loading },
+    restartChanges() { return (this.restartStatus.change_items || []).filter(item => !["restart_pending", "applied", "rolled_back"].includes(item.state)) },
     checkedAtLabel() {
       if (!this.updateInfo || !this.updateInfo.checked_at) return "尚未检查远端版本"
       return `检查时间 ${new Date(this.updateInfo.checked_at).toLocaleString()}`
@@ -318,25 +340,26 @@ export default {
     const activeJobId = sessionStorage.getItem("zhenxun_update_job_id")
     if (activeJobId) this.pollJob(activeJobId, true)
     this.loadRestartStatus()
-    window.addEventListener("zhenxun-restart-status-changed", this.loadRestartStatus)
     this.onVisibility = () => {
       if (document.hidden) {
-        this.pollSequence += 1
-        if (this.pollTimer) window.clearTimeout(this.pollTimer)
-        this.pollTimer = null
+        this.pauseUpdateReads()
+        this.$store.dispatch("restartStatus/invalidate")
       } else {
+        this.loadRestartStatus()
+        this.checkUpdates(false)
         const activeJobId = sessionStorage.getItem("zhenxun_update_job_id")
         if (activeJobId) this.pollJob(activeJobId, true)
       }
     }
     this.onAuthExpired = () => {
-      this.pollSequence += 1
-      if (this.pollTimer) window.clearTimeout(this.pollTimer)
-      this.pollTimer = null
+      this.pauseUpdateReads()
+      this.$store.dispatch("restartStatus/invalidate")
     }
     this.unsubscribeNetwork = onBusinessNetworkChange((frozen) => {
       if (frozen) this.onAuthExpired()
       else if (!document.hidden) {
+        this.loadRestartStatus()
+        this.checkUpdates(false)
         const activeJobId = sessionStorage.getItem("zhenxun_update_job_id")
         if (activeJobId) this.pollJob(activeJobId, true)
       }
@@ -347,26 +370,44 @@ export default {
   },
   beforeDestroy() {
     this.destroyed = true
-    this.pollSequence += 1
-    if (this.pollTimer) window.clearTimeout(this.pollTimer)
-    this.pollTimer = null
+    this.pauseUpdateReads()
     this.unsubscribeNetwork?.()
     document.removeEventListener("visibilitychange", this.onVisibility)
     window.removeEventListener("zhenxun-auth-expired", this.onAuthExpired)
-    window.removeEventListener("zhenxun-restart-status-changed", this.loadRestartStatus)
   },
   methods: {
+    pauseUpdateReads() {
+      this.updateReadSequence += 1
+      this.pollSequence += 1
+      this.updateController?.abort()
+      this.pollController?.abort()
+      this.updateController = null
+      this.pollController = null
+      window.clearTimeout(this.pollTimer)
+      this.pollTimer = null
+      this.checking = false
+    },
     pendingItemLabel(item) {
       const actions = { install: "安装插件", update: "更新插件", uninstall: "卸载插件" }
       return actions[item.action] || "待应用修改"
     },
     changeSource(source) { if (source === "aliyun") this.options.method = "git" },
     async checkUpdates(refresh) {
+      if (this.destroyed || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
+      this.updateController?.abort()
+      const controller = new AbortController()
+      this.updateController = controller
+      const options = { signal: controller.signal, suppressErrorToast: true }
+      const sequence = ++this.updateReadSequence
+      const epoch = businessNetworkEpoch()
+      const token = getAuthToken()
+      const current = () => sequence === this.updateReadSequence && !this.destroyed && !document.hidden && !isBusinessNetworkFrozen() && epoch === businessNetworkEpoch() && token === getAuthToken() && hasValidAuthToken()
       this.checking = true; this.updateError = ""
       try {
         const response = refresh
-          ? await this.postRequest(`${this.$root.prefix}/system/update/check`, { channel: this.options.channel })
-          : await this.getRequest(`${this.$root.prefix}/system/update/status`, { channel: this.options.channel })
+          ? await this.postRequest(`${this.$root.prefix}/system/update/check`, { channel: this.options.channel }, options)
+          : await this.getRequest(`${this.$root.prefix}/system/update/status`, { channel: this.options.channel }, options)
+        if (!current()) return
         if (!response || !response.suc) throw new Error(response && response.info)
         this.updateInfo = response.data
         this.statusStale = false
@@ -382,8 +423,8 @@ export default {
             this.pollJob(automatic.job_id)
           }
         }
-      } catch (error) { this.updateError = error.response?.data?.detail || error.message || "版本信息获取失败。" }
-      finally { this.checking = false }
+      } catch (error) { if (current()) this.updateError = error.response?.data?.detail || error.message || "版本信息获取失败。" }
+      finally { if (sequence === this.updateReadSequence) { this.checking = false; this.updateController = null } }
     },
     jobFor(component) { return this.jobs[component] },
     versionTagType(component) {
@@ -402,8 +443,9 @@ export default {
     isUpdating(component) { const job = this.jobFor(component); return Boolean(job && !["completed", "failed", "cancelled", "recovery_required"].includes(job.state)) },
     updateButtonLabel(component) { if (!component.updateAvailable) return "重新安装"; return component.key === "resource" ? "更新资源" : component.key === "webui" ? "更新并刷新" : "下载更新" },
     canUpdate(component) { if (this.jobFor(component.key)?.state === "recovery_required" || component.blocked || this.isUpdating(component.key) || component.latestVersion === "未知") return false; return component.key !== "webui" || (component.manifestAvailable && component.compatible) },
-    jobProgressStatus(job) { if (["failed", "recovery_required"].includes(job.state)) return "exception"; if (job.state === "completed") return "success"; return undefined },
+    jobProgressStatus(job) { if (["failed", "recovery_required"].includes(job.state)) return "exception"; if (job.apply_mode === "webui_refresh_pending") return "warning"; if (job.state === "completed") return "success"; return undefined },
     jobStateLabel(job) {
+      if (job.apply_mode === "webui_refresh_pending") return "页面已发布，刷新待重试，无需重启 Bot"
       if (job.retry_resolved) return "后续操作已使资源就绪，本次失败记录保留"
       if (job.state === "recovery_required") return "资源恢复结果待核验，已暂停自动覆盖，请保留备份并处理"
       if (job.startup_resource && job.state === "completed" && !job.runtime_ready) return "资源已应用，等待渲染组件恢复"
@@ -431,21 +473,20 @@ export default {
         this.pollJob(response.data.job_id)
       } catch (error) { this.$message.error(error.response?.data?.detail || error.message || "更新任务创建失败。") }
     },
-    async loadRestartStatus() {
-      try {
-        const response = await this.getRequest(`${this.$root.prefix}/system/restart/status`, {}, { suppressErrorToast: true })
-        if (!response?.suc) throw new Error(response?.info || "重启状态暂不可确认")
-        this.restartStatus = response.data
-        this.statusStale = false
-      } catch (error) {
-        this.statusStale = true
-      }
+    restartChangeText,
+    loadRestartStatus(event) {
+      return this.$store.dispatch("restartStatus/refresh", {
+        request: options => this.getRequest(this.$root.prefix + "/system/restart/status", {}, options),
+        alive: () => !this.destroyed,
+        force: event?.type === "click",
+      })
     },
     async restartWorker() {
       if (!this.restartStatus.launcher_managed || this.restarting) return
-      const warning = hasDirtyState() ? "当前页面有尚未保存的修改，重启后会丢失。是否继续？" : "重启会短暂断开所有 Bot 和 WebUI 连接，是否继续？"
-      try { await this.$confirm(warning, "确认重启", { type: "warning", confirmButtonText: "确认重启" }) } catch (error) { return }
       this.restarting = true
+      const warning = hasDirtyState() ? "当前页面有尚未保存的修改，重启后会丢失。是否继续？" : "重启会短暂断开所有 Bot 和 WebUI 连接，是否继续？"
+      try { await this.$confirm(warning, "确认重启", { type: "warning", confirmButtonText: "确认重启" }) } catch (error) { this.restarting = false; return }
+      if (this.destroyed) { this.restarting = false; return }
       try { await requestRestartWithRecovery(this, { request: () => this.postRequest(`${this.$root.prefix}/system/restart`, {}), recovery: { policy: "preserve", returnRoute: "/about", message: "正在等待 launcher 启动新的真寻进程。" } }) }
       catch (error) { this.$message.error(error.response?.data?.detail || error.message || "重启请求失败。") }
       finally { this.restarting = false }
@@ -490,6 +531,7 @@ export default {
      * @param {object} job 等待重启应用的更新任务
      */
     async promptRestart(job) {
+      if (!this.restartStatusKnown || this.restartStatus.reconciliation_pending || this.destroyed || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       const name = COMPONENT_META[job.component]?.name || "组件"
       if (!job.restart_available) {
         this.$alert(`${name}更新已下载并校验，需要手动重启真寻后才能生效。`, "需要重启", { type: "warning", confirmButtonText: "知道了" }).catch(() => {})
@@ -504,16 +546,22 @@ export default {
       window.location.reload()
     },
     pollJob(jobId, immediate = false, retryCount = 0) {
-      if (this.destroyed || document.hidden || isBusinessNetworkFrozen()) return
+      if (this.destroyed || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       if (this.pollTimer) window.clearTimeout(this.pollTimer)
+      this.pollController?.abort()
+      const controller = new AbortController()
+      this.pollController = controller
       const sequence = ++this.pollSequence
+      const epoch = businessNetworkEpoch()
+      const token = getAuthToken()
+      const current = () => !this.destroyed && sequence === this.pollSequence && !document.hidden && !isBusinessNetworkFrozen() && hasValidAuthToken() && token === getAuthToken() && epoch === businessNetworkEpoch()
       this.pollTimer = window.setTimeout(async () => {
-        if (this.destroyed || sequence !== this.pollSequence || document.hidden || isBusinessNetworkFrozen()) return
+        if (!current()) return
         try {
-          const response = await this.getRequest(`${this.$root.prefix}/system/update/jobs/${jobId}`, {}, { suppressErrorToast: true })
+          const response = await this.getRequest(`${this.$root.prefix}/system/update/jobs/${jobId}`, {}, { signal: controller.signal, suppressErrorToast: true })
           if (!response || !response.suc) throw new Error(response && response.info)
           const job = response.data
-          if (this.destroyed || sequence !== this.pollSequence || document.hidden || isBusinessNetworkFrozen()) return
+          if (!current()) return
           if (job.retry_job_id) {
             sessionStorage.setItem("zhenxun_update_job_id", job.retry_job_id)
             this.pollJob(job.retry_job_id)
@@ -523,18 +571,21 @@ export default {
           this.$set(this.jobs, job.component, job)
           if (job.startup_resource && job.state !== "recovery_required" && (job.next_retry_at || (job.state === "completed" && !job.runtime_ready))) this.pollJob(jobId, false, 0)
           else if (!["completed", "failed", "pending_restart", "cancelled", "recovery_required"].includes(job.state)) this.pollJob(jobId, false, 0)
-          else if (job.state === "pending_restart") { await this.loadRestartStatus(); if (previousState && previousState !== "pending_restart") this.promptRestart(job) }
+          else if (job.state === "pending_restart") { await this.loadRestartStatus(); if (current() && previousState && previousState !== "pending_restart") this.promptRestart(job) }
           else if (job.state === "completed") {
             sessionStorage.removeItem("zhenxun_update_job_id")
-            if (job.apply_mode === "webui_refresh") this.promptRefresh()
+            if (job.apply_mode === "webui_refresh_pending") this.$message.warning("页面已发布，刷新待重试，无需重启 Bot。")
+            else if (job.apply_mode === "webui_refresh") this.promptRefresh()
             else this.$message.success(job.apply_mode === "hot_reloaded" ? "资源已热更新，无需重启。" : `${COMPONENT_META[job.component].name}更新完成。`)
-            await this.checkUpdates(true); await this.loadRestartStatus()
+            await this.checkUpdates(true); if (current()) await this.loadRestartStatus()
           }
           else if (job.state === "failed") { sessionStorage.removeItem("zhenxun_update_job_id"); this.$message.error(this.jobStateLabel(job)) }
         } catch (error) {
-          if (this.destroyed || sequence !== this.pollSequence || document.hidden || isBusinessNetworkFrozen()) return
+          if (!current()) return
           if (retryCount < 3) this.pollJob(jobId, false, retryCount + 1)
           else this.updateError = "更新任务状态暂时无法读取，请稍后点击检查更新。"
+        } finally {
+          if (sequence === this.pollSequence) this.pollController = null
         }
       }, immediate ? 0 : 1500)
     },
@@ -543,6 +594,8 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+.restart-changes li { flex-wrap: wrap; overflow-wrap: anywhere; }
+.restart-changes code { white-space: normal; overflow-wrap: anywhere; }
 .about-page { min-height: 100%; padding: 4px 8px 34px; color: var(--text-color); }
 .about-heading, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .about-actions { display: flex; align-items: center; gap: 10px; }.restart-notice { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 14px; padding: 12px 14px; border-left: 3px solid #c59027; background: rgba(197,144,39,.09); }.restart-notice strong, .restart-notice p { margin: 0; }.restart-notice p, .restart-notice > span { margin-top: 4px; color: var(--text-color-secondary); font-size: 12px; }

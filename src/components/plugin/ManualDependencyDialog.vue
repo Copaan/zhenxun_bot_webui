@@ -1,6 +1,6 @@
 <template>
   <el-dialog title="依赖管理" :visible="visible" width="min(760px, 94vw)" append-to-body :before-close="close">
-    <p>优先复用现有依赖；实际包变更需通过 launcher（uv run zx）启动后才能准备，并在手动重启验证后生效。ORM 及数据库驱动仅由控制台管理。</p>
+    <p>优先复用现有依赖；可连续准备多个组件，最后手动重启一次统一验证生效。实际包变更需通过 launcher（uv run zx）启动。ORM 及数据库驱动仅由控制台管理。</p>
     <el-radio-group v-model="action" :disabled="busy || pending" @change="invalidate">
       <el-radio-button label="install">安装或调整版本</el-radio-button>
       <el-radio-button label="uninstall">撤销手动托管</el-radio-button>
@@ -20,12 +20,16 @@
     </div>
     <p v-if="result" class="dependency-result">{{ resultMessage }}</p>
     <p v-if="operationId">操作编号：<code>{{ operationId }}</code></p>
+    <el-select v-if="trackedIds.length" :value="operationId" :disabled="busy || frozen || expired" placeholder="查看已提交的依赖操作" class="operation-history" @change="trackOperation">
+      <el-option v-for="id in trackedIds" :key="id" :value="id" :label="id" />
+    </el-select>
     <template #footer>
       <el-button @click="close">关闭</el-button>
       <el-button v-if="operationId" :disabled="frozen || expired || busy" @click="refreshOperation">刷新任务状态</el-button>
       <el-button v-if="operationId && result?.apply_mode === 'restart_pending'" type="warning" :disabled="frozen || expired || busy" @click="cancelOperation">撤销待重启操作</el-button>
       <el-button v-if="operationMissing && pending" :disabled="frozen || expired || busy" @click="reanalyzeMissing">未找到任务，重新分析</el-button>
-      <el-button v-if="result && result.apply_mode === 'restart_pending'" type="warning" @click="showOperation">查看并重启验证</el-button>
+      <el-button v-if="readyToAppend" :disabled="frozen || expired || busy" @click="prepareNext">继续准备其他依赖</el-button>
+      <el-button v-if="readyToAppend" type="warning" @click="showOperation">查看统一重启</el-button>
       <el-button v-if="!pending && !preview" type="primary" :loading="busy" :disabled="frozen || expired" @click="analyze">分析变更</el-button>
       <el-button v-if="!pending && preview" type="primary" :loading="busy" :disabled="frozen || expired" @click="submit">确认准备依赖</el-button>
     </template>
@@ -40,19 +44,20 @@ const storageKey = 'zhenxun_manual_dependency_operation'
 
 export default {
   name: 'ManualDependencyDialog',
-  props: { visible: Boolean, packages: { type: Array, default: () => [] } },
-  data: () => ({ action: 'install', input: '', preview: null, result: null, error: '', busy: false, confirmSource: false, operationId: '', operationMissing: false, expired: false, frozen: isBusinessNetworkFrozen() }),
+  props: { visible: Boolean, packages: { type: Array, default: () => [] }, componentKey: { type: String, default: '' }, operationIds: { type: Array, default: () => [] } },
+  data: () => ({ action: 'install', input: '', preview: null, result: null, error: '', busy: false, confirmSource: false, operationId: '', trackedIds: [], operationMissing: false, expired: false, frozen: isBusinessNetworkFrozen() }),
   computed: {
-    pending() { return Boolean(this.operationId && !['completed', 'failed', 'interrupted', 'rolled_back', 'not_found'].includes(this.result?.status)) },
+    trackingKey() { return this.componentKey ? storageKey + ':' + this.componentKey : storageKey },
+    readyToAppend() { return this.result?.apply_mode === 'restart_pending' && this.result?.status === 'pending' },
+    pending() { return Boolean(this.operationId && !this.readyToAppend && (['preparing', 'verification_pending', 'verifying', 'recovery_required', 'attention_required', 'migration_blocked'].includes(this.result?.apply_mode) || !['completed', 'failed', 'interrupted', 'rolled_back', 'not_found'].includes(this.result?.status))) },
     resultMessage() {
       if (this.result?.reason_codes?.includes('declaration_updated')) return '托管声明已保存，依赖未改变，无需重启。'
-      const messages = { restart_pending: '依赖已准备，等待重启验证。', preparing: '正在准备依赖，请等待任务结果。', applied: '启动验证通过，依赖已生效。', no_change: '依赖和托管声明无需变更。', rolled_back: '依赖操作失败或已撤销，原环境已恢复。', recovery_required: '回滚尚未确认，请保留任务记录并处理诊断。', failed: '依赖操作失败，查看具体诊断后重新分析。' }
+      const messages = { restart_pending: '已加入待重启变更，可继续准备其他组件，最后手动重启一次统一生效。', preparing: '正在准备依赖，请等待任务结果。', applied: '启动验证通过，依赖已生效。', no_change: '依赖和托管声明无需变更。', rolled_back: '依赖操作失败或已撤销，原环境已恢复。', recovery_required: '回滚尚未确认，请保留任务记录并处理诊断。', failed: '本项依赖准备失败；此前已准备的变更保留，请查看任务状态。' }
       return messages[this.result?.apply_mode] || '操作结果待核对，请刷新任务状态。'
     },
   },
   created() {
     this.epoch = 0; this.readEpoch = 0; this.requests = new Set()
-    this.operationId = sessionStorage.getItem(storageKey) || ''
     this.onVisibility = () => { if (document.hidden) this.pause(); else if (this.visible) this.resume() }
     this.onExpired = () => { this.expired = true; this.pause(); this.error = '登录已过期；已提交任务继续执行，请重新登录后查看。' }
     document.addEventListener('visibilitychange', this.onVisibility)
@@ -61,16 +66,47 @@ export default {
   },
   beforeDestroy() { this.pause(); this.unsubscribe?.(); document.removeEventListener('visibilitychange', this.onVisibility); window.removeEventListener('zhenxun-auth-expired', this.onExpired) },
   mounted() { if (this.visible) this.open() },
-  watch: { visible(value) { if (value) this.open(); else this.pause() } },
+  watch: {
+    visible(value) { if (value) this.open(); else this.pause() },
+    componentKey() { this.pause(); this.operationId = ''; this.result = null; this.preview = null; if (this.visible) this.open() },
+    operationIds() { this.mergeTrackedIds(this.operationIds) },
+  },
   methods: {
-    open() {
-      if (this.packages.length && !this.pending) { this.action = 'install'; this.input = this.packages.join('\n'); this.invalidate() }
-      this.resume()
+    async open() {
+      this.pause(); this.preview = null; this.error = ''
+      const epoch = this.epoch
+      let saved = []
+      try { saved = JSON.parse(sessionStorage.getItem(this.trackingKey + ':history') || '[]') } catch (_) { saved = [] }
+      this.trackedIds = []
+      this.mergeTrackedIds([...(Array.isArray(saved) ? saved : []), ...this.operationIds])
+      this.operationId = sessionStorage.getItem(this.trackingKey) || this.operationIds[this.operationIds.length - 1] || ''
+      this.result = null
+      if (this.operationId) { this.mergeTrackedIds([this.operationId]); await this.refreshOperation() }
+      if (epoch === this.epoch && this.visible && this.packages.length && !this.pending) { this.action = 'install'; this.input = this.packages.join('\n') }
+    },
+    mergeTrackedIds(ids) {
+      this.trackedIds = [...new Set([...this.trackedIds, ...ids.filter(id => typeof id === 'string' && /^[0-9a-f]{32}$/.test(id))])].slice(-100)
+      sessionStorage.setItem(this.trackingKey + ':history', JSON.stringify(this.trackedIds))
+    },
+    async trackOperation(id) {
+      if (this.busy || this.frozen || this.expired) return
+      this.pause(); this.operationId = id; this.result = null; this.preview = null; this.error = ''; this.operationMissing = false
+      sessionStorage.setItem(this.trackingKey, id)
+      await this.refreshOperation()
+    },
+    prepareNext() {
+      if (!this.readyToAppend || this.busy || this.frozen || this.expired) return
+      this.pause(); this.operationId = ''; this.result = null; this.preview = null; this.error = ''; this.input = ''
+      sessionStorage.removeItem(this.trackingKey)
+    },
+    notifyChange() {
+      this.$emit('changed')
+      this.$store.dispatch('restartStatus/refresh', { request: config => this.getRequest(this.$root.prefix + '/system/restart/status', {}, config), alive: () => this.visible && !this.expired && !this.frozen, force: true }).catch(() => undefined)
     },
     pause() { this.epoch++; clearTimeout(this.timer); clearTimeout(this.analysisTimer); for (const controller of this.requests) controller.abort(); this.requests.clear(); this.busy = false },
     resume() { if (!this.expired && !this.frozen && !document.hidden && this.operationId) this.refreshOperation() },
     close() { this.$emit('update:visible', false) },
-    invalidate() { if (!this.pending) this.pause(); this.preview = null; this.error = ''; if (!this.pending && this.result?.status !== 'not_found') { this.operationId = ''; this.result = null; sessionStorage.removeItem(storageKey) } if (this.values().length && !this.pending) this.analysisTimer = setTimeout(() => this.analyze(), 650) },
+    invalidate() { if (!this.pending) this.pause(); this.preview = null; this.error = ''; if (!this.pending && this.result?.status !== 'not_found') { this.operationId = ''; this.result = null; sessionStorage.removeItem(this.trackingKey) } if (this.values().length && !this.pending) this.analysisTimer = setTimeout(() => this.analyze(), 650) },
     reanalyzeMissing() { if (!this.operationMissing || this.busy) return; this.preview = null; this.result = { status: 'not_found' }; this.error = '服务端尚未找到此操作。可以重新分析，后续提交仍使用原操作编号，避免重复执行。' },
     values() { return this.input.split(/\n/).map(item => item.trim()).filter(Boolean) },
     diagnostic(error) {
@@ -94,7 +130,7 @@ export default {
       clearTimeout(this.analysisTimer)
       if (this.busy || this.pending || this.frozen || this.expired) return
       if (!this.values().length) { this.error = '请输入包名'; return }
-      if (this.operationId && this.result?.status !== 'not_found') { this.operationId = ''; this.result = null; sessionStorage.removeItem(storageKey) }
+      if (this.operationId && this.result?.status !== 'not_found') { this.operationId = ''; this.result = null; sessionStorage.removeItem(this.trackingKey) }
       const epoch = ++this.epoch; this.busy = true; this.error = ''
       try { const result = await this.request('post', '/plugin/dependencies/preview', { dependencies: this.values(), handle_type: this.action }); if (epoch === this.epoch) this.preview = result }
       catch (error) { if (epoch === this.epoch) this.error = this.diagnostic(error) }
@@ -103,13 +139,13 @@ export default {
     async submit() {
       if (this.busy || this.pending || !this.preview || this.frozen || this.expired) return
       if (!this.operationId) this.operationId = newOperationId()
-      sessionStorage.setItem(storageKey, this.operationId)
+      sessionStorage.setItem(this.trackingKey, this.operationId); this.mergeTrackedIds([this.operationId])
       const epoch = ++this.epoch; this.busy = true; this.error = ''; this.operationMissing = false; this.result = { status: 'running', apply_mode: 'preparing' }
       try {
         const result = await this.request('post', '/plugin/install_dependencies', { dependencies: this.values(), handle_type: this.action, preview_id: this.preview.preview_id, expected_fingerprint: this.preview.fingerprint, operation_id: this.operationId, confirmed: true, confirm_source_build: Boolean(this.preview.source_build_required), summary_revision: this.preview.summary_revision })
         if (epoch !== this.epoch) return
         this.result = result; this.preview = null
-        if (result.apply_mode === 'restart_pending') this.showOperation()
+        this.notifyChange()
       } catch (error) {
         if (epoch !== this.epoch) return
         if (error?.info === 'environment_analysis_stale' && !this.retryingPreview) {
@@ -120,7 +156,7 @@ export default {
             if (epoch !== this.epoch) return
             this.preview = refreshed; this.result = null; this.busy = false
             if (previous && previous === refreshed.summary_revision) { await this.submit(); return }
-            this.operationId = ''; sessionStorage.removeItem(storageKey); this.error = '环境已变化，摘要已更新；请核对差异后确认。'; return
+            this.operationId = ''; sessionStorage.removeItem(this.trackingKey); this.error = '环境已变化，摘要已更新；请核对差异后确认。'; return
           } catch (refreshError) { if (epoch === this.epoch) this.error = this.diagnostic(refreshError) }
           finally { this.retryingPreview = false }
           return
@@ -128,7 +164,7 @@ export default {
         if (error?.info === 'plugin_operation_input_changed') { this.preview = null; this.error = '原操作已被接受，继续查询原任务；本次输入未重复提交。'; await this.refreshOperation(); return }
         if (error?.suc === false && ['dependency_preview_required', 'dependency_confirmation_required', 'environment_analysis_stale', 'dependency_transaction_pending', 'plugin_operation_in_progress', 'source_build_confirmation_required', 'dependency_repair_requires_launcher'].includes(error.info)) {
           this.result = { status: 'failed', apply_mode: 'failed' }; this.preview = null
-          this.operationId = ''; sessionStorage.removeItem(storageKey); this.error = this.diagnostic(error); return
+          this.operationId = ''; sessionStorage.removeItem(this.trackingKey); this.error = this.diagnostic(error); return
         }
         this.error = `${this.diagnostic(error)}；请查询原操作状态，不要重复提交。`
         await this.refreshOperation()
@@ -143,7 +179,9 @@ export default {
         const record = await this.request('get', `/store/operations/${this.operationId}`)
         if (epoch !== this.epoch || readEpoch !== this.readEpoch) return
         this.operationMissing = false
+        const changed = this.result?.status !== record.status || this.result?.apply_mode !== record.result?.apply_mode
         this.result = { ...record.result, status: record.status }
+        if (changed) this.notifyChange()
         if (this.result.diagnostic) this.error = this.result.diagnostic
         if (record.status === 'running') this.timer = setTimeout(() => this.refreshOperation(), 1000)
       } catch (error) { if (epoch === this.epoch && readEpoch === this.readEpoch) { this.operationMissing = error?.info === 'plugin_operation_not_found'; this.error = this.diagnostic(error) } }
@@ -160,6 +198,7 @@ export default {
         if (epoch !== this.epoch) return
         this.preview = null
         await this.refreshOperation()
+        this.notifyChange()
       } catch (error) { if (epoch === this.epoch) this.error = this.diagnostic(error) }
       finally { if (epoch === this.epoch) this.busy = false }
     },
@@ -173,6 +212,7 @@ export default {
 
 <style scoped>
 .el-radio-group, .el-textarea, .el-alert { margin-bottom: 16px; }
+.operation-history { width: 100%; margin-bottom: 12px; }
 .dependency-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 0; }
 p, code, .dependency-result { overflow-wrap: anywhere; white-space: pre-wrap; }
 ::v-deep .el-dialog__footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }

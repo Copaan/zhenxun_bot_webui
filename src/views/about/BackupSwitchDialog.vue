@@ -12,7 +12,7 @@
       <DatabaseFields v-model="database" />
     </el-form>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
-    <p class="backup-warning">目标数据库必须为空。Bot 将重启，期间 WebUI 暂时无法访问。</p>
+    <p class="backup-warning">目标数据库必须为空。先在线预检，通过后自动停写、保存最终快照并切换；无需再次点击重启。</p>
     <span slot="footer">
       <el-button @click="$emit('close')">取消</el-button>
       <el-button type="primary" :loading="submitting" @click="submit">复制数据并切换</el-button>
@@ -21,6 +21,8 @@
 </template>
 
 <script>
+import { isAuthenticationExpired } from "@/utils/auth-session"
+import { newOperationId } from "@/utils/plugin-operation"
 import DatabaseFields from "@/components/system/DatabaseFields.vue"
 
 const initial = () => ({ mode: "sqlite", path: "data/db/zhenxun-new.db", host: "127.0.0.1", port: null, username: "", password: "", database: "" })
@@ -29,10 +31,12 @@ export default {
   name: "BackupSwitchDialog",
   components: { DatabaseFields },
   props: { visible: { type: Boolean, default: false } },
-  data() { return { database: initial(), submitting: false, error: "" } },
+  data() { return { operationId: "", operationInput: "", database: initial(), submitting: false, error: "" } },
   watch: {
-    visible(value) { if (value) { this.database = initial(); this.error = "" } },
+    visible(value) { this.requestGeneration += 1; this.submitting = false; if (value) { this.database = initial(); this.error = ""; this.operationId = "" } },
   },
+  created() { this.requestGeneration = 0; this.expired = () => { this.requestGeneration += 1; this.submitting = false; this.loading = false }; window.addEventListener("zhenxun-auth-expired", this.expired) },
+  beforeDestroy() { this.requestGeneration += 1; this.disposed = true; window.removeEventListener("zhenxun-auth-expired", this.expired) },
   methods: {
     changeMode(mode) {
       this.database.port = { mysql: 3306, postgres: 5432 }[mode] || null
@@ -40,13 +44,21 @@ export default {
       if (mode === "mysql" && !this.database.username) this.database.username = "root"
     },
     async submit() {
+      if (this.submitting) return
+      if (this.disposed || !this.visible || isAuthenticationExpired()) return
+      const generation = this.requestGeneration
+      const input = JSON.stringify(this.database)
+      if (input !== this.operationInput) { this.operationId = ""; this.operationInput = input }
+      this.operationId = this.operationId || newOperationId()
+      sessionStorage.setItem("zhenxun_restore_operation", this.operationId)
       this.submitting = true; this.error = ""
       try {
-        const response = await this.postRequest(`${this.$root.prefix}/backup/switch`, this.database, { timeout: 0 })
+        const response = await this.postRequest(`${this.$root.prefix}/backup/switch`, { ...this.database, operation_id: this.operationId }, { timeout: 0 })
+        if (this.disposed || generation !== this.requestGeneration || isAuthenticationExpired()) return
         if (!response?.suc) throw new Error(response?.info)
         this.$emit("submitted", response.data)
-      } catch (error) { this.error = error.message || "切换失败" }
-      finally { this.submitting = false }
+      } catch (error) { if (!this.disposed && generation === this.requestGeneration) this.error = error.message || "切换失败" }
+      finally { if (!this.disposed && generation === this.requestGeneration) this.submitting = false }
     },
   },
 }

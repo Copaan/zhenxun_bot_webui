@@ -21,7 +21,7 @@
                 <span class="bar chat" :style="{ height: `${row.chatHeight}%` }"></span>
                 <span class="bar call" :style="{ height: `${row.callHeight}%` }"></span>
               </div>
-              <small>{{ row.label }}</small>
+              <small>{{ row.label.slice(-5) }}</small>
             </div>
           </el-tooltip>
         </div>
@@ -122,12 +122,12 @@ export default {
 <style scoped>
 .analytics-wrap { min-height: 210px; }
 .trend-panel, .ranking-panel { padding: 18px; border: 1px solid var(--border-color); background: var(--bg-color); }
-.panel-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.panel-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .panel-title span { color: var(--text-color-secondary); font-size: 12px; }
 .legend { display: inline-block; width: 8px; height: 8px; margin: 0 5px 0 12px; }
 .legend.chat, .bar.chat { background: var(--primary-color); }
 .legend.call, .bar.call { background: var(--el-color-info); }
-.trend-bars { display: grid; height: 190px; grid-template-columns: repeat(30, minmax(6px, 1fr)); gap: 4px; align-items: end; }
+.trend-bars { display: grid; height: 190px; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 4px; align-items: end; }
 .trend-day { display: flex; height: 100%; min-width: 0; flex-direction: column; justify-content: flex-end; text-align: center; }
 .bar-stack { display: flex; height: 150px; align-items: flex-end; justify-content: center; gap: 2px; border-bottom: 1px solid var(--border-color); }
 .bar { display: block; width: 35%; min-height: 2px; }
@@ -135,6 +135,7 @@ export default {
 .trend-tip { display: flex; flex-direction: column; gap: 4px; line-height: 1.4; }
 .trend-tip .legend { margin: 0 6px 0 0; }
 .trend-day small { height: 20px; overflow: visible; white-space: nowrap; margin-top: 6px; color: var(--text-color-secondary); font-size: 10px; }
+.trend-day:last-child small { align-self: flex-end; }
 .ranking-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 .ranking-list { display: flex; flex-direction: column; gap: 11px; }
 .ranking-row { display: grid; grid-template-columns: minmax(80px, 1fr) 2fr 42px; gap: 10px; align-items: center; font-size: 13px; }
@@ -145,4 +146,8 @@ export default {
 .feedback { display: flex; min-height: 150px; align-items: center; justify-content: center; gap: 10px; color: var(--text-color-secondary); }
 .feedback.is-error { min-height: 100px; color: var(--el-color-danger); }
 @media (max-width: 800px) { .ranking-grid { grid-template-columns: 1fr; } .trend-bars { gap: 1px; } }
+@media (max-width: 600px) {
+  .trend-day:not(:first-child):not(:nth-child(16)):not(:last-child) small { visibility: hidden; }
+  .trend-day:nth-child(16) small { align-self: center; }
+}
 </style>

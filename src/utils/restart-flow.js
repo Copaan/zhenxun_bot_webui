@@ -1,6 +1,12 @@
 import { startRestartRecovery } from "@/utils/restart-recovery"
+import { isBusinessNetworkFrozen } from "@/utils/restart-network"
+
+let submitting = false
+let confirming = false
 
 export async function confirmRestart(vm, message) {
+  if (confirming || submitting || isBusinessNetworkFrozen()) return false
+  confirming = true
   try {
     await vm.$confirm(message, "配置已保存", {
       type: "warning",
@@ -11,16 +17,21 @@ export async function confirmRestart(vm, message) {
     return true
   } catch (error) {
     return false
+  } finally {
+    confirming = false
   }
 }
 
 export async function requestRestartWithRecovery(vm, { request, recovery = {} }) {
-  const loading = vm.$loading({
-    lock: true,
-    text: "正在提交重启请求...",
-    background: "rgba(250, 251, 253, 0.96)",
-  })
+  if (submitting || isBusinessNetworkFrozen() || vm._isDestroyed || vm._isBeingDestroyed || vm.destroyed) return false
+  submitting = true
+  let loading
   try {
+    loading = vm.$loading({
+      lock: true,
+      text: "正在提交重启请求...",
+      background: "rgba(250, 251, 253, 0.96)",
+    })
     const response = await request()
     if (!response || !response.suc) {
       throw new Error((response && response.info) || "重启请求未被接受。")
@@ -41,7 +52,8 @@ export async function requestRestartWithRecovery(vm, { request, recovery = {} })
     })
     return true
   } finally {
-    loading.close()
+    submitting = false
+    loading?.close()
   }
 }
 

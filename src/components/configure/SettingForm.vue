@@ -66,6 +66,12 @@
       </div>
 
       <template v-else-if="mode === 'restore'">
+        <el-alert v-if="restoreTask.state && restoreTask.state !== 'idle'" :title="restoreTaskMessage" :type="restoreTask.state === 'recovery_required' ? 'error' : 'info'" :closable="false" show-icon class="last-restore" />
+        <div v-if="restoreTask.state === 'preparing' && restoreTask.preparation">
+          <pre v-if="restoreTask.preparation.confirmation_required" class="restore-preparation-changes">{{ JSON.stringify({ 版本调整: restoreTask.preparation.changes.nearby, 跳过插件: restoreTask.preparation.changes.skipped_plugins }, null, 2) }}</pre>
+          <el-button v-if="restoreTask.preparation.retryable" :loading="retryingRestore" :disabled="retryingRestore || restoreTask.cancel_requested" @click="retryPreparation">{{ restoreTask.preparation.confirmation_required ? '确认变更并继续' : '重试原任务' }}</el-button>
+          <el-button :loading="retryingRestore" :disabled="retryingRestore || (restoreTask.cancel_requested && restoreTask.preparation.phase !== 'cleanup_pending')" @click="cancelPreparation">{{ restoreTask.preparation.phase === 'cleanup_pending' ? '重试候选清理' : '取消准备' }}</el-button>
+        </div>
         <div class="step-body">
           <section class="step-section">
             <div class="step-intro">
@@ -384,6 +390,7 @@
 </template>
 
 <script>
+import { newOperationId } from "@/utils/plugin-operation"
 import { getAuthToken } from "@/utils/auth-token"
 import { uploadBackupInChunks } from "@/utils/chunk-upload"
 import { reasonLabels } from "@/utils/plugin-operation"
@@ -455,6 +462,11 @@ export default {
       applyError: "",
       restartUrls: [],
       uploading: null,
+      restoreOperationId: "",
+      restoreTask: {},
+      retryingRestore: false,
+      restoreHandoff: "",
+      restoreConfirming: false,
       backupName: "",
       backupPassword: "",
       backupSummary: null,
@@ -529,7 +541,22 @@ export default {
       return access?.password_set ? access.username || "" : ""
     },
     canRestore() {
-      return Boolean(this.restoredUsername && this.results.database && this.results.database.status !== "error" && !this.restoring)
+      return Boolean(this.restoredUsername && this.results.database && this.results.database.status !== "error" && !this.restoring && !this.restoreTaskRunning)
+    },
+    restoreTaskRunning() {
+      return ["preparing", "pending", "snapshot_ready", "applying", "awaiting_orm", "importing", "verifying", "committing", "failed_import", "rollback_import", "rollback_target", "rollback_verifying", "recovery_required"].includes(this.restoreTask.state)
+    },
+    restoreTaskMessage() {
+      if (this.restoreTask.state === "preparing") {
+        const preparation = this.restoreTask.preparation || {}
+        const phases = { waiting_credentials: "等待补充备份包密码", orm_check: "核对 ORM 状态（只读）", checking: "只读检查", dependencies: "解析依赖", building: "构建候选", rechecking: "切换复核", switching: "准备切换", waiting_confirmation: "等待确认影响变化", blocked: "准备未完成，原实例未变更", interrupted: "准备已暂停", cleanup_pending: "候选清理待重试" }
+        return (phases[preparation.phase] || "在线准备") + "。" + (preparation.error || "准备通过后自动切换，请勿重复提交。")
+      }
+      const labels = { preparing: "准备中", pending: "等待停写", snapshot_ready: "快照已保存", applying: "应用依赖与文件", awaiting_orm: "等待控制台处理插件数据库", importing: "导入中", verifying: "启动验证中", committing: "提交结算中", failed_import: "准备回滚", rollback_import: "回滚中", rollback_target: "目标数据库回退中", rollback_verifying: "回滚验证中", done: "恢复完成", done_partial: "部分恢复完成", rolled_back: "失败且已确认回滚", failed: "准备失败", recovery_required: "结果待核验", canceled: "已取消" }
+      const names = { target_database: "目标数据库", original_instance: "原实例启动", dependencies: "依赖层", files: "文件", orm: "插件 ORM" }
+      const states = { confirmed: "已确认", pending: "等待核验", unconfirmed: "结果未确认", not_applicable: "无需回退" }
+      const components = Object.entries(this.restoreTask.rollback_components || {}).map(([name, state]) => (names[name] || name) + "：" + (states[state] || state)).join("；")
+      return "原恢复任务：" + (labels[this.restoreTask.state] || this.restoreTask.state) + "。" + (this.restoreTask.rollback_error || this.restoreTask.error || (this.restoreTaskRunning ? "正在续查原任务，请勿重复上传或提交。" : "")) + (components ? " " + components : "")
     },
     canApply() {
       const noErrors = this.reviewItems.every((item) => item.status !== "error")
@@ -542,10 +569,36 @@ export default {
     network: { deep: true, handler() { this.results.network = null } },
   },
   created() { this.readSequence = 0; this.requestControllers = new Set(); this.onExpired = () => { this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.claimed = false; this.accessError = "会话已过期，连接已断开。" }; window.addEventListener("zhenxun-auth-expired", this.onExpired) },
-  mounted() { this.loadStatus() },
-  beforeDestroy() { window.removeEventListener("zhenxun-auth-expired", this.onExpired); this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.requestControllers.clear() },
+  mounted() { document.addEventListener("visibilitychange", this.restoreVisibilityChanged); this.loadStatus() },
+  beforeDestroy() { this.disposed = true; document.removeEventListener("visibilitychange", this.restoreVisibilityChanged); window.removeEventListener("zhenxun-auth-expired", this.onExpired); this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.requestControllers.clear() },
   methods: {
-    cancelReads() { this.readSequence++; this.statusController?.abort(); this.initializing = false },
+    cancelReads() { this.readSequence++; clearTimeout(this.restoreTimer); this.statusController?.abort(); this.initializing = false },
+    restoreVisibilityChanged() {
+      this.cancelReads()
+      if (!document.hidden && !this.disposed && this.claimed) this.loadStatus(false)
+    },
+    async resumeRestore() {
+      const operationId = sessionStorage.getItem("zhenxun_restore_operation")
+      if (!operationId || !this.claimed || document.hidden || this.disposed) return
+      const sequence = this.readSequence
+      clearTimeout(this.restoreTimer)
+      try {
+        const response = await this.getRequest(`${this.$root.prefix}/configure/backup/restore`, { operation_id: operationId }, { ...this.setupHeaders, suppressErrorToast: true })
+        if (sequence !== this.readSequence || !this.claimed || this.disposed) return
+        if (response?.suc && response.data?.state !== "idle") {
+          this.restoreTask = response.data
+          if (response.data.restart_info?.boot_id && (response.data.state !== "preparing" || response.data.preparation?.phase === "switching") && this.restoreHandoff !== operationId) {
+            this.restoreHandoff = operationId
+            this.restoreRestart(response.data.restart_info)
+          }
+          this.restoreOperationId = operationId
+          this.mode = "restore"
+        }
+      } catch {
+        if (sequence === this.readSequence && this.claimed) this.restoreError = "原任务状态暂不可确认，请稍后重试，不要重复提交。"
+      }
+      if (sequence === this.readSequence && this.claimed && !this.disposed && !document.hidden && this.restoreTaskRunning) this.restoreTimer = setTimeout(() => this.resumeRestore(), 2000)
+    },
     async loadStatus(loadDraft = true) {
       const sequence = ++this.readSequence
       this.statusController?.abort()
@@ -573,6 +626,7 @@ export default {
         if (this.setupToken) {
           this.claimed = true
           if (loadDraft === true) await this.loadDraft(sequence, controller.signal)
+          if (sequence === this.readSequence) await this.resumeRestore()
         }
       } catch (error) {
         if (sequence === this.readSequence && !controller.signal.aborted) this.accessError = "配置状态读取失败，请重新检查状态。"
@@ -746,11 +800,13 @@ export default {
     },
     async openRestore() {
       this.mode = "restore"
+      await this.resumeRestore()
+      if (this.restoreTaskRunning) return
       this.lastRestoreError = ""
       try {
         const response = await this.getRequest(`${this.$root.prefix}/configure/backup/restore`, null, { ...this.setupHeaders, suppressErrorToast: true })
         const status = response?.data || {}
-        if (!["failed", "rolled_back", "rollback_failed"].includes(status.state)) return
+        if (!["failed", "rolled_back", "rollback_failed", "recovery_required"].includes(status.state)) return
         const label = reasonLabels[status.error_code]
         this.lastRestoreError = status.rollback_error
           || (label ? `依赖无法安装：${label}${status.error_detail ? `（${status.error_detail}）` : ""}` : status.error)
@@ -760,8 +816,9 @@ export default {
     async uploadBackup(event) {
       const file = event.target.files[0]
       event.target.value = ""
+      if (this.restoreTaskRunning || this.restoring) return
       if (!file) return
-      Object.assign(this, { uploading: 0, restoreError: "", backupName: "", backupPassword: "", backupSummary: null })
+      Object.assign(this, { restoreOperationId: "", uploading: 0, restoreError: "", backupName: "", backupPassword: "", backupSummary: null })
       try {
         this.backupName = await uploadBackupInChunks(`${this.$root.prefix}/configure/backup`, file, {
           config: this.setupHeaders,
@@ -791,16 +848,70 @@ export default {
         this.restoreError = this.requestError(error, "读取备份失败")
       } finally { this.inspecting = false }
     },
+    async cancelPreparation() {
+      if (this.retryingRestore || !this.claimed || this.restoreTask.state !== "preparing") return
+      this.retryingRestore = true
+      const sequence = this.readSequence
+      try {
+        const response = await this.deleteRequest(this.$root.prefix + "/configure/backup/restore?operation_id=" + encodeURIComponent(this.restoreTask.operation_id), null, { ...this.setupHeaders, suppressErrorToast: true })
+        if (sequence !== this.readSequence || !this.claimed || this.disposed) return
+        if (!response?.suc) throw new Error(response?.info || "取消请求未接受")
+        await this.resumeRestore()
+      } catch (error) {
+        if (sequence === this.readSequence && this.claimed && !this.disposed) this.restoreError = this.requestError(error, "取消失败，可重试原任务")
+      } finally { this.retryingRestore = false }
+    },
+    async retryPreparation() {
+      if (this.retryingRestore || !this.claimed || !this.restoreTask.preparation?.retryable) return
+      this.retryingRestore = true
+      const sequence = this.readSequence
+      try {
+        if (this.restoreTask.preparation.password_required && !this.backupPassword) {
+          try {
+            const answer = await this.$prompt("请输入原备份包密码，继续同一任务", "补充解密密码", { inputType: "password", inputValidator: value => !!value || "请输入密码" })
+            this.backupPassword = answer.value
+          } catch { return }
+        }
+        if (sequence !== this.readSequence || !this.claimed || this.disposed) return
+        const response = await this.postRequest(this.$root.prefix + "/configure/backup/restore", {
+          operation_id: this.restoreTask.operation_id, retry: true,
+          password: this.backupPassword || null,
+          confirmation_digest: this.restoreTask.preparation.confirmation_required ? this.restoreTask.preparation.impact_digest : null,
+        }, { ...this.setupHeaders, suppressErrorToast: true })
+        if (sequence !== this.readSequence || !this.claimed || this.disposed) return
+        if (!response?.suc) throw new Error(response?.info || "无法继续准备")
+        await this.resumeRestore()
+      } catch (error) {
+        if (sequence === this.readSequence && this.claimed) this.restoreError = this.requestError(error, "重试失败")
+      } finally { this.retryingRestore = false }
+    },
+    restoreRestart(data) {
+      this.serverState = "restart_pending"
+      startRestartRecovery({
+        bootId: data.boot_id, accessUrls: data.access_urls, accessTargets: data.access_targets,
+        preferredUrl: data.preferred_url, returnRoute: "/", setup: true,
+        message: "候选已准备，正在自动切换。完成后请使用备份中的管理员登录并查看恢复结果。",
+      })
+    },
     async startRestore() {
-      if (!this.canRestore) return
+      if (!this.canRestore || this.restoreConfirming) return
+      this.restoreConfirming = true
       try {
         await this.$confirm(`备份中的配置、插件与数据将恢复到本机，完成后使用管理员账号 ${this.restoredUsername} 登录。`, "确认恢复", { type: "warning", confirmButtonText: "开始恢复", cancelButtonText: "取消" })
-      } catch { return }
+      } catch { return } finally { this.restoreConfirming = false }
+      if (this.restoring) return
+      if (!this.claimed) return
+      const generation = this.readSequence
+      const input = JSON.stringify([this.backupName, this.backupPassword, [...this.restoreCategories].sort(), this.skipFailed, this.database])
+      if (input !== this.restoreOperationInput) { this.restoreOperationId = ""; this.restoreOperationInput = input }
+      this.restoreOperationId = this.restoreOperationId || newOperationId()
+      sessionStorage.setItem("zhenxun_restore_operation", this.restoreOperationId)
       this.restoring = true; this.restoreError = ""
       try {
         const response = await this.postRequest(
           `${this.$root.prefix}/configure/backup/restore`,
           {
+            operation_id: this.restoreOperationId,
             name: this.backupName,
             password: this.backupPassword || null,
             categories: this.restoreCategories,
@@ -810,7 +921,12 @@ export default {
           { ...this.setupHeaders, timeout: 0, suppressErrorToast: true }
         )
         if (!response?.suc) throw new Error(response?.info)
+        if (generation !== this.readSequence || !this.claimed) return
         const data = response.data
+        if (!data.boot_id) {
+          await this.resumeRestore()
+          return
+        }
         this.serverState = "restart_pending"
         startRestartRecovery({
           bootId: data.boot_id,
@@ -822,8 +938,8 @@ export default {
           setup: true,
         })
       } catch (error) {
-        this.restoreError = this.requestError(error, "恢复失败")
-      } finally { this.restoring = false }
+        if (generation === this.readSequence && this.claimed) this.restoreError = this.requestError(error, "恢复失败")
+      } finally { if (generation === this.readSequence) this.restoring = false }
     },
     requestError(error, fallback) {
       return error.response?.data?.detail || error.message || fallback

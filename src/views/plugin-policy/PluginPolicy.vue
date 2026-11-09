@@ -255,7 +255,7 @@ export default {
       accounts: [], policies: [], catalog: { plugins: [], tasks: [] },
       selectedBotId: "", account: null, editingPolicy: null,
       policyScope: "account", groups: [], groupAccount: null, selectedGroupKey: "", privateAccount: null, selectionRequest: 0, listRequest: 0, destroyed: false,
-      draft: { plugins: [], tasks: [] },
+      draft: { plugins: [], tasks: [] }, touchedTasks: [],
       activeKind: "plugins", accountSearch: "", featureSearch: "", statusFilter: "all", selectedModules: [], visibleCount: FEATURE_PAGE_SIZE,
       deletingAccount: false, createDialogVisible: false, policyDialogVisible: false, bindDialogVisible: false, copyDialogVisible: false,
       createForm: { name: "", description: "", bindCurrent: true },
@@ -332,7 +332,7 @@ export default {
     },
     groupKey(group) { return JSON.stringify([group.platform_scope, group.group_id, group.channel_id || ""]) },
     groupUrl(group) { return `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}/groups/${encodeURIComponent(group.group_id)}?platform_scope=${encodeURIComponent(group.platform_scope)}&channel_id=${encodeURIComponent(group.channel_id || "")}` },
-    setDraft(record) { this.draft = { plugins: sorted(record.block_plugins), tasks: sorted(record.block_tasks) }; this.selectedModules = [] },
+    setDraft(record) { this.draft = { plugins: sorted(record.block_plugins), tasks: sorted(record.block_tasks) }; this.selectedModules = []; this.touchedTasks = [] },
     targetRevisions(botIds) { return Object.fromEntries(botIds.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])) },
     async selectScope(scope, groupId = "") {
       if (this.saving || scope === this.policyScope) return
@@ -439,29 +439,31 @@ export default {
       else values.add(module)
       this.saving = true
       try {
-        const resp = await this.putRequest(this.groupUrl(target), { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks, [field]: sorted(values) }, { suppressErrorToast: true })
+        const resp = await this.putRequest(this.groupUrl(target), { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks, [field]: sorted(values), touched_tasks: [] }, { suppressErrorToast: true })
         if (this.destroyed || !resp.suc) return
         this.$message.success(resp.info)
         this.groupAccount = resp.data
         this.setDraft(resp.data)
       } catch (error) {
-        if (error?.response?.status === 409) { this.$message.warning("设置已被其他操作修改，已重新读取最新设置"); this.reloadTarget() } else this.$message.error(apiErrorDetail(error, "保存失败"))
+        if (error?.response?.status === 409) { this.$message.warning("设置已被其他操作修改，已重新读取最新设置"); this.reloadTarget(true) } else this.$message.error(apiErrorDetail(error, "保存失败"))
       } finally { this.saving = false }
     },
     setFeatureEnabled(module, enabled) { this.applyModules([module], enabled) },
     setSelectedEnabled(enabled) { const modules = this.selectedModules; this.selectedModules = []; this.applyModules(modules, enabled) },
     async applyModules(modules, enabled) {
       if (this.saving || !modules.length) return
+      const touchesTasks = !this.editingPolicy && this.policyScope === "group" && this.groupAccount && this.activeKind === "tasks"
+      if (touchesTasks) this.touchedTasks = sorted([...this.touchedTasks, ...modules])
       const values = new Set(this.draft[this.activeKind])
       modules.forEach((module) => enabled ? values.delete(module) : values.add(module))
       const next = { ...this.draft, [this.activeKind]: sorted(values) }
-      if (JSON.stringify(next) === JSON.stringify(this.draft)) return
+      if (JSON.stringify(next) === JSON.stringify(this.draft) && !touchesTasks) return
       if (!this.editingPolicy && this.policyScope === "account" && this.account?.mode === "linked") {
         try { await this.$confirm(`此账号正在使用共享策略「${this.account.policy.name}」，修改后将解除共享并转为独立设置。`, "解除共享策略", { type: "warning" }) } catch (_) { return }
       }
       const previous = this.draft
       this.draft = next
-      if (!await (this.editingPolicy ? this.savePolicy() : this.saveTarget())) this.draft = previous
+      if (!await (this.editingPolicy ? this.savePolicy() : this.saveTarget(touchesTasks ? this.touchedTasks : []))) this.draft = previous
     },
     /**
      * 将功能列表的显示数量恢复为首屏条数
@@ -494,14 +496,14 @@ export default {
       const label = this.effectiveLabel(item)
       return label === "当前启用" ? "success" : label.startsWith("仅") ? "warning" : "danger"
     },
-    async saveTarget() {
+    async saveTarget(touchedTasks = this.touchedTasks) {
       const target = this.groupAccount || this.privateAccount || (this.policyScope === "account" ? this.account : null)
       if (!target) return false
       const base = `${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(this.account.bot_id)}`
       const url = this.groupAccount ? this.groupUrl(target) : this.privateAccount ? `${base}/private` : base
       this.saving = true
       try {
-        const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks }, { suppressErrorToast: true })
+        const resp = await this.putRequest(url, { expected_revision: target.revision, block_plugins: this.draft.plugins, block_tasks: this.draft.tasks, ...(this.groupAccount ? { touched_tasks: sorted(touchedTasks) } : {}) }, { suppressErrorToast: true })
         if (this.destroyed || !resp.suc) return false
         this.$message.success(resp.info)
         if (this.groupAccount) this.groupAccount = resp.data
@@ -515,7 +517,7 @@ export default {
         this.setDraft(resp.data)
         return true
       } catch (error) {
-        if (error?.response?.status === 409) { this.$message.warning("设置已被其他操作修改，已重新读取最新设置"); this.reloadTarget() } else this.$message.error(apiErrorDetail(error, "保存失败"))
+        if (error?.response?.status === 409) { this.$message.warning("设置已被其他操作修改，已重新读取最新设置"); this.reloadTarget(true) } else this.$message.error(apiErrorDetail(error, "保存失败"))
         return false
       } finally { this.saving = false }
     },
@@ -551,7 +553,7 @@ export default {
       if (accounts.suc) this.accounts = accounts.data
       if (policies.suc) this.policies = policies.data
     },
-    async reloadTarget() {
+    async reloadTarget(preserveTouchedTasks = false) {
       if (this.editingPolicy) {
         await this.refreshLists()
         const policy = this.policies.find((item) => item.id === this.editingPolicy?.id)
@@ -559,8 +561,13 @@ export default {
         return
       }
       if (this.groupAccount) {
-        const resp = await this.getRequest(this.groupUrl(this.groupAccount))
-        if (resp.suc && !this.destroyed) { this.groupAccount = resp.data; this.setDraft(resp.data) }
+        const target = this.groupAccount
+        const request = this.selectionRequest
+        const resp = await this.getRequest(this.groupUrl(target))
+        if (resp.suc && !this.destroyed && target === this.groupAccount && request === this.selectionRequest) {
+          const touchedTasks = preserveTouchedTasks ? this.touchedTasks : []
+          this.groupAccount = resp.data; this.setDraft(resp.data); this.touchedTasks = touchedTasks
+        }
         return
       }
       if (this.privateAccount) return this.loadPrivatePolicy()

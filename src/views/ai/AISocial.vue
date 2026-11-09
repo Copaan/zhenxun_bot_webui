@@ -6,9 +6,9 @@
         <p>AI 会收藏群里的表情包并在合适时发送，开启“偷表情”后还会自动收集；也可以手动上传 png / jpg / gif / webp（单张不超过 2MB）。备注和适用场合写得越准，AI 用得越恰当；没有备注的可在“聊天设置”中开启自动补写。共 {{ total }}<template v-if="stickerLimit"> / {{ stickerLimit }}</template> 个<template v-if="blocked">，{{ blocked }} 张设为不再收集（<el-button type="text" size="mini" @click="clearBlocks">清空</el-button>）</template>。</p>
       </div>
       <div class="heading-actions">
-        <el-input v-model="stickerQuery" size="small" clearable placeholder="搜索备注、标签、场合" class="search" @change="loadStickers" />
-        <el-select v-model="source" size="small" clearable placeholder="全部来源" class="filter" @change="loadStickers"><el-option v-for="(label, value) in sourceNames" :key="value" :label="label" :value="value" /></el-select>
-        <el-select v-model="sort" size="small" class="filter" :disabled="!!stickerQuery" @change="loadStickers"><el-option v-for="(label, value) in sortNames" :key="value" :label="label" :value="value" /></el-select>
+        <el-input v-model="stickerQuery" size="small" clearable placeholder="搜索备注、标签、场合" class="search" @change="resetStickerPage" />
+        <el-select v-model="source" size="small" clearable placeholder="全部来源" class="filter" @change="resetStickerPage"><el-option v-for="(label, value) in sourceNames" :key="value" :label="label" :value="value" /></el-select>
+        <el-select v-model="sort" size="small" class="filter" :disabled="!!stickerQuery" @change="resetStickerPage"><el-option v-for="(label, value) in sortNames" :key="value" :label="label" :value="value" /></el-select>
         <el-button size="small" icon="el-icon-download" :loading="importing" @click="importQQ">从 QQ 收藏导入</el-button>
         <el-button size="small" icon="el-icon-upload2" :loading="uploading" @click="$refs.file.click()">上传</el-button>
         <input ref="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="file-input" @change="upload" />
@@ -25,7 +25,7 @@
       <p v-if="!stickers.length" class="muted">{{ stickerQuery || source ? "没有符合条件的表情。" : "表情库是空的。" }}</p>
       <div v-for="s in stickers" :key="s.id" class="sticker-card" :class="{ picked: selected.includes(s.id) }">
         <el-checkbox :value="selected.includes(s.id)" class="pick" :aria-label="`选择表情 ${s.id}`" @change="toggle(s.id)" />
-        <button type="button" class="thumb" :title="`预览表情 #${s.id}`" @click="preview(s)"><img v-if="s.thumb" :src="s.thumb" :alt="s.remark || `表情 ${s.id}`" /></button>
+        <button type="button" class="thumb" :title="`预览表情 #${s.id}`" @click="preview(s)"><img v-if="s.thumb" :src="s.thumb" loading="lazy" decoding="async" :alt="s.remark || `表情 ${s.id}`" /></button>
         <div class="sticker-info">
           <strong>#{{ s.id }} {{ s.remark || "无备注" }}</strong>
           <div v-if="s.tags.length" class="tags"><el-tag v-for="tag in s.tags" :key="tag" size="mini" type="info">{{ tag }}</el-tag></div>
@@ -38,6 +38,8 @@
         </div>
       </div>
     </div>
+
+    <el-pagination v-if="matchedTotal" :current-page="page" :page-size="pageSize" :total="matchedTotal" layout="prev, pager, next" @current-change="changeStickerPage" />
 
     <el-dialog title="编辑表情" :visible.sync="stickerForm.visible" width="520px" append-to-body>
       <el-form label-width="90px" size="small" @submit.native.prevent>
@@ -56,7 +58,7 @@
     <el-dialog title="合并表情" :visible.sync="mergeForm.visible" width="520px" append-to-body>
       <p class="muted">选一个保留，其余的标签并入它、使用次数相加，然后删除并设为不再收集。</p>
       <el-radio-group v-model="mergeForm.keep" class="merge-list">
-        <el-radio v-for="s in selectedStickers" :key="s.id" :label="s.id" class="merge-item"><img v-if="s.thumb" :src="s.thumb" :alt="s.remark || `表情 ${s.id}`" />#{{ s.id }} {{ s.remark || "无备注" }}</el-radio>
+        <el-radio v-for="s in selectedStickers" :key="s.id" :label="s.id" class="merge-item"><img v-if="s.thumb" :src="s.thumb" loading="lazy" decoding="async" :alt="s.remark || `表情 ${s.id}`" />#{{ s.id }} {{ s.remark || "无备注" }}</el-radio>
       </el-radio-group>
       <template #footer>
         <el-button size="small" @click="mergeForm.visible = false">取消</el-button>
@@ -81,6 +83,7 @@ export default {
   data() {
     return {
       stickerLoading: false, uploading: false, importing: false, stickers: [], stickerLimit: 0, stickerQuery: "",
+      page: 1, pageSize: 30, matchedTotal: 0, listRequest: 0, destroyed: false,
       total: 0, blocked: 0, source: "", sort: "used", selected: [],
       stickerForm: { visible: false, saving: false, id: null, remark: "", tags: [], usage: "" },
       mergeForm: { visible: false, saving: false, keep: null },
@@ -94,6 +97,7 @@ export default {
     selectedStickers() { return this.stickers.filter((s) => this.selected.includes(s.id)) },
   },
   mounted() { this.loadStickers() },
+  beforeDestroy() { this.destroyed = true; this.listRequest += 1 },
   methods: {
     async request(method, url, data) {
       const response = await this[`${method}Request`](`${this.$root.prefix}/ai${url}`, data, QUIET)
@@ -104,18 +108,30 @@ export default {
     /**
      * 按关键词、来源和排序加载表情，并去掉已不在列表中的选择
      */
+    resetStickerPage() { this.page = 1; this.selected = []; return this.loadStickers() },
+    changeStickerPage(page) { this.page = page; this.selected = []; return this.loadStickers() },
     async loadStickers() {
+      if (this.destroyed) return
+      const request = ++this.listRequest
       this.stickerLoading = true
       try {
-        const response = await this.request("get", "/chat/stickers", { query: this.stickerQuery || undefined, source: this.source || undefined, sort: this.sort })
+        const response = await this.request("get", "/chat/stickers", { query: this.stickerQuery || undefined, source: this.source || undefined, sort: this.sort, page: this.page, page_size: this.pageSize })
+        if (this.destroyed || request !== this.listRequest) return
         const data = response.data
+        this.matchedTotal = data.matched_total
+        const lastPage = Math.max(1, Math.ceil(data.matched_total / this.pageSize))
+        if (this.page > lastPage) { this.page = lastPage; return this.loadStickers() }
         this.stickers = data.items
         this.stickerLimit = data.limit
         this.total = data.total
         this.blocked = data.blocked
         const ids = new Set(data.items.map((s) => s.id))
         this.selected = this.selected.filter((id) => ids.has(id))
-      } catch (error) { this.fail(error, "表情库加载失败。") } finally { this.stickerLoading = false }
+      } catch (error) {
+        if (!this.destroyed && request === this.listRequest) this.fail(error, "表情库加载失败。")
+      } finally {
+        if (!this.destroyed && request === this.listRequest) this.stickerLoading = false
+      }
     },
     toggle(id) {
       this.selected = this.selected.includes(id) ? this.selected.filter((item) => item !== id) : [...this.selected, id]
@@ -231,7 +247,7 @@ export default {
 .file-input { display: none; }
 .batch-bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px; }
 .batch-bar .el-button + .el-button { margin-left: 0; }
-.sticker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; min-height: 60px; }
+.sticker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 12px; min-height: 60px; }
 .sticker-card { position: relative; display: flex; gap: 12px; padding: 10px; border: 1px solid var(--border-color-light); border-radius: 8px; background: var(--bg-color-secondary); transition: border-color 0.2s; }
 .sticker-card.picked { border-color: var(--primary-color, #409eff); }
 .pick { position: absolute; top: 6px; left: 8px; z-index: 1; }

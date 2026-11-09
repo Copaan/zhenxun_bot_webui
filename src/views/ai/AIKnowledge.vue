@@ -18,10 +18,11 @@
         <el-button type="text" size="mini" @click="$router.push({ path: '/ai', query: { section: 'routing' } })">去设置默认模型</el-button>
       </div>
       <div v-for="c in status.components" :key="c.key" class="zx-panel status-card">
-        <strong>{{ c.title }} <el-tag size="mini" :type="c.installed ? 'success' : 'info'">{{ c.installed ? "已安装" : "未安装" }}</el-tag></strong>
+        <strong>{{ c.title }} <el-tag size="mini" :type="c.installed ? 'success' : 'info'">{{ componentStateText(c) }}</el-tag></strong>
         <small class="muted">{{ c.description }}</small>
         <small class="mono muted">{{ c.packages.join(" ") }}</small>
-        <el-button v-if="!c.installed" size="mini" icon="el-icon-download" @click="install(c)">安装</el-button>
+        <small v-if="c.install_state === 'restart_pending'" class="muted">可继续准备其他组件，最后手动重启一次统一生效。</small>
+        <el-button v-if="!c.installed || (c.install_operation_ids || []).length" size="mini" icon="el-icon-download" @click="install(c)">{{ (c.install_operation_ids || []).length ? "查看依赖任务" : "准备安装" }}</el-button>
       </div>
     </div>
 
@@ -118,7 +119,7 @@
       <el-pagination v-if="chunkTotal > chunkSize" layout="prev, pager, next" :page-size="chunkSize" :total="chunkTotal" :current-page.sync="chunkPage" small @current-change="loadChunks" />
     </el-dialog>
 
-    <ManualDependencyDialog :visible.sync="dependencyVisible" :packages="dependencyPackages" />
+    <ManualDependencyDialog :visible.sync="dependencyVisible" :packages="dependencyPackages" :component-key="dependencyKey" :operation-ids="dependencyOperationIds" @changed="refreshComponents" />
   </div>
 </template>
 
@@ -143,7 +144,7 @@ export default {
       form: emptyForm(), uploading: false, extractImages: false,
       query: "", hits: [], notices: [], searching: false, searched: false,
       chunkVisible: false, chunkDoc: null, chunks: [], chunkTotal: 0, chunkPage: 1, chunkSize: 20, chunkLoading: false,
-      dependencyVisible: false, dependencyPackages: [], busyGlobal: false,
+      dependencyVisible: false, dependencyPackages: [], dependencyKey: "", busyGlobal: false,
       modelRows: [
         { key: "embedding", label: "向量嵌入", empty: "未设置（必需，或为知识库单独指定）", required: true },
         { key: "vision", label: "图片描述", empty: "未设置，使用默认对话模型（需支持图片）" },
@@ -154,6 +155,7 @@ export default {
     }
   },
   computed: {
+    dependencyOperationIds() { return (this.status.components.find(c => c.key === this.dependencyKey) || {}).install_operation_ids || [] },
     embeddingModels() {
       return this.providers.flatMap((provider) => (provider.models || []).filter((model) => model.enabled !== false && modelProfile(model).tasks.includes("embedding")).map((model) => `${provider.name}/${model.name}`))
     },
@@ -307,8 +309,17 @@ export default {
       } catch (error) { this.fail(error, "检索失败。") } finally { this.searching = false }
     },
     install(component) {
+      this.dependencyKey = component.key
       this.dependencyPackages = [...component.packages]
       this.dependencyVisible = true
+    },
+    componentStateText(component) {
+      if (component.install_state === "restart_pending" && component.install_target_ready === false) return "依赖待补齐"
+      const labels = { installed: "已安装", not_installed: "未安装", preparing: "正在准备", restart_pending: "等待统一重启", verifying: "正在验证", attention_required: "需要处理", recovery_required: "需要恢复处理", unknown: "状态待确认" }
+      return labels[component.install_state] || (component.installed ? "已安装" : "未安装")
+    },
+    async refreshComponents() {
+      try { await this.loadStatus() } catch (error) { this.fail(error, "组件状态暂不可确认，请重新加载。") }
     },
   },
 }
@@ -323,7 +334,7 @@ export default {
 .muted { color: var(--text-color-secondary, #909399); }
 .danger { color: var(--danger-color); }
 .file-input { display: none; }
-.status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 12px; margin-bottom: 14px; }
 .status-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .status-row { display: flex; justify-content: space-between; gap: 12px; width: 100%; font-size: 13px; }
 .kb-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px; align-items: start; }
