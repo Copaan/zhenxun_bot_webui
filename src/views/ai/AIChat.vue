@@ -9,6 +9,8 @@
       </div>
     </header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
+    <p v-if="sectionLoading[tab]" class="section-loading" role="status"><i class="el-icon-loading"></i> 正在加载当前页数据，可先切换其他页面。</p>
+    <el-alert v-if="sectionErrors[tab]" :title="sectionErrors[tab]" type="error" :closable="false" show-icon><el-button size="mini" @click="loadSection(tab, true)">重试当前页</el-button></el-alert>
 
     <el-tabs v-model="tab" class="chat-tabs">
       <el-tab-pane label="快速开始" name="start">
@@ -75,7 +77,7 @@
             <el-table-column label="群" min-width="150"><template #default="{ row }"><div>{{ row.group_name || "未命名" }}</div><small class="muted">{{ row.group_id }}</small></template></el-table-column>
             <el-table-column label="人设" min-width="130"><template #default="{ row }"><el-select v-model="row.persona_id" size="mini" clearable placeholder="默认"><el-option v-for="item in personas" :key="item.id" :label="item.enabled ? item.name : `${item.name}（停用）`" :value="item.id" /></el-select></template></el-table-column>
             <el-table-column label="模型" min-width="170"><template #default="{ row }"><el-select v-model="row.model" size="mini" clearable filterable allow-create placeholder="跟随人设"><el-option v-for="name in chatModels" :key="name" :label="name" :value="name" /></el-select></template></el-table-column>
-            <el-table-column label="主动回复概率" width="120"><template #default="{ row }"><el-input v-model="row.probabilityText" size="mini" placeholder="全局" /></template></el-table-column>
+            <el-table-column label="插话判断概率" width="120"><template #default="{ row }"><el-input v-model="row.probabilityText" size="mini" placeholder="全局" /></template></el-table-column>
             <el-table-column label="语音回复" width="120"><template #default="{ row }"><el-select v-model="row.voice_reply" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in voiceNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
             <el-table-column label="执行器" width="140"><template #default="{ row }"><el-select v-model="row.agent_runner" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in runnerNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
             <el-table-column label="知识库" min-width="220"><template #default="{ row }"><el-checkbox v-model="row.overrideKb" class="override">覆盖</el-checkbox><el-select v-if="row.overrideKb" v-model="row.kbs" size="mini" multiple placeholder="不使用知识库" class="words"><el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" /></el-select><span v-else class="muted">全局</span></template></el-table-column>
@@ -181,7 +183,7 @@
             <el-table-column label="来源" min-width="150"><template #default="{ row }"><div>{{ row.source === "webui" ? "控制台" : row.group_id ? `群 ${row.group_id}` : "私聊" }}<el-tag v-if="proactiveSources[row.source]" size="mini" class="source-tag">{{ proactiveSources[row.source] }}</el-tag></div><small class="muted">{{ row.user_id }}{{ row.persona ? ` · ${row.persona}` : "" }}</small></template></el-table-column>
             <el-table-column label="输入" min-width="200"><template #default="{ row }"><span class="ellipsis">{{ row.input }}</span></template></el-table-column>
             <el-table-column prop="model" label="模型" min-width="150" />
-            <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag size="mini" :type="statusTypes[row.status]">{{ statusNames[row.status] || row.status }}</el-tag></template></el-table-column>
+            <el-table-column label="状态" width="160"><template #default="{ row }"><el-tag size="mini" :type="statusTypes[row.status]">{{ statusNames[row.status] || row.status }}</el-tag></template></el-table-column>
             <el-table-column label="用量" width="150"><template #default="{ row }">{{ row.tools }} 次工具<small class="muted"> · {{ row.tokens }} tokens · {{ (row.duration / 1000).toFixed(1) }}s</small></template></el-table-column>
           </el-table>
         </section>
@@ -249,6 +251,7 @@ export default {
     return {
       tab: TABS.includes(this.$route.query.tab) ? this.$route.query.tab : "start",
       loading: false, error: "", busy: "", configModule: "",
+      sectionLoading: {}, sectionErrors: {}, loadedSections: {}, dataGeneration: 0, dataRequests: {}, disposed: false,
       providers: [], defaultChat: "", chatEnabled: false, switchRevision: "",
       personas: [], tools: [], skillList: [], knowledgeBases: [], groups: [], groupSearch: "",
       draft: emptyDraft(), original: emptyDraft(), tested: false,
@@ -261,8 +264,8 @@ export default {
       sandboxDraft: {}, sandboxSaved: "", sandboxTest: null,
       agentDraft: { enabled: false }, agentSaved: "", agentTimer: null,
       decisionNames: { auto: "自动放行", approved: "已批准", rejected: "已拒绝", timeout: "超时" }, decisionTypes: { auto: "info", approved: "success", rejected: "danger", timeout: "warning" },
-      statusNames: { ok: "完成", silent: "未发言", error: "出错", stopped: "已停止" }, statusTypes: { ok: "success", silent: "info", error: "danger", stopped: "info" },
-      proactiveSources: { interject: "插话", task: "任务", listen: "监听", steal: "偷表情", memory: "记忆整理" },
+      statusNames: { ok: "完成", silent: "未发言", partial: "已发送，后续中断", error: "出错", stopped: "已停止" }, statusTypes: { ok: "success", silent: "info", partial: "warning", error: "danger", stopped: "info" },
+      proactiveSources: { interject: "插话", task: "任务", listen: "接话判断", steal: "偷表情", memory: "记忆整理" },
       voiceNames: { off: "关闭", voice: "语音提问时", always: "总是" },
       runnerNames: { local: "本地 Agent", dsh: "DeepSeek Harness" },
     }
@@ -306,11 +309,7 @@ export default {
   watch: {
     personaDirty(value) { setDirtyState("ai-chat", value) },
     tab(value) {
-      if (value === "sessions") this.loadSessions()
-      if (value === "persona" && !this.tools.length) this.loadTools().catch(() => {})
-      if (value === "persona") this.loadKnowledgeBases().catch(() => {})
-      if (value === "agent") { this.loadAgent(); this.loadSandbox() }
-      if (value === "console" && !this.agentSaved) this.loadAgent(true)
+      if (!this.loading) this.loadSection(value, ["agent", "sessions", "console"].includes(value))
       clearInterval(this.agentTimer)
       if (value === "agent") this.agentTimer = setInterval(this.refreshAgent, 5000)
     },
@@ -319,8 +318,15 @@ export default {
     if (this.$route.query.settings === BUILTIN) this.configModule = BUILTIN
     this.reload()
   },
-  beforeDestroy() { clearDirtyState("ai-chat"); clearInterval(this.agentTimer) },
+  beforeDestroy() { this.disposed = true; this.dataGeneration++; clearDirtyState("ai-chat"); clearInterval(this.agentTimer) },
   methods: {
+    /** 为同一数据源保留当前代际的最新请求。 */
+    beginDataRead(key) {
+      const generation = this.dataGeneration
+      const request = (this.dataRequests[key] || 0) + 1
+      this.dataRequests[key] = request
+      return () => !this.disposed && generation === this.dataGeneration && request === this.dataRequests[key]
+    },
     async request(method, url, data) {
       const response = await this[`${method}Request`](`${this.$root.prefix}/ai${url}`, data, QUIET)
       if (!response.suc) throw new Error(response.info)
@@ -328,18 +334,37 @@ export default {
     },
     fail(error, fallback) { this.$message.error(apiErrorDetail(error, fallback)) },
     async reload() {
+      if (this.loading || this.disposed) return
       if (this.personaDirty && !(await this.confirm("当前人设有未保存的修改。", "放弃修改？"))) return
+      if (this.loading || this.disposed) return
+      const generation = ++this.dataGeneration
+      this.sectionLoading = {}; this.sectionErrors = {}; this.loadedSections = {}
       this.loading = true; this.error = ""
       try {
         const [config, chatSwitch] = await Promise.all([this.request("get", "/configuration"), this.request("get", "/chat/switch")])
+        if (this.disposed || generation !== this.dataGeneration) return
         this.providers = config.data.providers || []; this.defaultChat = config.data.sections?.default_models?.chat || ""
         this.applySwitch(chatSwitch.data)
-        await Promise.all([this.loadPersonas(), this.loadGroups(), this.loadTools(), this.loadKnowledgeBases()])
-        if (this.tab === "sessions") await this.loadSessions()
-        if (this.tab === "agent") await Promise.all([this.loadAgent(), this.loadSandbox()])
-        if (this.tab === "console") await this.loadAgent(true)
-      } catch (error) { this.error = apiErrorDetail(error, "AI 聊天配置加载失败。") }
-      finally { this.loading = false }
+        await this.loadPersonas()
+      } catch (error) { if (!this.disposed && generation === this.dataGeneration) this.error = apiErrorDetail(error, "AI 聊天配置加载失败。") }
+      finally { if (!this.disposed && generation === this.dataGeneration) this.loading = false }
+      if (!this.disposed && generation === this.dataGeneration && !this.error) await this.loadSection(this.tab, true)
+    },
+    async loadSection(section, force = false) {
+      if (this.disposed || !["persona", "groups", "sessions", "agent", "console"].includes(section)) return
+      if (this.sectionLoading[section] || (this.loadedSections[section] && !force)) return
+      const generation = this.dataGeneration
+      this.$set(this.sectionLoading, section, true); this.$set(this.sectionErrors, section, "")
+      try {
+        if (section === "persona") await Promise.all([this.loadTools(), this.loadKnowledgeBases()])
+        if (section === "groups") await Promise.all([this.loadGroups(), this.loadKnowledgeBases()])
+        if (section === "sessions") await this.loadSessions(true)
+        if (section === "agent") await Promise.all([this.loadAgent(false, true), this.loadSandbox(false, true)])
+        if (section === "console" && !this.agentSaved) await this.loadAgent(true, true)
+        if (!this.disposed && generation === this.dataGeneration) this.$set(this.loadedSections, section, true)
+      } catch (error) {
+        if (!this.disposed && generation === this.dataGeneration) this.$set(this.sectionErrors, section, apiErrorDetail(error, "当前页数据加载失败。"))
+      } finally { if (!this.disposed && generation === this.dataGeneration) this.$set(this.sectionLoading, section, false) }
     },
     applySwitch(data) { this.chatEnabled = data.enabled; this.switchRevision = data.revision },
     async confirm(message, title) {
@@ -354,7 +379,9 @@ export default {
       finally { this.busy = "" }
     },
     async loadPersonas() {
+      const isCurrent = this.beginDataRead("personas")
       const response = await this.request("get", "/personas")
+      if (!isCurrent()) return
       this.personas = response.data
       const selected = this.personas.find((item) => item.id === this.draft.id)
       if (!this.personaDirty || !selected) this.selectPersona(selected || this.personas[0] || null, true)
@@ -401,18 +428,26 @@ export default {
       } catch (error) { this.fail(error, "设置失败。") }
     },
     async loadTools() {
+      const isCurrent = this.beginDataRead("tools")
       const [tools, skills] = await Promise.all([this.request("get", "/chat/tools"), this.request("get", "/chat/skills")])
+      if (!isCurrent()) return
       this.tools = tools.data; this.skillList = skills.data
     },
-    async loadKnowledgeBases() { this.knowledgeBases = (await this.request("get", "/knowledge/bases")).data },
+    async loadKnowledgeBases() {
+      const isCurrent = this.beginDataRead("knowledge")
+      const response = await this.request("get", "/knowledge/bases")
+      if (isCurrent()) this.knowledgeBases = response.data
+    },
     async loadGroups() {
+      const isCurrent = this.beginDataRead("groups")
       const response = await this.request("get", "/chat/groups")
+      if (!isCurrent()) return
       this.groups = response.data.map((item) => ({ ...item, model: item.model || "", voice_reply: item.voice_reply || "", agent_runner: item.agent_runner || "", probabilityText: item.active_probability == null ? "" : String(item.active_probability), overrideWords: item.wake_words != null, words: [...(item.wake_words || [])], overrideKb: item.knowledge_bases != null, kbs: [...(item.knowledge_bases || [])] }))
     },
     async saveGroup(row) {
       const text = row.probabilityText.trim()
       const probability = text === "" ? null : Number(text)
-      if (probability !== null && !(probability >= 0 && probability <= 1)) { this.$message.error("主动回复概率应在 0 到 1 之间。"); return }
+      if (probability !== null && !(probability >= 0 && probability <= 1)) { this.$message.error("插话判断概率应在 0 到 1 之间。"); return }
       this.busy = `group-${row.group_id}`
       try {
         const response = await this.request("put", `/chat/groups/${encodeURIComponent(row.group_id)}`, { active_probability: probability, wake_words: row.overrideWords ? row.words : null, model: row.model || null, voice_reply: row.voice_reply || null, agent_runner: row.agent_runner || null, knowledge_bases: row.overrideKb ? row.kbs : null, persona_id: row.persona_id || null, enabled: row.enabled })
@@ -425,16 +460,22 @@ export default {
      * 加载 Agent 设置与运行记录（按来源与状态筛选）
      * @param {boolean} quiet 是否为定时刷新，定时刷新时不覆盖未保存的设置、不提示错误
      */
-    async loadAgent(quiet = false) {
+    async loadAgent(quiet = false, propagate = false) {
+      const isCurrent = this.beginDataRead("agent")
       try {
         const query = Object.fromEntries(Object.entries(this.runQuery).filter(([, value]) => value))
         const data = (await this.request("get", "/chat/agent", query)).data
+        if (!isCurrent()) return
         const dirty = this.agentSaved && this.agentDirty
         this.agent = data
         if (quiet && dirty) return
         this.agentDraft = { enabled: data.enabled }
         this.agentSaved = JSON.stringify(this.agentPayload())
-      } catch (error) { if (!quiet) this.fail(error, "Agent 设置加载失败。") }
+      } catch (error) {
+        if (!isCurrent()) return
+        if (propagate) throw error
+        if (!quiet) this.fail(error, "Agent 设置加载失败。")
+      }
     },
     /**
      * 展开运行记录时加载其工具调用
@@ -466,15 +507,21 @@ export default {
      * 加载沙箱状态与设置
      * @param {boolean} quiet 是否为定时刷新，定时刷新时不覆盖未保存的设置、不提示错误
      */
-    async loadSandbox(quiet = false) {
+    async loadSandbox(quiet = false, propagate = false) {
+      const isCurrent = this.beginDataRead("sandbox")
       if (!quiet) this.busy = "sandbox-load"
       try {
         const data = (await this.request("get", "/sandbox")).data
+        if (!isCurrent()) return
         const finished = this.pulling && data.pull.status !== "running"
         this.applySandbox(data, quiet && this.sandboxDirty)
         if (finished) this.loadAgent(true)
-      } catch (error) { if (!quiet) this.fail(error, "沙箱状态加载失败。") }
-      finally { if (!quiet) this.busy = "" }
+      } catch (error) {
+        if (!isCurrent()) return
+        if (propagate) throw error
+        if (!quiet) this.fail(error, "沙箱状态加载失败。")
+      }
+      finally { if (isCurrent() && this.busy === "sandbox-load") this.busy = "" }
     },
     /**
      * 更新沙箱状态，并按需重置设置草稿
@@ -525,13 +572,19 @@ export default {
       if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(1)} GB`
       return size >= 1024 ** 2 ? `${(size / 1024 ** 2).toFixed(1)} MB` : `${Math.round(size / 1024)} KB`
     },
-    async loadSessions() {
+    async loadSessions(propagate = false) {
+      const isCurrent = this.beginDataRead("sessions")
       this.sessionLoading = true
       try {
         const [sessions, usage] = await Promise.all([this.request("get", "/chat/sessions", this.sessionQuery), this.request("get", "/chat/usage")])
+        if (!isCurrent()) return
         this.sessions = sessions.data; this.usage = usage.data
-      } catch (error) { this.fail(error, "会话加载失败。") }
-      finally { this.sessionLoading = false }
+      } catch (error) {
+        if (!isCurrent()) return
+        if (propagate === true) throw error
+        this.fail(error, "会话加载失败。")
+      }
+      finally { if (isCurrent()) this.sessionLoading = false }
     },
     sessionUrl(row, raw = false) { return `/chat/sessions/messages?session_id=${encodeURIComponent(row.session_id)}${raw ? "&raw=true" : ""}` },
     async viewSession(row) {

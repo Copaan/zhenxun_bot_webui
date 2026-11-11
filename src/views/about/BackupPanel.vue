@@ -57,6 +57,17 @@
             {{ categoryLabels[key] }} <small>{{ info.files }} 个文件 · {{ formatBytes(info.bytes) }}</small>
           </el-checkbox>
         </el-checkbox-group>
+        <template v-if="scan.directories && scan.directories.length">
+          <h3>不导出的文件／目录路径（可选）</h3>
+          <el-select v-model="excludedPaths" multiple filterable placeholder="默认保留所选分类中的业务资产" style="width: 100%">
+            <el-option v-for="entry in scan.directories" :key="entry.path" :label="entry.path + ' · ' + formatBytes(entry.bytes)" :value="entry.path" />
+          </el-select>
+          <p class="backup-hint">数据库始终单独导出。模型、图片及插件资产属于业务文件，取消导出后恢复目标需要自行提供。</p>
+        </template>
+        <details v-if="scan.largest_files && scan.largest_files.length">
+          <summary>最大的业务文件</summary>
+          <p v-for="file in scan.largest_files.slice(0, 10)" :key="file.path" class="backup-hint">{{ file.path }} · {{ formatBytes(file.bytes) }}</p>
+        </details>
         <template v-if="scan.dependencies.length">
           <h3>依赖（{{ scan.dependencies.length }}）</h3>
           <p class="backup-hint">默认记录当前环境中插件使用的全部依赖，包括商店插件、插件声明的依赖和虚拟环境中额外安装的第三方包。恢复时优先安装备份时的版本，不可用时改装相近版本，仍无法安装的跳过并提示。<template v-if="unsupportedCount">其中 {{ unsupportedCount }} 项无法自动安装，恢复后会提示在控制台手动安装。</template></p>
@@ -104,6 +115,7 @@ import { uploadBackupInChunks } from "@/utils/chunk-upload"
 import { reasonLabels, reasonText } from "@/utils/plugin-operation"
 import { startRestartRecovery } from "@/utils/restart-recovery"
 import { formatBytes } from "@/utils/utils"
+import { restorePreparationLabels, restoreStateLabels, restoreDatabasePhase } from "@/utils/migrationRestore"
 import BackupRestoreDialog from "./BackupRestoreDialog.vue"
 import BackupSwitchDialog from "./BackupSwitchDialog.vue"
 
@@ -134,6 +146,7 @@ export default {
       scan: null,
       categories: [],
       extras: [],
+      excludedPaths: [],
       advancedDeps: false,
       password: "",
       starting: false,
@@ -207,6 +220,13 @@ export default {
         const names = unrestorable.slice(0, 10).join("、") + (unrestorable.length > 10 ? ` 等 ${unrestorable.length} 个文件` : "")
         notes.push({ type: "warning", text: `以下文件的文件名在当前系统上无效，未恢复：${names}` })
       }
+      if (report.source_graph_unconfirmed) notes.push({ type: "info", text: "源平台依赖关系未完整确认，实际恢复以目标平台解析结果为准。" })
+      const results = this.restore.report?.changes || this.restore.report?.table_results || {}
+      Object.entries(results).forEach(([name, result]) => {
+        if (result && typeof result === "object" && ["inserted", "updated", "skipped", "preserved", "retained"].some(key => key in result)) {
+          notes.push({ type: "info", text: name + "：新增 " + (result.inserted || 0) + "，更新 " + (result.updated || 0) + "，保留 " + (result.retained || result.preserved || result.skipped || 0) })
+        }
+      })
       const tables = this.restore.report?.skipped_tables
       const lost = tables && !Array.isArray(tables) ? Object.entries(tables).filter(([, rows]) => rows > 0) : []
       if (lost.length) {
@@ -229,13 +249,14 @@ export default {
     },
     restoreView() {
       const restore = this.restore
+      const databasePhase = restoreDatabasePhase(restore)
+      if (databasePhase) return { type: "info", title: databasePhase, detail: "请等待当前阶段完成，不要重复提交。" }
       const action = restore.kind === "switch" ? "切换数据库" : "恢复"
       const progress = restore.progress ? `正在导入 ${restore.progress.table}（${restore.progress.rows} 行）` : ""
       const incomplete = this.restoreNotes.some(note => note.type !== "info")
       const preparation = restore.preparation || {}
-      const phases = { waiting_credentials: "等待补充备份包密码", orm_check: "核对 ORM 状态（只读）", checking: "正在只读检查", dependencies: "正在解析依赖", building: "正在后台构建候选", rechecking: "正在切换前复核", switching: "即将短暂停机切换", waiting_confirmation: "影响摘要发生变化，请确认", blocked: "准备未完成，原实例未变更", interrupted: "准备已暂停，原实例未变更", cleanup_pending: "原实例未变更，候选清理待重试" }
       return {
-        preparing: { type: preparation.error || preparation.confirmation_required ? "warning" : "info", title: phases[preparation.phase] || "正在在线准备", detail: preparation.error || "原实例继续运行；候选通过后自动短暂停机切换，无需手动重启。" },
+        preparing: { type: preparation.error || preparation.confirmation_required ? "warning" : "info", title: restorePreparationLabels[preparation.phase] || "正在在线准备", detail: preparation.error || "原实例继续运行；候选通过后自动短暂停机切换，无需手动重启。" },
         awaiting_orm: { type: "warning", title: "等待控制台处理插件数据库", detail: restore.error },
         snapshot_ready: { type: "info", title: "最终快照已保存", detail: "等待旧进程退出后应用" },
         applying: { type: "info", title: "正在应用依赖和文件" },
@@ -254,7 +275,7 @@ export default {
         failed: { type: "error", title: `${action}未执行`, detail: `${this.restoreError}。没有做任何改动。` },
         rolled_back: { type: "warning", title: `${action}失败，已回滚到之前的状态`, detail: restore.error },
         rollback_failed: { type: "error", title: `${action}失败，回滚也失败了`, detail: `导入错误：${restore.error}；回滚错误：${restore.rollback_error}。请检查数据库后手动处理。` },
-      }[restore.state] || { type: "info", title: restore.state }
+      }[restore.state] || { type: "info", title: restoreStateLabels[restore.state] || restore.state }
     },
   },
   mounted() { this.requestGeneration = 0; window.addEventListener("zhenxun-auth-expired", this.stopReads); document.addEventListener("visibilitychange", this.visibilityChanged); this.refresh() },
@@ -400,23 +421,26 @@ export default {
       finally { this.uploading = null }
     },
     async openExport() {
-      this.dialog = true; this.scanning = true; this.scan = null; this.password = ""; this.extras = []; this.advancedDeps = false
+      const generation = this.requestGeneration
+      this.dialog = true; this.scanning = true; this.scan = null; this.password = ""; this.extras = []; this.excludedPaths = []; this.advancedDeps = false
       try {
         const response = await this.getRequest(this.api("/scan"))
         if (!response?.suc) throw new Error(response?.info)
+        if (this.disposed || generation !== this.requestGeneration || isAuthenticationExpired()) return
         this.scan = response.data
         this.categories = [...response.data.default_categories]
         this.extras = this.allExtras
       } catch (error) {
         this.dialog = false
         this.error = error.message || "导出预览失败"
-      } finally { this.scanning = false }
+      } finally { if (!this.disposed && generation === this.requestGeneration) this.scanning = false }
     },
     async startExport() {
+      if (this.starting || isAuthenticationExpired()) return
       this.starting = true
       try {
         const response = await this.postRequest(this.api("/export"), {
-          categories: this.categories, extras: this.advancedDeps ? this.extras : null, password: this.password || null,
+          categories: this.categories, extras: this.advancedDeps ? this.extras : null, password: this.password || null, excluded_paths: this.excludedPaths,
         })
         if (!response?.suc) throw new Error(response?.info)
         this.dialog = false; this.password = ""

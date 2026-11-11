@@ -43,9 +43,7 @@
             </el-select>
             <div class="provider-list">
               <button v-for="provider in filteredProviders" :key="provider.name" :class="{ active: selectedProviderName === provider.name }" @click="selectProvider(provider.name)">
-                <ProviderLogo :preset="provider.preset || ''" :label="provider.name" />
-                <span><strong>{{ provider.name }}</strong><small>{{ providerKind(provider) }} · {{ provider.models.length }} 个模型</small></span>
-                <el-tag size="mini" :type="providerStatus(provider).type">{{ providerStatus(provider).label }}</el-tag>
+                <strong :title="provider.name">{{ provider.name }}</strong>
               </button>
               <div v-if="!filteredProviders.length" class="empty-copy">没有匹配的服务商</div>
             </div>
@@ -53,7 +51,6 @@
 
           <main v-if="providerDraft" class="provider-main">
             <div class="provider-header">
-              <ProviderLogo :preset="providerDraft.preset || ''" :label="providerDraft.name" size="40px" />
               <div class="provider-title">
                 <h2>{{ providerDraft.isNew ? `添加服务商 · ${providerDraft.name || "未命名"}` : providerDraft.name }}</h2>
                 <p>{{ connectionSummary }}<a v-if="keyUrl" :href="keyUrl" target="_blank" rel="noopener noreferrer" class="external-link">控制台<i class="el-icon-top-right"></i></a></p>
@@ -98,14 +95,13 @@
                 <h3>模型 <small>{{ providerDraft.models.length }}</small></h3>
                 <el-input v-model="modelSearch" size="small" clearable prefix-icon="el-icon-search" placeholder="搜索模型" class="model-search" />
                 <el-tooltip :disabled="providerDraftStatus.code === 'ready'" :content="providerDraftStatus.reason" placement="top">
-                  <span><el-button size="small" type="primary" plain icon="el-icon-connection" :loading="discovering" :disabled="providerDraftStatus.code !== 'ready'" @click="discoverModels">发现模型</el-button></span>
+                  <span><el-button size="small" type="primary" plain icon="el-icon-connection" :loading="discovering" :disabled="providerDraftStatus.code !== 'ready'" @click="openDiscovery">发现模型</el-button></span>
                 </el-tooltip>
                 <el-button size="small" icon="el-icon-plus" @click="openEditor()">手动添加</el-button>
-                <el-button v-if="uncheckedModels.length" size="small" icon="el-icon-finished" :loading="batchChecking" :disabled="Boolean(testingModelKey) && !batchChecking" @click="checkUncheckedModels">核验未核验（{{ uncheckedModels.length }}）</el-button>
+                <el-button v-if="uncheckedModels.length" size="small" icon="el-icon-finished" :loading="batchChecking" :disabled="batchChecking" @click="checkUncheckedModels">核验未核验（{{ uncheckedModels.length }}）</el-button>
               </div>
-              <el-alert v-if="selectedProbeResult" class="provider-probe-result" :type="selectedProbeResult.success ? 'success' : 'error'" :closable="false" show-icon :title="selectedProbeResult.message" />
               <p v-if="upstreamModels" class="upstream-summary">上游共 {{ upstreamModels.length }} 个模型（{{ formatTime(providerDraft.discovery.updated_at) }} 查询，每天自动刷新）<template v-if="missingModelCount">，{{ missingModelCount }} 个已配置模型上游已下线</template></p>
-              <ModelTable :models="filteredModels" :defaults="sectionDrafts.default_models || {}" :provider-name="selectedProviderName" :saved-names="savedModelNames" :upstream="upstreamModels" :busy="Boolean(testingModelKey)" :loading-name="testingModelName" :available="upstreamAvailable" :available-total="newUpstreamModels.length" :available-open.sync="upstreamOpen" @add="addUpstreamModels([$event])" @add-all="addUpstreamModels(upstreamAvailable.map((item) => item.name))" @edit="openEditor" @remove="deleteModel" @check="quickCheck" @test="testModel" @toggle="toggleModel" @set-default="setDefault">
+              <ModelTable :models="filteredModels" :defaults="sectionDrafts.default_models || {}" :provider-name="selectedProviderName" :saved-names="savedModelNames" :upstream="upstreamModels" :busy="Boolean(saving)" :checks="currentModelChecks" :outcomes="currentModelOutcomes" @edit="openEditor" @remove="deleteModel" @check="quickCheck" @test="testModel" @toggle="toggleModel" @set-default="setDefault">
                 <template #empty>{{ providerDraft.models.length ? "没有匹配的模型" : providerHasKey ? "点击“发现模型”从服务商获取模型列表，或手动添加" : "填写 API Key 后可发现模型，也可以手动添加" }}</template>
               </ModelTable>
             </section>
@@ -191,7 +187,18 @@
       <span slot="footer"><el-button @click="repairVisible = false">取消</el-button><el-button type="primary" :loading="saving === 'repair'" :disabled="!(repairPreview.changes || []).length || Boolean(saving)" @click="applyRepair">确认修复</el-button></span>
     </el-dialog>
 
-    <ModelEditor :visible.sync="editorVisible" :model="editorModel" :names="editorNames" :protocols="protocols" :can-check="!testingModelKey && Boolean(providerDraft && (providerDraft.name.trim() || selectedProviderName))" :checker="requestModelCheck" :presets="presets" :connection="editorConnection" @save="saveEditedModel" />
+    <el-dialog title="发现模型" :visible.sync="discoveryVisible" width="min(840px, 94vw)" top="5vh" custom-class="model-discovery-dialog" append-to-body>
+      <div class="discovery-toolbar"><el-input v-model="discoverySearch" clearable prefix-icon="el-icon-search" placeholder="搜索模型" /><el-button :loading="discovering" @click="discoverModels">刷新上游列表</el-button></div>
+      <p class="upstream-summary">勾选需要添加的模型，添加后保存配置生效。<template v-if="upstreamModels">共 {{ upstreamModels.length }} 个，已选择 {{ discoverySelected.length }} 个。</template></p>
+      <el-alert v-if="discoveryError" type="error" :title="discoveryError" :closable="false" />
+      <div><el-button type="text" @click="selectDiscovered">选择当前筛选</el-button><el-button type="text" @click="discoverySelected = []">清空选择</el-button></div>
+      <el-checkbox-group v-model="discoverySelected" v-loading="discovering" class="discovery-models">
+        <div v-for="item in discoveryRows" :key="item.name" class="discovery-row"><el-checkbox :label="item.name" :disabled="isConfiguredModel(item.name)"><span :title="item.name">{{ item.name }}</span></el-checkbox><small>{{ isConfiguredModel(item.name) ? '已添加' : item.hint }}</small></div>
+        <p v-if="!discoveryRows.length && !discovering" class="empty-copy">{{ upstreamModels ? '没有匹配的模型' : '尚未获取模型列表，请刷新重试' }}</p>
+      </el-checkbox-group>
+      <span slot="footer"><el-button @click="discoveryVisible = false">取消</el-button><el-button type="primary" :disabled="!discoverySelected.length || discovering || !discoveryCacheValid" @click="confirmDiscovered">添加所选（{{ discoverySelected.length }}）</el-button></span>
+    </el-dialog>
+    <ModelEditor ref="modelEditor" :key="draftGeneration" :visible.sync="editorVisible" :model="editorModel" :names="editorNames" :protocols="protocols" :can-check="Boolean(providerDraft && (providerDraft.name.trim() || selectedProviderName))" :checker="requestModelCheck" :presets="presets" :connection="editorConnection" @save="saveEditedModel" />
 
   </div>
 </template>
@@ -205,11 +212,11 @@ import { apiErrorDetail, apiErrorIssues } from "@/utils/api-error"
 import { handleApplyResult } from "@/utils/apply-result"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 import { localLogin } from "@/utils/local-login"
+import { businessNetworkEpoch, isBusinessNetworkFrozen } from "@/utils/restart-network"
 import { removeRoutingGroup, routingGroupsForModels } from "@/utils/ai-routing"
 import { CHECK_STATES, DEFAULT_CHECK_ITEMS, PROTOCOL_LABELS, PROTOCOL_SHORT, TASK_LABELS, briefDetail, checkState, checkSummary, clone, formatTokens, jsonError, jsonText, modelProfile, modelTask, parseJsonObject, uid } from "@/utils/ai-models"
 import ModelEditor from "./ModelEditor.vue"
 import ModelTable from "./ModelTable.vue"
-import ProviderLogo from "./ProviderLogo.vue"
 import ProviderStarter from "./ProviderStarter.vue"
 
 const SECTION_KEYS = { context: "context_settings", agent: "agent_settings", web_search: "web_search" }
@@ -229,13 +236,13 @@ const SectionAction = {
 
 export default {
   name: "AIConfiguration",
-  components: { ModelEditor, ModelTable, ProviderLogo, ProviderStarter, SchemaField, SettingsLayout, SectionAction },
+  components: { ModelEditor, ModelTable, ProviderStarter, SchemaField, SettingsLayout, SectionAction },
   data() {
     return {
       settingsCategory: { context: "llm_summary", agent: "loop", web_search: "search", advanced: "client_settings" }, settingsSearch: { context: "", agent: "", web_search: "", advanced: "" }, settingsLocalIssues: {}, repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
       loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, presets: {}, protocols: [], providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
       providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, web_search: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
-      discovering: false, upstreamOpen: false, catalog: {}, catalogUpdating: false, providerProbeResults: {}, testingModelKey: "", batchChecking: false,
+      discovering: false, discoveryVisible: false, discoverySearch: "", discoverySelected: [], discoveryError: "", discoveryScope: "", modelChecks: {}, modelOutcomes: {}, draftGeneration: 0, catalog: {}, catalogUpdating: false, batchChecking: false,
       connectionOpen: false, editorVisible: false, editorModel: null, editorIndex: null, settingsTab: "context",
       taskLabels: TASK_LABELS,
       defaultTasks: [{ key: "chat", label: "对话" }, { key: "vision", label: "视觉", tip: "对话模型不支持图片时，用视觉模型把图片转述成文字" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "stt", label: "语音转文字" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
@@ -275,7 +282,11 @@ export default {
      * @returns {string[]} 模型名称
      */
     savedModelNames() { return this.providerDraft?.isNew ? [] : (this.savedProvider?.models || []).filter((model) => model.enabled !== false).map((model) => model.name) },
-    testingModelName() { return (this.providerDraft?.models || []).find((model) => this.modelTestKey(model) === this.testingModelKey)?.name || "" },
+    hasProbeActivity() { return this.discovering || Object.keys(this.modelChecks).length > 0 },
+    discoveryCacheValid() { return Boolean(this.providerDraft?.discovery?.profiles) && this.discoveryScope === this.discoveryConnectionScope() },
+    currentModelChecks() { return Object.fromEntries(Object.entries(this.modelChecks).filter(([, value]) => value.generation === this.draftGeneration)) },
+    currentModelOutcomes() { return Object.fromEntries(Object.entries(this.modelOutcomes).filter(([, value]) => this.probeCurrent(value.context))) },
+    discoveryRows() { const key = this.discoverySearch.trim().toLowerCase(); return (this.upstreamModels || []).filter((name) => name.toLowerCase().includes(key)).map((name) => ({ name, hint: this.discoveredHint(name) })) },
     editorNames() { return (this.providerDraft?.models || []).filter((_, index) => index !== this.editorIndex).map((model) => model.name) },
     /**
      * 收起连接设置时显示的一行摘要：厂商或协议、接口地址与密钥数量
@@ -294,16 +305,7 @@ export default {
     allModels() { return this.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.name, fullName: `${provider.name}/${model.name}` }))) },
     filteredRouteGroups() { const key = this.routeSearch.trim().toLowerCase(); return this.groupRows.filter((item) => !key || item.name.toLowerCase().includes(key)) },
     selectedRouteGroup() { return this.groupRows.find((item) => item.clientId === this.selectedRouteGroupId) || null },
-    upstreamModels() { const profiles = this.providerDraft?.discovery?.profiles; return profiles ? Object.keys(profiles).sort() : null },
-    newUpstreamModels() { const upstream = this.upstreamModels || []; return upstream.filter((name) => !this.isConfiguredModel(name)) },
-    /**
-     * 上游有但尚未添加的模型，按模型搜索框过滤，并附上能力提示
-     * @returns {{ name: string, hint: string }[]} 模型
-     */
-    upstreamAvailable() {
-      const key = this.modelSearch.trim().toLowerCase()
-      return this.newUpstreamModels.filter((name) => name.toLowerCase().includes(key)).map((name) => ({ name, hint: this.discoveredHint(name) }))
-    },
+    upstreamModels() { const profiles = this.discoveryCacheValid ? this.providerDraft?.discovery?.profiles : null; return profiles ? Object.keys(profiles).sort() : null },
     keyUrl() { return this.presets[this.providerDraft?.preset]?.key_url || "" },
     missingModelCount() { return (this.providerDraft?.models || []).filter((model) => this.missingUpstream(model)).length },
     /**
@@ -360,7 +362,6 @@ export default {
       const saved = this.providerDraft.isNew ? [] : this.providers.find((item) => item.name === this.selectedProviderName)?.api_keys || []
       return this.providerDraft.api_key_slots.map((slot) => String(slot.value || "").trim()).find((value) => value && !saved.includes(value)) || null
     },
-    selectedProbeResult() { return this.providerProbeResults[this.selectedProviderName || "__new__"] || null },
     groupNameErrors() {
       const counts = this.groupRows.reduce((result, row) => { const name = row.name.trim(); if (name) result[name] = (result[name] || 0) + 1; return result }, {})
       return this.groupRows.map((row) => !row.name.trim() ? "请填写路由组名称。" : counts[row.name.trim()] > 1 ? "路由组名称不能重复。" : "")
@@ -370,18 +371,19 @@ export default {
   watch: {
     connectionError(value) { if (value) this.connectionOpen = true },
   },
+  created() { this._probeQueue = []; this._probeActive = 0; this._probeSequence = 0; this._discoverySequence = 0; this._aiAlive = true },
   mounted() {
     if (this.sectionOptions.some((item) => item.name === this.$route.query.section)) this.activeSection = this.$route.query.section
     if (this.schemaTabs.some((item) => item.name === this.$route.query.tab)) this.settingsTab = this.$route.query.tab
     this.loadConfiguration()
   },
-  beforeDestroy() { clearDirtyState("ai-configuration") },
+  beforeDestroy() { this._aiAlive = false; this.aiEpoch += 1; this.invalidateProbeQueue(); clearDirtyState("ai-configuration") },
   methods: {
     async aiRequest(method, url, data = {}, options = {}) {
       const epoch = this.aiEpoch
       try {
         const response = await this[`${method}Request`](url, data, { ...options, authFailureMode: "local" })
-        if (epoch !== this.aiEpoch) throw new Error("响应已过期，草稿已保留，请重试。")
+        if (!this._aiAlive || epoch !== this.aiEpoch) throw new Error("响应已过期，草稿已保留，请重试。")
         return response
       } catch (error) {
         if (error.response?.status === 401) { this.sessionExpired = true; this.aiEpoch += 1 }
@@ -410,6 +412,7 @@ export default {
       finally { this.saving = "" }
     },
     async applyRepair() {
+      if (this.blockProbeSave()) return
       if (this.saving) return
       this.saving = "repair"
       try {
@@ -440,12 +443,14 @@ export default {
       this.resetProviderDraft(); this.providerDirty = false; this.modelsDirty = false; this.syncDirty()
     },
     resetProviderDraft() {
+      this.invalidateProbeQueue(); this.draftGeneration += 1; this._discoverySequence += 1; this.discovering = false; this.discoveryVisible = false
       const provider = this.providers.find((item) => item.name === this.selectedProviderName)
       if (!provider) { this.providerDraft = null; return }
       this.connectionOpen = !(provider.api_keys || []).length
       const slots = (provider.api_keys || []).map((value) => ({ value, clientId: uid() }))
       if (!slots.length) slots.push({ value: "", clientId: uid() })
       this.providerDraft = { ...clone(provider), api_key_slots: slots, paramsText: jsonText(provider.params), headersText: jsonText(provider.headers), isNew: false }
+      this.discoveryScope = this.discoveryConnectionScope()
     },
     applySavedConfiguration(data, preferredName, submitted) {
       const draft = clone(this.providerDraft)
@@ -490,6 +495,7 @@ export default {
      * @param {string|null} key 厂商预设，为空时为自定义服务商
      */
     startProvider(key) {
+      this.invalidateProbeQueue(); this.draftGeneration += 1; this._discoverySequence += 1; this.discovering = false; this.discoveryVisible = false
       const preset = this.presets[key]
       const label = preset?.label || "自定义服务商"
       let name = label
@@ -500,11 +506,7 @@ export default {
       this.$nextTick(() => this.$el.querySelector(key ? ".secret-row input" : ".provider-form input")?.focus())
     },
     cancelStarter() { this.selectedProviderName = this.providers[0]?.name || ""; this.resetProviderDraft() },
-    invalidateProbeResults() {
-      const key = this.selectedProviderName || "__new__"
-      if (this.providerProbeResults[key]) this.$delete(this.providerProbeResults, key)
-    },
-    markProviderDirty() { this.providerDirty = true; this.invalidateProbeResults(); this.syncDirty() },
+    markProviderDirty() { this.providerDirty = true; this.syncDirty() },
     presetBaseUrl(preset, protocol) { return this.presets[preset]?.base_urls?.[protocol] || "" },
     protocolLabel(protocol) { return PROTOCOL_LABELS[protocol] || protocol || "未设置协议" },
     providerKind(provider) { return this.presets[provider.preset]?.label || this.protocolLabel(provider.protocol) },
@@ -535,6 +537,7 @@ export default {
      * @returns {Promise<boolean>} 是否保存成功
      */
     async saveProvider() {
+      if (this.blockProbeSave()) return false
       if (this.saving || !this.providerDraft) return false
       const includeModels = this.modelsDirty || this.providerDraft.isNew
       this.saving = "provider"
@@ -556,39 +559,38 @@ export default {
       if (this.saving) return
       if (this.providerDraft?.isNew) this.selectedProviderName = this.providers[0]?.name || ""
       this.providerDirty = false; this.modelsDirty = false; this.operationIssues = []
-      this.resetProviderDraft(); this.invalidateProbeResults(); this.syncDirty()
+      this.resetProviderDraft(); this.syncDirty()
     },
     async removeProvider() {
+      if (this.blockProbeSave()) return
       if (this.saving) return
       try { await this.$confirm(`删除 ${this.providerDraft.name} 后，引用该服务商的默认模型和路由必须先调整。`, "删除服务商？", { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }) } catch (_) { return }
+      if (this.blockProbeSave()) return
       this.saving = "provider"
       try { const { models, ...fields } = this.providerDraft; const submitted = { provider: JSON.stringify(fields), models: JSON.stringify(models) }; const response = await this.aiDelete(`${this.$root.prefix}/ai/providers/${encodeURIComponent(this.selectedProviderName)}?expected_revision=${encodeURIComponent(this.revision)}`); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, "", submitted); await this.handleAiApply(response) } catch (error) { this.captureOperationError(error, "服务商删除失败。") } finally { this.saving = "" }
     },
-    async discoverModels() {
-      this.discovering = true
-      const resultKey = this.selectedProviderName || "__new__"
-      try {
-        const response = await this.aiPost(`${this.$root.prefix}/ai/providers/discover`, { expected_revision: this.revision, provider_name: this.providerDraft.name.trim() || null, saved_provider_name: this.providerDraft.isNew ? null : this.selectedProviderName, preset: this.providerDraft.preset || null, protocol: this.providerDraft.protocol, base_url: String(this.providerDraft.base_url || "").trim() || null, api_key: this.temporaryKey }, { suppressErrorToast: true })
-        if (!response.suc) throw new Error(response.info)
-        this.$set(this.providerDraft, "discovery", { updated_at: Date.now() / 1000, profiles: response.data.profiles || {} })
-        this.upstreamOpen = true
-        this.$set(this.providerProbeResults, resultKey, { success: true, message: `连接成功，发现 ${response.data.models?.length || 0} 个模型，其中 ${this.newUpstreamModels.length} 个未添加，耗时 ${response.data.latency_ms || 0} ms。` })
-      } catch (error) {
-        const message = apiErrorDetail(error, "服务商连接测试失败。")
-        this.operationIssues = apiErrorIssues(error)
-        this.$set(this.providerProbeResults, resultKey, { success: false, message })
-      }
-      finally { this.discovering = false }
+    openDiscovery() {
+      if (this.saving) return this.$message.warning("配置正在保存，请完成后再发现模型。")
+      this.discoveryVisible = true; this.discoverySearch = ""; this.discoverySelected = []; this.discoveryError = ""
+      if (!this.upstreamModels) this.discoverModels()
     },
-    providerStatus(provider) {
-      const probe = this.providerProbeResults[provider.name]
-      if (probe) return probe.success ? { label: "最近验证成功", type: "success" } : { label: "最近验证失败", type: "danger" }
-      const states = {
-        ready: { label: "可自动发现", type: "success" },
-        missing_credentials: { label: "缺少有效凭据", type: "warning" },
-        missing_base: { label: "缺少接口地址", type: "warning" },
-      }
-      return states[provider.discovery_status] || { label: "状态待确认", type: "info" }
+    selectDiscovered() { this.discoverySelected = [...new Set([...this.discoverySelected, ...this.discoveryRows.filter((item) => !this.isConfiguredModel(item.name)).map((item) => item.name)])] },
+    confirmDiscovered() { if (!this.discoveryCacheValid) { this.discoverySelected = []; this.$message.warning("连接配置已变化，请刷新上游列表后再添加。"); return } this.addUpstreamModels(this.discoverySelected); this.discoveryVisible = false; this.discoverySelected = [] },
+    async discoverModels() {
+      if (this.saving) return this.$message.warning("配置正在保存，请完成后再发现模型。")
+      if (this.discovering || !this.providerDraft) return
+      const draft = this.providerDraft; const scope = this.probeScope(); const generation = this.draftGeneration; const sequence = ++this._discoverySequence
+      this.discovering = true; this.discoveryError = ""
+      try {
+        const response = await this.aiPost(this.$root.prefix + "/ai/providers/discover", { expected_revision: this.revision, provider_name: draft.name.trim() || null, saved_provider_name: draft.isNew ? null : this.selectedProviderName, preset: draft.preset || null, protocol: draft.protocol, base_url: String(draft.base_url || "").trim() || null, api_key: this.temporaryKey }, { suppressErrorToast: true })
+        if (!this._aiAlive || draft !== this.providerDraft || generation !== this.draftGeneration || scope !== this.probeScope()) return
+        if (!response.suc) throw new Error(response.info)
+        this.$set(draft, "discovery", { updated_at: Date.now() / 1000, profiles: response.data.profiles || {} })
+        this.discoveryScope = this.discoveryConnectionScope()
+        this.discoverySelected = this.discoverySelected.filter((name) => (this.upstreamModels || []).includes(name) && !this.isConfiguredModel(name))
+      } catch (error) {
+        if (this._aiAlive && draft === this.providerDraft && generation === this.draftGeneration && scope === this.probeScope()) this.discoveryError = apiErrorDetail(error, "模型发现失败，请重试。")
+      } finally { if (sequence === this._discoverySequence) this.discovering = false }
     },
     /**
      * 把上游模型加入模型列表，保存后生效
@@ -598,12 +600,11 @@ export default {
       const added = names.filter((name) => !this.isConfiguredModel(name))
       added.forEach((name) => this.providerDraft.models.push({ name, enabled: true, protocol: null, base_url: null, profile: {}, params: {} }))
       if (!added.length) return
-      this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty()
+      this.modelsDirty = true; this.syncDirty()
       this.$message.success(added.length === 1 ? `已添加 ${added[0]}，保存后生效。` : `已添加 ${added.length} 个模型，保存后生效。`)
     },
     modelIndex(model) { return this.providerDraft.models.findIndex((item) => item === model || item.name === model.name) },
-    modelTestKey(model) { return `${this.providerDraft?.name || this.selectedProviderName}/${model.name}` },
-    deleteModel(model) { const actual = this.modelIndex(model); if (actual < 0) return; this.providerDraft.models.splice(actual, 1); this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty() },
+    deleteModel(model) { if (this.currentModelChecks[model.name]) return; const actual = this.modelIndex(model); if (actual < 0) return; this.providerDraft.models.splice(actual, 1); this.modelsDirty = true; this.syncDirty() },
     isConfiguredModel(name) { return (this.providerDraft?.models || []).some((model) => model.name === name) },
     missingUpstream(model) { const upstream = this.upstreamModels; return Boolean(upstream) && !model.protocol && !model.base_url && !upstream.includes(model.name) },
     formatTime(seconds) { return seconds ? new Date(seconds * 1000).toLocaleString() : "" },
@@ -629,18 +630,16 @@ export default {
       return parts.join(" · ")
     },
     async testModel(model) {
-      const task = this.modelTask(model)
-      const providerName = this.providerDraft.name.trim() || this.selectedProviderName
-      if (!providerName) return this.$message.warning("请先填写服务商名称。")
-      const testKey = `${providerName}/${model.name}`
-      if (this.testingModelKey) return
-      this.testingModelKey = testKey
-      try { await this.$confirm(`将对 ${providerName}/${model.name} 发起一次最小 ${TASK_LABELS[task] || task} 请求，可能产生费用。`, "确认模型测试", { type: "warning" }) } catch (_) { this.testingModelKey = ""; return }
+      if (this.saving) return this.$message.warning("配置正在保存，请完成后再测试。")
+      if (this.currentModelChecks[model.name]) return
+      const task = this.modelTask(model); const context = this.probeContext(model)
+      try { await this.$confirm("将对 " + context.payload.model + " 发起一次最小 " + (TASK_LABELS[task] || task) + " 请求，可能产生费用。", "确认模型测试", { type: "warning" }) } catch (_) { return }
+      if (!this.probeCurrent(context) || this.currentModelChecks[model.name]) return
+      if (this.saving) return this.$message.warning("配置正在保存，请完成后再测试。")
       try {
-        const response = await this.aiPost(`${this.$root.prefix}/ai/models/test`, this.modelRequestPayload(model, task), { suppressErrorToast: true })
-        this.$message.success(`连接成功，延迟 ${response.data.latency_ms} ms`)
-      } catch (error) { this.$message.error(apiErrorDetail(error, "模型测试失败。")) }
-      finally { if (this.testingModelKey === testKey) this.testingModelKey = "" }
+        const data = await this.enqueueProbe(context, "/ai/models/test")
+        if (this.probeCurrent(context)) { this.$set(this.modelOutcomes, model.name, { context, kind: "test", data }); this.$message.success("连接成功，测试耗时 " + data.latency_ms + " ms") }
+      } catch (error) { if (this.probeCurrent(context)) { const message = apiErrorDetail(error, "模型测试失败。"); this.$set(this.modelOutcomes, model.name, { context, kind: "test", failed: true, message }); this.$message.error(message) } }
     },
     /**
      * 按当前服务商草稿构造模型测试与核验的请求体
@@ -673,43 +672,81 @@ export default {
      * @returns {Promise<object>} 后端返回的核验结果
      */
     async requestModelCheck(model, items) {
-      const testKey = this.modelTestKey(model)
-      this.testingModelKey = testKey
+      if (this.saving) throw new Error("配置正在保存，请完成后再核验。")
+      const context = this.probeContext(model)
+      if (this.currentModelChecks[model.name]) throw new Error("该模型正在核验或排队。")
       try {
-        const response = await this.aiPost(`${this.$root.prefix}/ai/models/check`, { ...this.modelRequestPayload(model, "chat"), items }, { suppressErrorToast: true })
-        if (!response.suc) throw new Error(response.info)
-        const { check, resolved_profile } = response.data
-        const targets = [this.providerDraft?.models, this.savedProvider?.models].map((models) => (models || []).find((item) => item.name === model.name))
+        const data = await this.enqueueProbe(context, "/ai/models/check", items)
+        if (!this.probeCurrent(context)) throw new Error("核验结果已过期，请重试。")
+        const { check, resolved_profile } = data
+        const targets = [this.providerDraft?.models, this.savedProvider?.models].map((models) => (models || []).find((item) => item.name === model.name && this.modelFingerprint(item) === context.fingerprint))
         targets.filter(Boolean).forEach((item) => { this.$set(item, "check", check); this.$set(item, "resolved_profile", resolved_profile) })
-        return response.data
-      } finally { if (this.testingModelKey === testKey) this.testingModelKey = "" }
+        this.$set(this.modelOutcomes, model.name, { context, kind: "check", data })
+        return data
+      } catch (error) {
+        if (this.probeCurrent(context)) this.$set(this.modelOutcomes, model.name, { context, kind: "check", failed: true, message: apiErrorDetail(error, "模型核验失败。") })
+        throw error
+      }
     },
-    /**
-     * 按默认项目逐个核验模型，结束后汇总失败的模型
-     * @param {object[]} models 模型配置
-     */
+    /** 同一页面的模型请求共用三个并发名额，排队时保留请求快照。 */
+    enqueueProbe(context, path, items) {
+      if (this.saving) return Promise.reject(new Error("配置正在保存，请完成后再核验。"))
+      if (this.currentModelChecks[context.model.name]) return Promise.reject(new Error("该模型正在核验或排队。"))
+      const id = ++this._probeSequence
+      this.$set(this.modelChecks, context.model.name, { id, generation: context.generation, state: "queued" })
+      return new Promise((resolve, reject) => { this._probeQueue.push({ context, path, items: items ? [...items] : null, id, resolve, reject }); this.drainProbes() })
+    },
+    invalidateProbeQueue() {
+      const queue = this._probeQueue || []; this._probeQueue = []
+      queue.forEach((job) => { if (this.modelChecks[job.context.model.name]?.id === job.id) this.$delete(this.modelChecks, job.context.model.name); job.reject(new Error("排队请求已失效。")) })
+    },
+    drainProbes() {
+      while (this._aiAlive && this._probeActive < 3 && this._probeQueue.length) {
+        const job = this._probeQueue.shift(); const { context } = job
+        if (!this.probeCurrent(context)) { if (this.modelChecks[context.model.name]?.id === job.id) this.$delete(this.modelChecks, context.model.name); job.reject(new Error("请求草稿已变化。")); continue }
+        this._probeActive += 1
+        this.$set(this.modelChecks, context.model.name, { id: job.id, generation: context.generation, state: "running" })
+        this.aiPost(this.$root.prefix + job.path, { ...context.payload, ...(job.items ? { items: job.items } : {}) }, { suppressErrorToast: true }).then((response) => {
+          if (!response.suc) throw new Error(response.info)
+          if (!this.probeCurrent(context)) throw new Error("核验结果已过期。")
+          job.resolve(response.data)
+        }).catch(job.reject).finally(() => { this._probeActive -= 1; if (this.modelChecks[context.model.name]?.id === job.id) this.$delete(this.modelChecks, context.model.name); this.drainProbes() })
+      }
+    },
+    discoveryConnectionScope() { const draft = this.providerDraft || {}; return JSON.stringify([this.selectedProviderName, draft.name, draft.preset, draft.protocol, draft.base_url, draft.timeout, draft.headersText, draft.paramsText, draft.api_key_slots]) },
+    blockProbeSave() { if (!this.hasProbeActivity) return false; this.$message.warning("模型发现、测试或核验尚未结束，请完成后再保存配置。其他模型仍可编辑或核验。"); return true },
+    probeScope() { const draft = this.providerDraft || {}; return JSON.stringify([this.revision, draft.name, draft.preset, draft.protocol, draft.base_url, draft.timeout, draft.headersText, draft.paramsText, draft.api_key_slots]) },
+    modelFingerprint(model) { const { check, resolved_profile, ...value } = model; return JSON.stringify(value) },
+    probeContext(model) { return { model, listed: this.providerDraft.models.includes(model), draft: this.providerDraft, generation: this.draftGeneration, epoch: this.aiEpoch, network: businessNetworkEpoch(), editor: !this.providerDraft.models.includes(model) && this.editorVisible, scope: this.probeScope(), fingerprint: this.modelFingerprint(model), payload: clone(this.modelRequestPayload(model, this.modelTask(model))) } },
+    editorProbeCurrent(context) { try { return this.editorVisible && this.modelFingerprint(this.$refs.modelEditor.buildValue()) === context.fingerprint } catch (_) { return false } },
+    probeCurrent(context) { return this._aiAlive && !this.sessionExpired && !isBusinessNetworkFrozen() && context.network === businessNetworkEpoch() && (!context.editor || this.editorProbeCurrent(context)) && context.draft === this.providerDraft && context.generation === this.draftGeneration && context.epoch === this.aiEpoch && context.scope === this.probeScope() && context.fingerprint === this.modelFingerprint(context.model) && (!context.listed || this.providerDraft.models.includes(context.model)) },
     async checkModels(models) {
-      if (!models.length || this.testingModelKey) return
-      const failed = []
+      if (!models.length || this.batchChecking) return
+      models = models.filter((model) => !this.currentModelChecks[model.name])
+      if (!models.length) return
+      const generation = this.draftGeneration; const failed = []
       this.batchChecking = true
-      try {
-        for (const model of models) {
-          try { await this.requestModelCheck(model, DEFAULT_CHECK_ITEMS) } catch (error) { failed.push(`${model.name}：${apiErrorDetail(error, "核验失败")}`) }
-        }
-      } finally { this.batchChecking = false }
-      if (failed.length) this.$message.error({ message: `${failed.length} 个模型核验失败，可稍后重试。${failed.join("；")}`, duration: 8000 })
-      else this.$message.success(`已核验 ${models.length} 个模型。`)
+      try { await Promise.all(models.map(async (model) => { try { await this.requestModelCheck(model, DEFAULT_CHECK_ITEMS) } catch (error) { failed.push(model.name + "：" + apiErrorDetail(error, "核验失败")) } })) }
+      finally { this.batchChecking = false }
+      if (!this._aiAlive || generation !== this.draftGeneration) return
+      if (failed.length) this.$message.error({ message: failed.length + " 个模型核验失败，可稍后重试。" + failed.join("；"), duration: 8000 })
+      else this.$message.success("已核验 " + models.length + " 个模型。")
     },
     async checkUncheckedModels() {
       const models = [...this.uncheckedModels]
+      const contexts = models.map((model) => this.probeContext(model))
       try { await this.$confirm(`将按默认项目核验 ${models.length} 个对话模型，每个模型发起数次小请求，可能产生费用。`, "核验未核验模型", { type: "warning", confirmButtonText: "开始核验", cancelButtonText: "取消" }) } catch (_) { return }
+      if (!contexts.every((context) => this.probeCurrent(context))) return
       await this.checkModels(models)
     },
     /**
      * 保存服务商；有新增且未核验的对话模型时，由用户选择保存后核验或跳过核验
      */
     async saveProviderWithCheck() {
+      if (this.blockProbeSave()) return
       if (this.saving || !this.providerDraft) return
+      const draft = this.providerDraft; const generation = this.draftGeneration; const scope = this.probeScope()
+      const confirmedModels = JSON.stringify(draft.models.map((model) => this.modelFingerprint(model)))
       const saved = this.providerDraft.isNew ? [] : (this.providers.find((item) => item.name === this.selectedProviderName)?.models || []).map((item) => item.name)
       const added = this.providerDraft.models.filter((model) => !saved.includes(model.name) && model.enabled !== false && this.modelTask(model) === "chat" && this.checkState(model) !== CHECK_STATES.checked).map((model) => model.name)
       let check = false
@@ -719,14 +756,19 @@ export default {
           check = true
         } catch (action) { if (action !== "cancel") return }
       }
+      if (draft !== this.providerDraft || generation !== this.draftGeneration || scope !== this.probeScope() || confirmedModels !== JSON.stringify(this.providerDraft.models.map((model) => this.modelFingerprint(model)))) { this.$message.warning("服务商或模型草稿已变化，请重新保存并确认核验。"); return }
+      if (this.blockProbeSave()) return
       if (!(await this.saveProvider())) return
+      const savedDraft = this.providerDraft; const savedGeneration = this.draftGeneration
       if (check) await this.checkModels((this.providerDraft?.models || []).filter((model) => added.includes(model.name)))
+      if (savedDraft !== this.providerDraft || savedGeneration !== this.draftGeneration) return
       await this.fillDefaultModels()
     },
     /**
      * 为尚未配置默认模型的任务选用当前服务商中合适的模型；对话任务优先选用已核验且对话正常的模型
      */
     async fillDefaultModels() {
+      if (this.blockProbeSave()) return
       const provider = this.savedProvider
       const defaults = this.sectionDrafts.default_models || {}
       if (!provider) return
@@ -751,7 +793,8 @@ export default {
      * @param {object} model 模型配置
      */
     async setDefault(model) {
-      if (this.saving) return
+      if (this.blockProbeSave()) return
+      if (this.saving || this.currentModelChecks[model.name]) return
       const task = modelTask(model)
       const pending = this.routingDirty
       this.$set(this.sectionDrafts.default_models, task, `${this.selectedProviderName}/${model.name}`)
@@ -764,21 +807,23 @@ export default {
      * @param {object} model 模型配置
      */
     async quickCheck(model) {
-      if (this.testingModelKey) return
+      const context = this.probeContext(model)
+      if (this.currentModelChecks[model.name]) return
       if (!(this.providerDraft.name.trim() || this.selectedProviderName)) return this.$message.warning("请先填写服务商名称。")
       try { await this.$confirm(`将对 ${model.name} 按默认项目各发起一到两次小请求，用实测结果确定能力，可能产生少量费用。需要核验网页搜索等项目时，请在“编辑”中选择。`, "核验模型能力", { type: "info", confirmButtonText: "开始核验", cancelButtonText: "取消" }) } catch (_) { return }
+      if (!this.probeCurrent(context)) return
       try {
         const data = await this.requestModelCheck(model, DEFAULT_CHECK_ITEMS)
         const failed = data.results.find((row) => row.item === "chat" && row.status === "failed")
         if (failed) this.$message.error({ message: `${model.name} 核验失败：${briefDetail(failed.detail)}`, duration: 6000 })
         else this.$message.success(`${model.name} 核验完成：${checkSummary(data.results) || "连通正常"}`)
-      } catch (error) { this.$message.error(apiErrorDetail(error, "模型核验失败。")) }
+      } catch (error) { if (this.probeCurrent(context)) this.$message.error(apiErrorDetail(error, "模型核验失败。")) }
     },
-    toggleModel(model, enabled) { this.$set(model, "enabled", enabled); this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty() },
-    openEditor(model = null) { this.editorModel = model; this.editorIndex = model ? this.modelIndex(model) : null; this.editorVisible = true },
+    toggleModel(model, enabled) { if (this.currentModelChecks[model.name]) return; this.$set(model, "enabled", enabled); this.modelsDirty = true; this.syncDirty() },
+    openEditor(model = null) { if (model && this.currentModelChecks[model.name]) return; this.editorModel = model; this.editorIndex = model ? this.modelIndex(model) : null; this.editorVisible = true },
     saveEditedModel(value) {
       if (this.editorIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.editorIndex, 1, value)
-      this.modelsDirty = true; this.invalidateProbeResults(); this.syncDirty()
+      this.modelsDirty = true; this.syncDirty()
     },
     resolveSchema(node) { if (!node?.$ref) return node || {}; return node.$ref.replace(/^#\//, "").split("/").reduce((value, key) => value?.[key], this.schema) || node },
     sectionSchema(name) { const properties = this.schema.properties || {}; const map = SECTION_KEYS; if (name === "advanced") return { type: "object", properties: { client_settings: properties.client_settings, debug_log: properties.debug_log } }; return this.resolveSchema(properties[map[name]]) },
@@ -849,7 +894,7 @@ export default {
     resetRouting() { this.resetSection("default_models"); this.resetSection("model_groups") },
     resetSection(name) { this.$set(this.sectionDrafts, name, clone(this.originalSections[name])); if (name === "model_groups") { this.groupRows = this.groupsToRows(this.sectionDrafts.model_groups); this.selectedRouteGroupId = this.groupRows[0]?.clientId || ""; this.routingIssues = [] } this.$set(this.dirtySections, name, false); this.syncDirty() },
     sectionInvalid(name) { return Boolean(this.invalidSections[name]?.length) },
-    async saveSection(name, { successMessage } = {}) { const value = this.sectionDrafts[name]; if (this.sectionInvalid(name) || (this.saving && this.saving !== "model_groups")) return; this.saving = name; try { const submitted = { section: name, value: JSON.stringify(name === "model_groups" ? this.groupRows : this.sectionDrafts[name]) }; const response = await this.aiPut(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response, { successMessage }) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
+    async saveSection(name, { successMessage } = {}) { if (this.blockProbeSave()) return; const value = this.sectionDrafts[name]; if (this.sectionInvalid(name) || (this.saving && this.saving !== "model_groups")) return; this.saving = name; try { const submitted = { section: name, value: JSON.stringify(name === "model_groups" ? this.groupRows : this.sectionDrafts[name]) }; const response = await this.aiPut(`${this.$root.prefix}/ai/configuration/sections/${name}`, { expected_revision: this.revision, value }); if (!response.suc) throw new Error(response.info); if (response.data?.apply_mode !== "failed") this.applySavedConfiguration(response.data, this.selectedProviderName, submitted); await this.handleAiApply(response, { successMessage }) } catch (error) { this.captureOperationError(error, "AI 配置保存失败。") } finally { this.saving = "" } },
     groupsToRows(groups) { const names = new Set(Object.keys(groups || {})); return Object.entries(groups || {}).map(([name, targets]) => ({ name, targets: targets.map((value) => ({ kind: names.has(value) ? "group" : "model", value, clientId: uid() })), clientId: uid() })) },
     addGroup() { const group = { name: "", targets: [], clientId: uid() }; this.groupRows.push(group); this.selectedRouteGroupId = group.clientId; this.markGroupsDirty() },
     async removeSelectedGroup() {
@@ -887,6 +932,7 @@ export default {
       return ""
     },
     async saveGroups() {
+      if (this.blockProbeSave()) return
       if (this.saving) return
       if (this.hasGroupErrors) { this.$message.warning("请先修正路由组名称、目标或循环引用。"); return }
       const value = this.groupRows.map((item) => ({ name: item.name.trim(), targets: item.targets.map((target) => target.value.trim()) }))
@@ -940,6 +986,15 @@ export default {
 </script>
 
 <style scoped>
+.provider-list button > strong { min-width: 0; flex: 1; }
+.discovery-toolbar { display: flex; gap: 12px; }
+.discovery-toolbar .el-input { flex: 1; }
+.discovery-models { display: block; max-height: 48vh; min-height: 100px; overflow-y: auto; }
+.discovery-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; border-bottom: 1px solid var(--border-color-light); }
+.discovery-row .el-checkbox { min-width: 0; max-width: 70%; white-space: normal; overflow-wrap: anywhere; }
+.discovery-row small { font-size: 12px; line-height: 1.5; color: var(--text-color-secondary); text-align: right; }
+@media (max-width: 600px) { .discovery-toolbar { flex-wrap: wrap; }.discovery-row { align-items: flex-start; flex-direction: column; padding: 8px 0; }.discovery-row .el-checkbox { max-width: 100%; } }
+
 .ai-page { border-radius:16px; max-width:1600px; margin:0 auto; min-height: 100%; padding: 20px 22px 32px; overflow-y: auto; color: var(--text-color); background: var(--bg-color-secondary,#fff); }.page-header, .section-title, .subheading, .section-action { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.page-header { margin-bottom: 12px; }.configuration-warning { margin-bottom: 12px; }.configuration-warning code { margin-right: 6px; }.load-error { display: grid; min-height: 260px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 28px; border: 1px solid var(--danger-color); border-radius: 8px; background: var(--bg-color-secondary); }.load-error > i { color: var(--danger-color); font-size: 34px; }.load-error h2 { margin: 0; font-size: 18px; }.load-error p { margin: 8px 0 0; color: var(--text-color-secondary); }.page-header h1, .section-title h2, .subheading h3 { margin: 0; letter-spacing: 0; }.page-header h1 { font-size: 24px; }.page-header p, .section-title p, .subheading p { margin: 5px 0 0; color: var(--text-color-secondary); font-size: 13px; }.header-status { display: flex; align-items: center; gap: 8px; }.ai-tabs { min-height: 0; }.provider-workbench { display: grid; min-height: 650px; grid-template-columns: 250px minmax(0, 1fr); border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.provider-sidebar { min-width: 0; padding: 16px; border-right: 1px solid var(--border-color); }.sidebar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }.provider-list { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }.provider-list button { display: flex; width: 100%; min-height: 58px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--text-color); background: transparent; text-align: left; cursor: pointer; }.provider-list button:hover { background: var(--bg-color-hover); }.provider-list button.active { border-color: var(--primary-color); background: var(--bg-color-hover); }.provider-list span { display: flex; min-width: 0; flex-direction: column; }.provider-list strong, .provider-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.provider-list small { margin-top: 4px; color: var(--text-color-secondary); }.provider-main { min-width: 0; padding: 20px 22px 26px; }.provider-form, .advanced-grid, .default-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.full-control { width: 100%; }.secret-section, .models-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-color-light); }.secret-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-top: 10px; }.advanced-collapse { margin-top: 14px; border-bottom: 0; }.provider-empty { display: grid; place-content: center; color: var(--text-color-secondary); text-align: center; }.provider-empty i { font-size: 42px; }.settings-section { min-height: 480px; padding: 20px 22px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }.section-action { position: sticky; bottom: 0; z-index: 3; margin-top: 10px; padding: 12px 0; border-top: 1px solid var(--border-color); background: var(--bg-color); }.section-action span { margin-right: auto; color: var(--text-color-secondary); font-size: 12px; }.empty-copy { padding: 30px 12px; color: var(--text-color-secondary); text-align: center; }.danger-text { color: var(--danger-color) !important; }.upstream-summary { margin: 8px 0 0; color: var(--text-color-secondary); font-size: 12px; }
 @media (max-width: 820px) { .ai-page { padding: 12px; }.page-header, .section-title, .subheading { align-items: flex-start; flex-direction: column; }.header-status { width: 100%; flex-wrap: wrap; }.load-error { min-height: 220px; grid-template-columns: auto minmax(0, 1fr); padding: 20px; }.load-error .el-button { grid-column: 1 / -1; }.provider-workbench { grid-template-columns: 1fr; }.provider-sidebar { border-right: 0; border-bottom: 1px solid var(--border-color); }.provider-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }.provider-main { padding: 16px; }.provider-form, .advanced-grid, .default-grid { grid-template-columns: 1fr; } }
 .mobile-provider-select { display: none; width: 100%; margin-top: 10px; }
@@ -976,8 +1031,6 @@ export default {
 .provider-workbench.no-sidebar { grid-template-columns: 1fr; }
 .provider-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px 16px; }
 .provider-title { min-width: 0; flex: 1 1 240px; }
-.provider-header > .provider-logo { margin-top: 2px; }
-.provider-list button > .provider-logo { margin-right: -2px; }
 .provider-list button > span { flex: 1; }
 .external-link { display: inline-flex; align-items: center; gap: 2px; margin-left: 10px; color: var(--primary-color); font-size: 12px; font-weight: normal; text-decoration: none; }
 .external-link:hover { text-decoration: underline; }
@@ -1002,5 +1055,8 @@ export default {
 </style>
 
 <style scoped>
+::v-deep .model-discovery-dialog { display: flex; flex-direction: column; max-height: 90vh; margin-bottom: 5vh; }
+::v-deep .model-discovery-dialog .el-dialog__header, ::v-deep .model-discovery-dialog .el-dialog__footer { flex: 0 0 auto; }
+::v-deep .model-discovery-dialog .el-dialog__body { min-height: 0; overflow-y: auto; }
 .advanced-provider-heading { font-size:13px; font-weight:600; margin:24px 0 0; color:var(--primary-color,#5c83d6); }.advanced-modified { display:inline-block; margin-top:8px; font-size:11px; color:var(--primary-color,#5c83d6); }.advanced-proxy-note { margin:18px 0 0; font-size:12px; color:var(--text-color-secondary); }.advanced-proxy-note .el-button { margin-left:8px; }@media(max-width:768px) { .ai-page .page-header { flex-direction:column; align-items:stretch; }.ai-page .header-status { flex-wrap:wrap; }.ai-page .header-status > * { margin-left:0; } }
 </style>

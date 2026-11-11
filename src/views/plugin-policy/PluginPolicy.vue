@@ -19,7 +19,9 @@
 
     <div class="mobile-account-select">
       <el-select :value="selectedBotId" filterable @change="selectAccount" placeholder="选择机器人账号" :disabled="saving">
-        <el-option v-for="item in accounts" :key="item.bot_id" :label="accountLabel(item)" :value="item.bot_id" />
+        <el-option v-for="item in accounts" :key="item.bot_id" :label="accountLabel(item)" :value="item.bot_id">
+          <div class="identity-option"><el-avatar :size="24" :src="accountAvatar(item)" icon="el-icon-user-solid" /><span>{{ accountLabel(item) }}</span></div>
+        </el-option>
       </el-select>
     </div>
 
@@ -39,20 +41,24 @@
             :class="{ active: item.bot_id === selectedBotId }"
             @click="selectAccount(item.bot_id)"
           >
-            <i class="connection-dot" :class="{ online: item.connected }"></i>
-            <span>
-              <strong>{{ item.nickname || item.runtime_bot_id }}</strong>
+            <div class="account-avatar"><el-avatar :size="36" :src="accountAvatar(item)" icon="el-icon-user-solid" /><i class="connection-dot" :class="{ online: item.connected }"></i></div>
+            <span :title="accountLabel(item)">
+              <strong>{{ accountName(item) }}</strong>
               <small>{{ item.bot_id }}</small>
               <small v-if="item.bot_enabled === false" class="bot-off">全局开关已关闭</small>
             </span>
             <em>{{ item.policy ? item.policy.name : "独立" }}</em>
           </button>
         </div>
-        <div v-if="policyScope === 'group'" class="account-list group-list">
-          <strong>已知群 · {{ groups.length }}</strong>
+        <div v-if="policyScope === 'group'" class="group-pane">
+          <strong>已记录群 · {{ groups.length }}</strong>
+          <p class="known-groups-hint">来自该 Bot 的群同步与事件记录，不代表实时在群数量。</p>
+          <p v-if="!groups.length" class="known-groups-hint">{{ loading ? "正在读取此 Bot 的群列表…" : "此 Bot 暂无已记录群，连接同步或收到群消息后会更新。" }}</p>
+          <div class="account-list group-list">
           <button v-for="group in groups" :key="groupKey(group)" type="button" :disabled="saving" :class="{ active: groupKey(group) === selectedGroupKey }" @click="selectGroup(groupKey(group))">
-            <i class="el-icon-chat-dot-round"></i><span><strong>{{ group.group_name }}</strong><small>{{ group.group_id }}{{ group.channel_id ? '/' + group.channel_id : '' }}</small></span>
+            <el-avatar :size="36" :src="groupAvatar(group)" icon="el-icon-chat-dot-round" /><span :title="group.group_name"><strong>{{ group.group_name }}</strong><small>{{ group.group_id }}{{ group.channel_id ? '/' + group.channel_id : '' }}</small></span>
           </button>
+          </div>
         </div>
       </aside>
 
@@ -64,7 +70,9 @@
             <el-radio-button label="private">私聊设置</el-radio-button>
           </el-radio-group>
           <el-select v-if="policyScope === 'group'" :value="selectedGroupKey" @change="selectGroup" filterable placeholder="选择该 Bot 的已知群" :disabled="saving">
-            <el-option v-for="group in groups" :key="groupKey(group)" :value="groupKey(group)" :label="`${group.group_name} (${group.group_id}${group.channel_id ? '/' + group.channel_id : ''})`" />
+            <el-option v-for="group in groups" :key="groupKey(group)" :value="groupKey(group)" :label="`${group.group_name} (${group.group_id}${group.channel_id ? '/' + group.channel_id : ''})`">
+              <div class="identity-option"><el-avatar :size="24" :src="groupAvatar(group)" icon="el-icon-chat-dot-round" /><span>{{ group.group_name }} ({{ group.group_id }})</span></div>
+            </el-option>
           </el-select>
           <span v-if="policyScope === 'private'" class="scope-label">所有私聊</span>
         </div>
@@ -74,7 +82,7 @@
             <button v-if="editingPolicy" type="button" class="back-button" @click="leavePolicyEditor" title="返回账号设置">
               <i class="el-icon-back"></i>
             </button>
-            <h2>{{ editorTitle }}</h2>
+            <div class="editor-identity"><el-avatar v-if="!editingPolicy" :size="40" :src="editorAvatar" :icon="policyScope === 'group' ? 'el-icon-chat-dot-round' : 'el-icon-user-solid'" /><h2>{{ editorTitle }}</h2></div>
             <p v-if="editingPolicy">修改立即生效，同步影响 {{ editingPolicy.bound_bot_ids.length }} 个绑定账号</p>
             <p v-else>{{ account.platform }} · {{ account.connected ? "在线" : "离线" }}</p>
           </div>
@@ -263,8 +271,10 @@ export default {
     }
   },
   computed: {
-    editorTitle() { return this.editingPolicy ? this.editingPolicy.name : this.policyScope === "private" ? "所有私聊" : (this.groupAccount?.group_name || this.account?.nickname || this.account?.runtime_bot_id || "账号设置") },
-    filteredAccounts() { const q = this.accountSearch.trim().toLowerCase(); return q ? this.accounts.filter((x) => `${x.nickname} ${x.bot_id} ${x.runtime_bot_id}`.toLowerCase().includes(q)) : this.accounts },
+    accountIdentities() { return Object.fromEntries((this.$store.state.botIdentities || []).filter(item => item.storage_bot_id).map(item => [item.storage_bot_id, item])) },
+    editorTitle() { return this.editingPolicy ? this.editingPolicy.name : this.policyScope === "private" ? "所有私聊" : (this.groupAccount?.group_name || this.accountName(this.account) || "账号设置") },
+    editorAvatar() { return this.policyScope === "group" ? this.groupAvatar(this.groupAccount) : this.accountAvatar(this.account) },
+    filteredAccounts() { const q = this.accountSearch.trim().toLowerCase(); return q ? this.accounts.filter((x) => `${this.accountName(x)} ${x.bot_id} ${x.runtime_bot_id}`.toLowerCase().includes(q)) : this.accounts },
     currentFeatures() { const known = this.catalog[this.activeKind] || []; const target = this.groupAccount || this.privateAccount || this.account; const missing = target && !this.editingPolicy ? (this.activeKind === "plugins" ? target.missing_plugins : target.missing_tasks) || [] : []; return [...known, ...missing.filter((module) => !known.some((x) => x.module === module)).map((module) => ({ module, name: "已缺失模块", feature_type: "MISSING", load_status: false, global_status: false, missing: true }))] },
     filteredFeatures() { const q = this.featureSearch.trim().toLowerCase(); return this.currentFeatures.filter((item) => { const matchText = !q || `${item.name} ${item.module} ${item.menu_type || ""}`.toLowerCase().includes(q); const enabled = this.isEnabled(item.module); const unavailable = this.globallyUnavailable(item); const matchStatus = this.statusFilter === "all" || (this.statusFilter === "enabled" && enabled) || (this.statusFilter === "disabled" && !enabled) || (this.statusFilter === "unavailable" && unavailable); return matchText && matchStatus }) },
     visibleFeatures() { return this.filteredFeatures.slice(0, this.visibleCount) },
@@ -336,9 +346,10 @@ export default {
     targetRevisions(botIds) { return Object.fromEntries(botIds.map((id) => [id, this.accounts.find((x) => x.bot_id === id)?.revision || ""])) },
     async selectScope(scope, groupId = "") {
       if (this.saving || scope === this.policyScope) return
-      this.selectionRequest++; this.policyScope = scope; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""; this.setDraft(this.account)
-      if (scope === "account") return
-      if (scope === "private") { this.loadPrivatePolicy(); return }
+      this.selectionRequest++; this.policyScope = scope; this.groups = []; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""; this.setDraft(this.account)
+      this.loadError = ""
+      if (scope === "account") { this.loading = false; return }
+      if (scope === "private") return this.loadPrivatePolicy()
       const request = ++this.selectionRequest
       this.loading = true
       try {
@@ -349,7 +360,7 @@ export default {
         const group = this.groups.find((item) => item.group_id === groupId) || this.groups[0]
         if (group) await this.selectGroup(this.groupKey(group))
       } catch (error) { if (request === this.selectionRequest) this.loadError = error.message || "群列表读取失败" }
-      finally { if (!this.destroyed) this.loading = false }
+      finally { if (request === this.selectionRequest && !this.destroyed) this.loading = false }
     },
     async loadPrivatePolicy() {
       if (!this.account) return
@@ -391,27 +402,41 @@ export default {
         this.catalog = catalog.data; this.accounts = accounts.data; this.policies = policies.data
         const { bot_id: requested, group_id: groupId } = this.$route.query
         const next = this.accounts.some((x) => x.bot_id === requested) ? requested : (this.selectedBotId || this.accounts[0]?.bot_id || "")
-        if (next) await this.loadAccount(next)
-        if (next && next === requested && groupId) await this.selectScope("group", groupId)
-      } catch (error) { this.loadError = error?.response?.data?.detail?.message || error.message || "插件策略数据读取失败" }
-      finally { this.loading = false }
+        if (next) await this.loadAccount(next, next === requested && groupId ? "group" : this.policyScope, next === requested ? groupId : "")
+      } catch (error) { if (request === this.listRequest && !this.destroyed) this.loadError = error?.response?.data?.detail?.message || error.message || "插件策略数据读取失败" }
+      finally { if (request === this.listRequest && !this.destroyed) this.loading = false }
     },
-    async loadAccount(botId) {
+    async loadAccount(botId, scope = this.policyScope, groupId = "") {
       const request = ++this.selectionRequest
-      const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(botId)}`)
-      if (request !== this.selectionRequest || this.destroyed) return
-      if (!resp.suc) throw new Error(resp.info)
-      this.selectedBotId = botId; this.account = resp.data; this.editingPolicy = null
-      this.policyScope = "account"; this.groups = []; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""
-      this.setDraft(resp.data)
-      if (this.$route.query.bot_id !== botId) this.navigate({ bot_id: botId })
+      this.loading = true; this.loadError = ""
+      try {
+        const resp = await this.getRequest(`${this.$root.prefix}/plugin-policy/accounts/${encodeURIComponent(botId)}`)
+        if (request !== this.selectionRequest || this.destroyed) return
+        if (!resp.suc) throw new Error(resp.info)
+        this.selectedBotId = botId; this.account = resp.data; this.editingPolicy = null
+        this.policyScope = "account"; this.groups = []; this.groupAccount = null; this.privateAccount = null; this.selectedGroupKey = ""
+        this.setDraft(resp.data)
+        if (this.$route.query.bot_id !== botId) this.navigate({ bot_id: botId })
+        if (scope !== "account") await this.selectScope(scope, groupId)
+      } catch (error) {
+        if (request === this.selectionRequest && !this.destroyed) this.loadError = error.message || "账号设置读取失败"
+      } finally { if (request === this.selectionRequest && !this.destroyed) this.loading = false }
     },
     async selectAccount(botId) {
       if (this.saving || !botId || botId === this.account?.bot_id && !this.editingPolicy) return
-      this.loading = true; try { await this.loadAccount(botId) } finally { this.loading = false }
+      this.listRequest++
+      await this.loadAccount(botId)
     },
-    accountLabel(item) { return `${item.nickname || item.runtime_bot_id} (${item.bot_id})` },
-    boundAccountNames(policy) { return policy.bound_bot_ids.map((id) => this.accounts.find((item) => item.bot_id === id)?.nickname || id).join("、") },
+    accountName(item) { return item ? this.accountIdentities[item.bot_id]?.nickname || item.nickname || item.runtime_bot_id || item.bot_id : "" },
+    accountAvatar(item) {
+      if (!item) return ""
+      const avatar = this.accountIdentities[item.bot_id]?.ava_url || item.avatar_url
+      if (avatar) return avatar
+      return item.platform === "qq" && /^[1-9][0-9]*$/.test(item.bot_id) ? `https://q1.qlogo.cn/g?b=qq&nk=${item.bot_id}&s=100` : ""
+    },
+    groupAvatar(group) { return group?.platform_scope === "qq_client" && /^[1-9][0-9]*$/.test(group.group_id) ? `https://p.qlogo.cn/gh/${group.group_id}/${group.group_id}/100/` : "" },
+    accountLabel(item) { return `${this.accountName(item)} (${item.bot_id})` },
+    boundAccountNames(policy) { return policy.bound_bot_ids.map((id) => this.accountName(this.accounts.find((item) => item.bot_id === id)) || id).join("、") },
     isEnabled(module) { return !this.draft[this.activeKind].includes(module) },
     /**
      * 当前群是否已由超管锁定该功能
@@ -656,6 +681,17 @@ export default {
 @container (max-width: 580px) { .feature-table { min-width: 0; }.feature-head { display: none; }.feature-row:not(.feature-head) { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px; padding: 10px 0; }.feature-row:not(.feature-head) > .el-checkbox { grid-row: 1 / 3; }.feature-row:not(.feature-head) > span:nth-child(3) { grid-column: 2; }.feature-row:not(.feature-head) > span:nth-child(4) { grid-column: 3; grid-row: 2; }.feature-row:not(.feature-head) > span:nth-child(5) { grid-column: 3; grid-row: 1; } }
 @media (max-width: 820px) { .policy-page { padding: 12px; }.feature-sticky { top: -12px; }.page-header { align-items: flex-start; flex-direction: column; }.header-actions { width: 100%; justify-content: flex-start; }.mobile-account-select { display: block; }.policy-workbench { min-height: 560px; grid-template-columns: 1fr; }.account-pane { display: none; }.editor-pane { padding: 16px 14px 20px; overflow-x: clip; }.policy-meta-form { grid-template-columns: 1fr; }.feature-toolbar { align-items: stretch; flex-direction: column; }.feature-toolbar .el-input, .feature-toolbar .el-select { width: 100%; max-width: none; margin-left: 0; }.batch-toolbar { align-items: flex-start; flex-wrap: wrap; padding: 8px 0; }.batch-toolbar span { width: calc(100% - 130px); }.policy-list-row { align-items: flex-start; flex-direction: column; padding: 12px 0; }.policy-list-row > div { flex-wrap: wrap; } }
 .dialog-note { margin: 0; color: var(--text-color-secondary); font-size: 12px; }
+.account-list button { grid-template-columns: 36px minmax(0, 1fr) auto; }
+.account-list .el-avatar { display: inline-block; flex: none; }
+.account-avatar { position: relative; width: 36px; height: 36px; }
+.account-avatar .connection-dot { position: absolute; right: -1px; bottom: 0; border: 2px solid var(--bg-color-secondary); box-sizing: content-box; }
+.known-groups-hint { margin: 0 0 6px; color: var(--text-color-secondary); font-size: 11px; line-height: 1.5; }
+.group-pane { margin-top: 14px; }
+.identity-option { display: flex; align-items: center; gap: 8px; max-width: 100%; }
+.identity-option .el-avatar, .editor-identity .el-avatar { flex: none; }
+.identity-option > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.editor-heading .editor-identity { display: flex; width: 100%; min-width: 0; align-items: center; gap: 10px; }
+.editor-identity h2 { width: auto; min-width: 0; }
 @media (max-width: 767px) {
   .page-header { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .page-header > div, .header-actions { display: contents; }

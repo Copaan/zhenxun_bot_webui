@@ -353,7 +353,7 @@
           <h3>兼容信息</h3>
           <p>Python {{ detail.pypi.requires_python || "未限定" }} · Registry 版本 {{ detail.version }}</p>
           <h3>适配器</h3><p>{{ adapterLabel(detail) }}</p>
-          <h3>配置说明</h3><p>NoneBot 插件不使用真寻 Schema 配置；插件所需环境项请按官方文档在「系统设置 → 配置中心 → 环境配置」中填写。</p>
+          <h3>配置说明</h3><p>NoneBot 插件不使用真寻 Schema 配置；插件所需环境项请按官方文档在「系统设置 → 运行配置」中填写。</p>
           <el-button
             v-if="detail.managed"
             type="danger"

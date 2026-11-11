@@ -24,6 +24,7 @@ export default new Vuex.Store({
   state: {
     botType: null,
     botInfo: null,
+    botIdentities: [],
     selectedBotKey: null,
     chatObj: {}, // 聊天ws信息存储
     _chatId: null,
@@ -65,6 +66,9 @@ export default new Vuex.Store({
     SET_BOT(state, botInfo) {
       state.botInfo = botInfo
       if (botInfo && botInfo.bot_key) state.selectedBotKey = botInfo.bot_key
+    },
+    SET_BOT_IDENTITIES(state, bots) {
+      state.botIdentities = (bots || []).map(({ storage_bot_id, nickname, ava_url }) => ({ storage_bot_id, nickname, ava_url }))
     },
     START_PLUGIN_OPERATION(state, payload) {
       state.pluginOperation = {

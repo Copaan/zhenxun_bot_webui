@@ -33,50 +33,40 @@
       </div>
     </section>
 
-    <section v-if="overview && showGettingStarted" class="page-section getting-started">
-      <div class="section-heading">
-        <div><span class="eyebrow">快速开始</span><h2>让{{ botName }}开始聊天</h2></div>
-        <span class="muted">{{ gettingStartedDone }} / {{ gettingStarted.length }} 已完成</span>
-      </div>
-      <ol class="start-list">
-        <li v-for="(item, index) in gettingStarted" :key="item.key" class="start-row" :class="{ 'is-done': item.done }">
-          <span class="start-mark"><i v-if="item.done" class="el-icon-check"></i><template v-else>{{ index + 1 }}</template></span>
-          <div><strong>{{ item.title }}</strong><span>{{ item.detail }}</span></div>
-          <el-button v-if="!item.done" type="text" @click="goTo(item.route)">
-            {{ item.action }}<i class="el-icon-arrow-right el-icon--right"></i>
-          </el-button>
-        </li>
-      </ol>
-      <p class="start-tip">
-        <i class="el-icon-chat-dot-round"></i>
-        <span>在群里 @{{ botName }}，或以“{{ botName }}”开头说话就能和它聊天；人设、唤醒词和回复方式可以在</span>
-        <el-button type="text" @click="goTo('/ai/chat')">AI 聊天</el-button>
-        <span>中调整。</span>
-        <el-button type="text" class="start-hide" @click="hideGettingStarted">不再显示</el-button>
-      </p>
-    </section>
-
-    <section v-if="overview" class="page-section">
-      <div class="section-heading">
-        <div><span class="eyebrow">待处理</span><h2>{{ issueTitle }}</h2></div>
-        <span class="count-badge">{{ overview.issues.length }}</span>
-      </div>
-      <div v-if="overview.issues.length" class="issue-list">
-        <article
-          v-for="issue in overview.issues"
-          :key="issue.code"
-          class="issue-row"
-          :class="`is-${issue.severity}`"
-        >
-          <i :class="issue.severity === 'critical' ? 'el-icon-circle-close' : 'el-icon-warning-outline'"></i>
-          <div><strong>{{ issue.title }}</strong><span>{{ issue.detail }}</span></div>
-          <el-button type="text" @click="goTo(issue.action_route)">
-            {{ issue.action_label }}<i class="el-icon-arrow-right el-icon--right"></i>
-          </el-button>
-        </article>
-      </div>
-      <div v-else class="all-clear">数据库、缓存和协议连接均处于可用状态。</div>
-    </section>
+    <div v-if="overview" class="summary-grid" :class="{ 'single-card': !showGettingStarted }">
+      <section v-if="showGettingStarted" class="summary-card getting-started">
+        <div class="summary-heading">
+          <h2>快速开始</h2>
+          <span class="muted">{{ gettingStartedDone }} / {{ gettingStarted.length }} 已完成</span>
+        </div>
+        <ul class="start-list">
+          <li v-for="item in incompleteGettingStarted" :key="item.key" class="start-row">
+            <div><strong>{{ item.title }}</strong><span>{{ item.detail }}</span></div>
+            <el-button type="text" @click="goTo(item.route)">{{ item.action }}</el-button>
+          </li>
+        </ul>
+        <div class="summary-footer">
+          <el-button type="text" @click="goTo('/ai/chat')">聊天唤醒与人设设置</el-button>
+          <el-button type="text" class="start-hide" @click="hideGettingStarted">不再显示</el-button>
+        </div>
+      </section>
+      <section class="summary-card todo-card" :class="{ 'is-empty': !overview.issues.length }">
+        <div class="summary-heading">
+          <h2>待办<span v-if="overview.issues.length" class="muted"> {{ overview.issues.length }} 项</span></h2>
+          <span v-if="!overview.issues.length" class="no-issues">当前没有待办</span>
+        </div>
+        <div v-if="overview.issues.length" class="issue-list">
+          <article v-for="issue in visibleIssues" :key="issue.code" class="issue-row" :class="'is-' + issue.severity">
+            <i :class="issue.severity === 'critical' ? 'el-icon-circle-close' : 'el-icon-warning-outline'"></i>
+            <div><strong>{{ issue.title }}</strong><span>{{ issue.detail }}</span></div>
+            <el-button type="text" @click="goTo(issue.action_route)">{{ issue.action_label }}</el-button>
+          </article>
+        </div>
+        <el-button v-if="overview.issues.length > 3" type="text" class="issues-toggle" :aria-expanded="String(issuesExpanded)" @click="issuesExpanded = !issuesExpanded">
+          {{ issuesExpanded ? '收起' : '展开其余 ' + (overview.issues.length - 3) + ' 项' }}
+        </el-button>
+      </section>
+    </div>
 
     <section v-if="overview" class="page-section">
       <div class="section-heading">
@@ -141,6 +131,7 @@ export default {
     refreshing: false,
     analyticsVisible: false,
     detailsOpen: false,
+    issuesExpanded: false,
     overviewTimer: null,
     overviewRequest: null,
     overviewResumePending: false,
@@ -188,11 +179,17 @@ export default {
     gettingStartedDone() {
       return this.gettingStarted.filter((item) => item.done).length
     },
+    incompleteGettingStarted() {
+      return this.gettingStarted.filter((item) => !item.done)
+    },
     showGettingStarted() {
       return !this.gettingStartedHidden && this.gettingStartedDone < this.gettingStarted.length
     },
-    issueTitle() {
-      return this.overview.issues.length ? "需要留意的事项" : "当前没有待办"
+    visibleIssues() {
+      const priorities = { critical: 0, warning: 1, info: 2 }
+      const issues = [...(this.overview?.issues || [])].sort((left, right) =>
+        (priorities[left.severity] ?? 3) - (priorities[right.severity] ?? 3))
+      return this.issuesExpanded ? issues : issues.slice(0, 3)
     },
     updatedAt() {
       if (!this.overview?.generated_at) return ""
@@ -343,12 +340,12 @@ export default {
 <style lang="scss" scoped>
 .runtime-page { min-height: 100%; padding: 24px; overflow: auto; color: var(--text-color); background: var(--bg-color); }
 .runtime-hero, .section-heading, .hero-actions, .service-item, .issue-row, .bot-row, .details-toggle { display: flex; align-items: center; }
-.runtime-hero { min-height: 140px; justify-content: space-between; gap: 24px; padding: 26px 28px; border: 1px solid var(--border-color); border-left: 4px solid var(--el-color-info); border-radius: 8px; background: var(--bg-color-secondary); }
+.runtime-hero { min-height: 88px; justify-content: space-between; gap: 20px; padding: 16px 20px; border: 1px solid var(--border-color); border-left: 4px solid var(--el-color-info); border-radius: 8px; background: var(--bg-color-secondary); }
 .runtime-hero.is-ok { border-left-color: var(--el-color-success); }
 .runtime-hero.is-warning { border-left-color: var(--el-color-warning); }
 .runtime-hero.is-critical { border-left-color: var(--el-color-danger); }
 .runtime-hero h1, .section-heading h2 { margin: 4px 0 0; letter-spacing: 0; color: var(--text-color); }
-.runtime-hero h1 { font-size: 28px; }
+.runtime-hero h1 { font-size: 24px; }
 .runtime-hero p { margin: 8px 0 0; color: var(--text-color-secondary); }
 .eyebrow { font-size: 12px; font-weight: 700; color: var(--primary-color); text-transform: uppercase; }
 .hero-actions { gap: 16px; flex-shrink: 0; }
@@ -357,7 +354,7 @@ export default {
 .inline-error span { flex: 1; }
 .inline-error button { color: inherit; font-weight: 700; }
 .service-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; overflow: hidden; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
-.service-item { min-width: 0; min-height: 82px; gap: 12px; padding: 14px 18px; border-right: 1px solid var(--border-color); }
+.service-item { min-width: 0; min-height: 64px; gap: 10px; padding: 10px 14px; border-right: 1px solid var(--border-color); }
 .service-item > span:last-child { flex-shrink: 0; max-width: 40%; overflow: hidden; color: var(--text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .service-item:last-child { border-right: 0; }
 .service-item > div { min-width: 0; flex: 1; }
@@ -370,14 +367,12 @@ export default {
 .page-section, .details-section { margin-top: 16px; padding: 22px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
 .section-heading { justify-content: space-between; margin-bottom: 18px; }
 .section-heading h2 { font-size: 20px; }
-.count-badge { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid var(--border-color); border-radius: 50%; color: var(--text-color-secondary); }
 .issue-list, .bot-list { border-top: 1px solid var(--border-color); }
 .issue-row { min-height: 68px; gap: 14px; border-bottom: 1px solid var(--border-color); }
 .issue-row > i { color: var(--el-color-warning); font-size: 20px; }
 .issue-row.is-critical > i { color: var(--el-color-danger); }
 .issue-row > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .issue-row > div span { color: var(--text-color-secondary); }
-.all-clear { padding: 18px; color: var(--el-color-success); background: var(--el-color-success-light-9); border-left: 3px solid var(--el-color-success); }
 .daily-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border-color); }
 .daily-grid > div { min-height: 104px; padding: 20px; border-right: 1px solid var(--border-color); }
 .daily-grid > div:last-child { border-right: 0; }
@@ -393,20 +388,33 @@ export default {
 .empty-state { display: flex; min-height: 110px; align-items: center; justify-content: center; gap: 10px; color: var(--text-color-secondary); border: 1px dashed var(--border-color); }
 .bot-list + .empty-state { margin-top: 16px; }
 .start-list { margin: 0; padding: 0; border-top: 1px solid var(--border-color); list-style: none; }
-.start-row { display: flex; min-height: 68px; align-items: center; gap: 14px; border-bottom: 1px solid var(--border-color); }
+.start-row { display: flex; min-height: 0; align-items: center; gap: 12px; padding: 10px 0; font-size: 13px; border-bottom: 1px solid var(--border-color); }
 .start-row > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .start-row > div span { color: var(--text-color-secondary); }
-.start-row.is-done strong { color: var(--text-color-secondary); }
-.start-mark { display: grid; width: 26px; height: 26px; flex: 0 0 26px; place-items: center; border: 1px solid var(--primary-color); border-radius: 50%; color: var(--primary-color); font-size: 13px; font-weight: 700; }
-.start-row.is-done .start-mark { border-color: var(--el-color-success); color: #fff; background: var(--el-color-success); }
-.start-tip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 14px 0 0; color: var(--text-color-secondary); font-size: 13px; }
-.start-tip > i { margin-right: 4px; color: var(--primary-color); }
-.start-tip .el-button { padding: 0; }
-.start-tip .start-hide { margin-left: auto; color: var(--text-color-secondary); }
 .deferred-section { min-height: 260px; }
 .details-section { padding: 0; overflow: hidden; }
 .details-toggle { width: 100%; justify-content: space-between; padding: 20px 24px; color: var(--text-color); }
 .details-toggle > span { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 @media (max-width: 1100px) { .service-strip, .daily-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .service-item:nth-child(2), .daily-grid > div:nth-child(2) { border-right: 0; } .service-item:nth-child(-n + 2), .daily-grid > div:nth-child(-n + 2) { border-bottom: 1px solid var(--border-color); } }
 @media (max-width: 700px) { .runtime-page { padding: 12px; } .runtime-hero { min-height: 0; align-items: flex-start; flex-direction: column; padding: 22px; } .runtime-hero h1 { font-size: 23px; } .hero-actions { width: 100%; justify-content: space-between; } .service-strip, .daily-grid { grid-template-columns: minmax(0, 1fr); } .service-item, .daily-grid > div { border-right: 0; border-bottom: 1px solid var(--border-color); } .service-item:last-child, .daily-grid > div:last-child { border-bottom: 0; } .page-section { padding: 18px; } .issue-row { align-items: flex-start; flex-wrap: wrap; padding: 14px 0; } .issue-row .el-button { margin-left: 34px; } .start-row { align-items: flex-start; flex-wrap: wrap; padding: 14px 0; } .start-row .el-button { margin-left: 40px; } .bot-adapter { display: none; } }
+.summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 14px; margin-top: 14px; }
+.summary-grid.single-card { grid-template-columns: minmax(0, 1fr); }
+.summary-card { min-width: 0; padding: 14px 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color-secondary); }
+.summary-heading, .summary-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.summary-heading { margin-bottom: 8px; }
+.summary-heading h2 { margin: 0; font-size: 16px; }
+.summary-heading h2 .muted { margin-left: 6px; font-weight: normal; }
+.summary-footer { margin-top: 8px; }
+.summary-footer .el-button, .issues-toggle { padding: 4px 0; font-size: 12px; }
+.summary-footer .start-hide { color: var(--text-color-secondary); }
+.todo-card.is-empty .summary-heading { margin-bottom: 0; }
+.no-issues { color: var(--text-color-secondary); font-size: 13px; }
+.issues-toggle { margin-top: 10px; }
+.summary-card .issue-row { min-height: 0; padding: 10px 0; gap: 8px; font-size: 13px; }
+.summary-card .issue-row > i { font-size: 16px; }
+.summary-card .issue-row > div { overflow-wrap: anywhere; }
+.summary-card .issue-row .el-button { flex-shrink: 0; font-size: 12px; }
+.summary-card .issue-row:last-child, .start-row:last-child { border-bottom: 0; }
+.start-row .el-button { flex-shrink: 0; font-size: 12px; }
+@media (max-width: 900px) { .summary-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

@@ -51,7 +51,7 @@
         <div class="step-intro">
           <span class="section-number">开始配置</span>
           <h2>选择部署方式</h2>
-          <p>从备份恢复会沿用备份中的管理员账号、配置、插件与数据。</p>
+          <p>从备份恢复数据库；配置、插件代码及资源可按需选择。</p>
         </div>
         <div class="choice-grid mode-choices">
           <button type="button" class="choice-item" @click="mode = 'fresh'">
@@ -66,34 +66,43 @@
       </div>
 
       <template v-else-if="mode === 'restore'">
-        <el-alert v-if="restoreTask.state && restoreTask.state !== 'idle'" :title="restoreTaskMessage" :type="restoreTask.state === 'recovery_required' ? 'error' : 'info'" :closable="false" show-icon class="last-restore" />
-        <div v-if="restoreTask.state === 'preparing' && restoreTask.preparation">
-          <pre v-if="restoreTask.preparation.confirmation_required" class="restore-preparation-changes">{{ JSON.stringify({ 版本调整: restoreTask.preparation.changes.nearby, 跳过插件: restoreTask.preparation.changes.skipped_plugins }, null, 2) }}</pre>
-          <el-button v-if="restoreTask.preparation.retryable" :loading="retryingRestore" :disabled="retryingRestore || restoreTask.cancel_requested" @click="retryPreparation">{{ restoreTask.preparation.confirmation_required ? '确认变更并继续' : '重试原任务' }}</el-button>
-          <el-button :loading="retryingRestore" :disabled="retryingRestore || (restoreTask.cancel_requested && restoreTask.preparation.phase !== 'cleanup_pending')" @click="cancelPreparation">{{ restoreTask.preparation.phase === 'cleanup_pending' ? '重试候选清理' : '取消准备' }}</el-button>
-        </div>
         <div class="step-body">
           <section class="step-section">
+            <section v-if="restoreTask.state && restoreTask.state !== 'idle'" class="restore-progress" :class="{ 'needs-attention': restoreNeedsAttention }" aria-label="恢复任务进度">
+              <div role="status" aria-live="polite" aria-atomic="true">
+                <h2>{{ restoreProgressTitle }}</h2>
+                <p class="restore-progress-step">当前阶段：{{ restoreProgressStep }}</p>
+                <p>{{ restoreTaskMessage }}</p>
+              </div>
+              <template v-if="restoreTask.state === 'preparing' && restoreTask.preparation">
+                <pre v-if="restoreTask.preparation.confirmation_required" class="restore-preparation-changes">{{ JSON.stringify({ 版本调整: (restoreTask.preparation.changes || {}).nearby, 跳过插件: (restoreTask.preparation.changes || {}).skipped_plugins }, null, 2) }}</pre>
+                <div class="restore-progress-actions">
+                  <el-button v-if="restoreTask.preparation.retryable" :loading="retryingRestore" :disabled="retryingRestore || restoreTask.cancel_requested" @click="retryPreparation">{{ restoreTask.preparation.confirmation_required ? '确认变更并继续' : '重试原任务' }}</el-button>
+                  <el-button :loading="retryingRestore" :disabled="retryingRestore || (restoreTask.cancel_requested && restoreTask.preparation.phase !== 'cleanup_pending')" @click="cancelPreparation">{{ restoreTask.preparation.phase === 'cleanup_pending' ? '重试候选清理' : '取消本次恢复' }}</el-button>
+                </div>
+              </template>
+            </section>
             <div class="step-intro">
               <span class="section-number">从备份恢复</span>
               <h2>上传备份包</h2>
-              <p>备份包须包含配置分类，恢复后使用备份中的管理员账号登录。</p>
+              <p>选择数据库恢复方式，并设置目标端管理员；备份配置和文件均为可选。</p>
+              <p v-if="restoreParametersLocked" class="restore-lock-hint">本次恢复参数已锁定，任务结束后可重新设置。</p>
             </div>
             <el-alert v-if="lastRestoreError" :title="`上次恢复未完成，已回到首次配置：${lastRestoreError}`" type="error" :closable="false" show-icon class="last-restore" />
             <div class="restore-upload">
-              <input ref="backupFile" type="file" accept=".zx" hidden @change="uploadBackup" />
-              <el-button :loading="uploading !== null" @click="$refs.backupFile.click()">
+              <input ref="backupFile" type="file" accept=".zx" hidden :disabled="restoreParametersLocked" @change="uploadBackup" />
+              <el-button :loading="uploading !== null" :disabled="restoreParametersLocked" @click="$refs.backupFile.click()">
                 <i class="el-icon-upload2" /> {{ uploading !== null ? `上传中 ${uploading}%` : backupName ? "重新选择" : "选择备份包" }}
               </el-button>
               <code v-if="backupName">{{ backupName }}</code>
             </div>
             <template v-if="backupName && !backupSummary">
-              <el-form label-position="top" class="restore-password" @submit.native.prevent="inspectBackup">
+              <el-form label-position="top" class="restore-password" :disabled="restoreParametersLocked" @submit.native.prevent="inspectBackup">
                 <el-form-item label="备份密码（未加密可留空）">
                   <el-input v-model="backupPassword" type="password" show-password autocomplete="off" />
                 </el-form-item>
               </el-form>
-              <el-button :loading="inspecting" @click="inspectBackup">读取备份</el-button>
+              <el-button :loading="inspecting" :disabled="restoreParametersLocked" @click="inspectBackup">读取备份</el-button>
             </template>
             <p v-if="restoreError" class="inline-result error">
               <i class="el-icon-circle-close" /> {{ restoreError }}
@@ -103,17 +112,54 @@
                 <dt>导出时间</dt><dd>{{ new Date(backupSummary.created_at).toLocaleString() }}</dd>
                 <dt>来源版本</dt><dd>{{ backupSummary.bot_version || "未知" }} · Python {{ backupSummary.python }} · {{ backupSummary.platform }}</dd>
                 <dt>数据库</dt><dd>{{ backupSummary.database.dialect }} · {{ Object.keys(backupSummary.database.tables).length }} 张表</dd>
-                <dt>管理员</dt><dd>{{ restoredUsername || "备份中没有管理员账号" }}</dd>
+                <dt>管理员</dt><dd>{{ account.username || "请设置目标管理员" }}</dd>
+                <template v-if="backupSummary.archive_summary"><dt>包体积</dt><dd>压缩 {{ formatBytes(backupSummary.archive_summary.archive_bytes || backupSummary.archive_summary.compressed_bytes) }} / 原始 {{ formatBytes(backupSummary.archive_summary.raw_bytes) }}</dd></template>
               </dl>
               <el-alert v-for="text in backupSummary.warnings" :key="text" :title="text" type="warning" :closable="false" show-icon />
-              <label class="field-label">恢复的文件</label>
-              <el-checkbox-group v-model="restoreCategories" class="restore-categories">
-                <el-checkbox v-for="key in backupSummary.categories" :key="key" :label="key" :disabled="key === 'configuration'">{{ categoryLabels[key] || key }}</el-checkbox>
+              <details v-if="backupSummary.archive_summary">
+                <summary>包体积分类与最大文件</summary>
+                <p v-for="(info, key) in backupSummary.archive_summary.categories" :key="key" class="field-hint">{{ categoryLabels[key] || key }}：{{ info.files }} 项，压缩 {{ formatBytes(info.compressed_bytes) }} / 原始 {{ formatBytes(info.raw_bytes) }}</p>
+                <p v-for="file in (backupSummary.archive_summary.largest_files || []).slice(0, 10)" :key="file.path" class="field-hint">{{ file.path }} · {{ formatBytes(file.compressed_bytes) }} / {{ formatBytes(file.raw_bytes) }}</p>
+              </details>
+              <label class="field-label">数据库恢复模式</label>
+              <el-radio-group v-model="restoreMode" class="restore-modes" :disabled="restoreParametersLocked">
+                <el-radio v-for="option in restoreModes" :key="option.value" :label="option.value">{{ option.label }}</el-radio>
+              </el-radio-group>
+              <p class="field-hint">{{ restoreModeDescription }}</p>
+              <template v-if="restoreMode === 'replace_database'">
+                <el-checkbox v-model="backupBeforeReplace" :disabled="restoreParametersLocked">清空前完整备份目标数据库</el-checkbox>
+                <p v-if="backupBeforeReplace" class="field-hint">{{ nativeRecoveryHint }}</p>
+                <p v-if="!backupBeforeReplace" class="inline-result error">清空后原数据可能无法自动恢复。</p>
+              </template>
+              <template v-else>
+                <label class="field-label">导入的数据表</label>
+                <el-select v-model="includedTables" :disabled="restoreParametersLocked" multiple filterable style="width: 100%" placeholder="选择需要导入的数据表">
+                  <el-option v-for="name in Object.keys(backupSummary.database.tables)" :key="name" :label="name" :value="name" />
+                </el-select>
+              </template>
+              <template v-if="restoreMode.startsWith('merge_')">
+                <label class="field-label">旧包来源绑定（可选）</label>
+                <el-input v-model.trim="sourceBinding" :disabled="restoreParametersLocked" maxlength="128" placeholder="同一旧实例的多个备份使用相同来源标识" />
+                <p class="field-hint">不同旧包的历史数据可能视为新记录；多包合并请绑定稳定来源。</p>
+              </template>
+              <label class="field-label">目标端管理员</label>
+              <el-form label-position="top" :disabled="restoreParametersLocked">
+              <div class="field-grid two-columns">
+                <el-form-item label="管理员账号"><el-input v-model.trim="account.username" maxlength="128" autocomplete="username" /></el-form-item>
+                <el-form-item label="新密码"><el-input v-model="account.password" type="password" show-password autocomplete="new-password" /></el-form-item>
+                <el-form-item label="确认密码"><el-input v-model="account.confirmPassword" type="password" show-password autocomplete="new-password" /></el-form-item>
+              </div>
+              </el-form>
+              <p class="field-hint">密码至少 8 位，包含大小写字母和数字，两次输入一致；恢复不会采用来源实例的 JWT 密钥。</p>
+              <label class="field-label">恢复的文件（可选）</label>
+              <el-checkbox-group v-model="restoreCategories" class="restore-categories" :disabled="restoreParametersLocked">
+                <el-checkbox v-for="key in backupSummary.categories" :key="key" :label="key">{{ categoryLabels[key] || key }}</el-checkbox>
               </el-checkbox-group>
-              <el-checkbox v-model="skipFailed">依赖无法安装时跳过对应插件继续恢复</el-checkbox>
+              <p class="field-hint">数据库始终导入；勾选的文件按路径覆盖，不受数据库增量策略保护。</p>
+              <el-checkbox v-model="skipFailed" :disabled="restoreParametersLocked">依赖无法安装时跳过对应插件继续恢复</el-checkbox>
 
               <div class="section-divider" />
-              <p class="field-hint restore-database-hint">数据会导入到这里选择的数据库，须为空库；备份中的数据库地址不会沿用。</p>
+              <p class="field-hint restore-database-hint">数据会按所选模式导入这里的数据库；备份中的数据库地址不会沿用。</p>
             <label class="field-label">数据库类型</label>
             <div class="choice-grid database-choices">
               <button
@@ -122,6 +168,7 @@
                 type="button"
                 class="choice-item"
                 :class="{ active: database.mode === option.value }"
+                :disabled="restoreParametersLocked"
                 @click="selectDatabaseMode(option.value)"
               >
                 <strong>{{ option.label }}</strong>
@@ -130,48 +177,48 @@
               </button>
             </div>
 
-            <el-form label-position="top" class="service-form">
+            <el-form label-position="top" class="service-form" :disabled="restoreParametersLocked">
               <DatabaseFields v-model="database" path-hint="路径必须位于真寻项目目录内。" />
             </el-form>
-            <probe-result :result="results.database" />
-            <el-button
-              class="probe-button"
-              :loading="probing.database"
-              @click="probeDatabase"
-            >
-              <i class="el-icon-connection" /> 测试数据库
-            </el-button>
+            <div class="probe-actions">
+              <el-button
+                class="probe-button"
+                :loading="probing.database"
+                :disabled="restoreParametersLocked"
+                @click="probeDatabase"
+              >
+                <i class="el-icon-connection" /> 测试数据库
+              </el-button>
+              <probe-result :result="results.database" />
+            </div>
             </template>
           </section>
         </div>
         <footer class="setup-actions">
-          <el-button @click="mode = null">返回</el-button>
+          <el-button :disabled="restoreParametersLocked" @click="mode = null">返回</el-button>
           <span />
-          <el-button type="primary" :loading="restoring" :disabled="!canRestore" @click="startRestore">开始恢复</el-button>
+          <el-button type="primary" :loading="restoring || retryingRestore || (restoreTaskRunning && !restoreNeedsAttention)" :disabled="!canRestore" @click="startRestore">{{ restoreActionLabel }}</el-button>
         </footer>
       </template>
 
       <template v-else>
         <el-steps :active="step" finish-status="success" class="desktop-steps">
-          <el-step title="基本信息" />
-          <el-step title="数据服务" />
-          <el-step title="监听地址" />
-          <el-step title="检查并启动" />
+          <el-step v-for="item in setupSteps" :key="item.key" :title="item.title" />
         </el-steps>
         <div class="mobile-progress">
-          <span>步骤 {{ step + 1 }} / 4</span>
-          <strong>{{ stepTitles[step] }}</strong>
-          <el-progress :percentage="(step + 1) * 25" :show-text="false" />
+          <span>步骤 {{ step + 1 }} / {{ setupSteps.length }}</span>
+          <strong>{{ currentStep.title }}</strong>
+          <el-progress :percentage="Math.round((step + 1) / setupSteps.length * 100)" :show-text="false" />
         </div>
 
         <div class="step-body">
-          <section v-show="step === 0" class="step-section">
+          <section v-show="currentStep.key === 'basic'" class="step-section">
             <div class="step-intro">
-              <span class="section-number">01</span>
+              <span class="section-number">{{ String(step + 1).padStart(2, '0') }}</span>
               <h2>基本信息</h2>
-              <p>设置机器人的称呼和管理员，以及登录 WebUI 的账户。</p>
+              <p>设置机器人的称呼和超级用户。</p>
             </div>
-            <el-form ref="accountForm" :model="account" label-position="top">
+            <el-form :model="account" label-position="top">
               <label class="field-label">机器人</label>
               <div class="field-grid two-columns">
                 <el-form-item label="Bot 名字">
@@ -198,8 +245,16 @@
                 </el-form-item>
               </div>
 
-              <div class="section-divider" />
-              <label class="field-label">WebUI 管理员账户</label>
+            </el-form>
+          </section>
+
+          <section v-show="currentStep.key === 'account'" class="step-section">
+            <div class="step-intro">
+              <span class="section-number">{{ String(step + 1).padStart(2, '0') }}</span>
+              <h2>WebUI 管理员</h2>
+              <p>设置登录 WebUI 的管理员账户和密码。</p>
+            </div>
+            <el-form ref="accountForm" :model="account" label-position="top">
               <div class="field-grid two-columns">
                 <el-form-item label="用户名" required>
                   <el-input
@@ -235,9 +290,9 @@
             </el-form>
           </section>
 
-          <section v-show="step === 1" class="step-section">
+          <section v-show="currentStep.key === 'services'" class="step-section">
             <div class="step-intro">
-              <span class="section-number">02</span>
+              <span class="section-number">{{ String(step + 1).padStart(2, '0') }}</span>
               <h2>数据库与缓存</h2>
               <p>SQLite 和内存缓存适合大多数单机部署。</p>
             </div>
@@ -261,22 +316,34 @@
             <el-form label-position="top" class="service-form">
               <DatabaseFields v-model="database" path-hint="路径必须位于真寻项目目录内。" />
             </el-form>
-            <probe-result :result="results.database" />
-            <el-button
-              class="probe-button"
-              :loading="probing.database"
-              @click="probeDatabase"
-            >
-              <i class="el-icon-connection" /> 测试数据库
-            </el-button>
+            <div class="probe-actions">
+              <el-button
+                class="probe-button"
+                :loading="probing.database"
+                @click="probeDatabase"
+              >
+                <i class="el-icon-connection" /> 测试数据库
+              </el-button>
+              <probe-result :result="results.database" />
+            </div>
 
             <div class="section-divider" />
             <label class="field-label">缓存模式</label>
-            <el-radio-group v-model="cache.mode" class="segmented-control">
-              <el-radio-button label="MEMORY">内存缓存</el-radio-button>
-              <el-radio-button label="NONE">关闭缓存</el-radio-button>
-              <el-radio-button label="REDIS">Redis</el-radio-button>
-            </el-radio-group>
+            <div class="cache-actions">
+              <el-radio-group v-model="cache.mode" class="segmented-control">
+                <el-radio-button label="MEMORY">内存缓存</el-radio-button>
+                <el-radio-button label="NONE">关闭缓存</el-radio-button>
+                <el-radio-button label="REDIS">Redis</el-radio-button>
+              </el-radio-group>
+              <el-button
+                class="probe-button"
+                :loading="probing.cache"
+                @click="probeCache"
+              >
+                <i class="el-icon-connection" /> 测试缓存
+              </el-button>
+              <probe-result :result="results.cache" />
+            </div>
             <div v-if="cache.mode === 'REDIS'" class="field-grid redis-fields">
               <el-form label-position="top">
                 <el-form-item label="Redis 地址"><el-input v-model.trim="cache.host" /></el-form-item>
@@ -288,19 +355,12 @@
                 <el-form-item label="密码"><el-input v-model="cache.password" type="password" show-password autocomplete="new-password" /></el-form-item>
               </el-form>
             </div>
-            <probe-result :result="results.cache" />
-            <el-button
-              class="probe-button"
-              :loading="probing.cache"
-              @click="probeCache"
-            >
-              <i class="el-icon-connection" /> 测试缓存
-            </el-button>
+
           </section>
 
-          <section v-show="step === 2" class="step-section">
+          <section v-show="currentStep.key === 'network'" class="step-section">
             <div class="step-intro">
-              <span class="section-number">03</span>
+              <span class="section-number">{{ String(step + 1).padStart(2, '0') }}</span>
               <h2>监听地址</h2>
               <p>同时决定 WebUI 与协议端（反向 WS）能否从其他设备连接。</p>
             </div>
@@ -342,9 +402,9 @@
             </el-button>
           </section>
 
-          <section v-show="step === 3" class="step-section review-section">
+          <section v-show="currentStep.key === 'review'" class="step-section review-section">
             <div class="step-intro">
-              <span class="section-number">04</span>
+              <span class="section-number">{{ String(step + 1).padStart(2, '0') }}</span>
               <h2>检查并启动</h2>
               <p>保存时后端会再次执行全部检查，不依赖浏览器中的结果。</p>
             </div>
@@ -371,7 +431,7 @@
           <el-button v-if="step > 0" @click="step -= 1">上一步</el-button>
           <el-button v-else-if="serverState !== 'restart_pending'" @click="mode = null">返回</el-button>
           <span />
-          <el-button v-if="step < 3" type="primary" @click="nextStep">下一步</el-button>
+          <el-button v-if="!isLastStep" type="primary" @click="nextStep">下一步</el-button>
           <button
             v-else
             type="primary"
@@ -391,6 +451,8 @@
 
 <script>
 import { newOperationId } from "@/utils/plugin-operation"
+import { formatBytes } from "@/utils/utils"
+import { restoreModes, restoreModeHint, restoreOptions, restorePreparationLabels, restoreStateLabels, restoreDatabasePhase, nativeRecoveryHint } from "@/utils/migrationRestore"
 import { getAuthToken } from "@/utils/auth-token"
 import { uploadBackupInChunks } from "@/utils/chunk-upload"
 import { reasonLabels } from "@/utils/plugin-operation"
@@ -403,6 +465,13 @@ import DatabaseFields from "@/components/system/DatabaseFields.vue"
 
 const RESTART_RECEIPT_KEY = "zhenxunSetupRestartReceipt"
 const RESTART_TARGETS_KEY = "zhenxunSetupRestartTargets"
+const SETUP_STEPS = [
+  { key: "basic", title: "基本信息" },
+  { key: "account", title: "WebUI 管理员" },
+  { key: "services", title: "数据服务" },
+  { key: "network", title: "监听地址" },
+  { key: "review", title: "检查并启动" },
+]
 
 const ProbeResult = {
   name: "ProbeResult",
@@ -422,7 +491,7 @@ const ProbeResult = {
               : "el-icon-circle-check",
         }),
         h("span", this.result.message),
-        h("b", `${this.result.latency_ms} ms`),
+        this.result.latency_ms == null ? null : h("b", `${this.result.latency_ms} ms`),
       ]
     )
   },
@@ -440,7 +509,8 @@ export default {
       accessError: "",
       mode: null,
       step: 0,
-      stepTitles: ["基本信息", "数据服务", "监听地址", "检查并启动"],
+      setupSteps: SETUP_STEPS,
+      probeVersions: { database: 0, cache: 0, network: 0 },
       account: { username: "admin", password: "", confirmPassword: "", superusers: "", selfNickname: "", nicknames: "" },
       database: {
         mode: "sqlite",
@@ -471,6 +541,7 @@ export default {
       backupPassword: "",
       backupSummary: null,
       restoreCategories: [],
+      restoreModes, nativeRecoveryHint, restoreMode: "empty", backupBeforeReplace: true, includedTables: [], sourceBinding: "",
       skipFailed: false,
       inspecting: false,
       restoring: false,
@@ -491,6 +562,9 @@ export default {
     }
   },
   computed: {
+    currentStep() { return this.setupSteps[this.step] || this.setupSteps[0] },
+    isLastStep() { return this.step === this.setupSteps.length - 1 },
+    restoreModeDescription() { return restoreModeHint(this.restoreMode) },
     setupToken() {
       return getAuthToken() || ""
     },
@@ -498,6 +572,7 @@ export default {
       return { headers: { Authorization: this.setupToken } }
     },
     stateLabel() {
+      if (this.mode === "restore" && this.restoreTaskRunning) return this.restoreProgressTitle
       return {
         unconfigured: "等待配置",
         partial: "配置待修复",
@@ -541,22 +616,58 @@ export default {
       return access?.password_set ? access.username || "" : ""
     },
     canRestore() {
-      return Boolean(this.restoredUsername && this.results.database && this.results.database.status !== "error" && !this.restoring && !this.restoreTaskRunning)
+      return Boolean(this.backupSummary && this.accountReady && (this.restoreMode === "replace_database" || this.includedTables.length > 0) && this.results.database && this.results.database.status !== "error" && !this.restoreParametersLocked)
     },
     restoreTaskRunning() {
       return ["preparing", "pending", "snapshot_ready", "applying", "awaiting_orm", "importing", "verifying", "committing", "failed_import", "rollback_import", "rollback_target", "rollback_verifying", "recovery_required"].includes(this.restoreTask.state)
     },
+    restoreParametersLocked() {
+      return this.restoreConfirming || this.restoring || this.retryingRestore || this.restoreTaskRunning
+    },
+    restoreNeedsAttention() {
+      if (["awaiting_orm", "recovery_required"].includes(this.restoreTask.state)) return true
+      if (this.restoreTask.state !== "preparing") return false
+      const preparation = this.restoreTask.preparation || {}
+      if (preparation.phase === "cleanup_pending") return true
+      if (this.restoreTask.cancel_requested) return false
+      return Boolean(preparation.retryable || preparation.confirmation_required || ["waiting_credentials", "waiting_confirmation", "blocked", "interrupted"].includes(preparation.phase))
+    },
+    restoreProgressTitle() {
+      if (this.restoreNeedsAttention) return "恢复等待处理"
+      if (this.restoreTask.state === "preparing") return this.restoreTask.cancel_requested ? "正在取消恢复" : "恢复准备中"
+      return restoreStateLabels[this.restoreTask.state] || "恢复任务"
+    },
+    restoreProgressStep() {
+      if (this.restoreTask.state === "preparing") {
+        if (this.restoreTask.cancel_requested && !this.restoreNeedsAttention) return "等待准备任务退出并清理临时内容"
+        return restorePreparationLabels[this.restoreTask.preparation?.phase] || "检查恢复条件"
+      }
+      return restoreDatabasePhase(this.restoreTask) || restoreStateLabels[this.restoreTask.state] || "等待任务状态"
+    },
+    restoreActionLabel() {
+      if (this.restoring) return "正在提交…"
+      if (this.retryingRestore) return "正在处理…"
+      if (this.restoreNeedsAttention) return "等待处理"
+      if (this.restoreTask.state === "preparing") return this.restoreTask.cancel_requested ? "正在取消…" : "正在准备…"
+      if (this.restoreTaskRunning) return this.restoreProgressStep + "…"
+      return "开始恢复"
+    },
     restoreTaskMessage() {
+      const databasePhase = restoreDatabasePhase(this.restoreTask)
+      if (databasePhase) return databasePhase + "，请等待当前阶段完成，不要重复提交。"
       if (this.restoreTask.state === "preparing") {
         const preparation = this.restoreTask.preparation || {}
-        const phases = { waiting_credentials: "等待补充备份包密码", orm_check: "核对 ORM 状态（只读）", checking: "只读检查", dependencies: "解析依赖", building: "构建候选", rechecking: "切换复核", switching: "准备切换", waiting_confirmation: "等待确认影响变化", blocked: "准备未完成，原实例未变更", interrupted: "准备已暂停", cleanup_pending: "候选清理待重试" }
-        return (phases[preparation.phase] || "在线准备") + "。" + (preparation.error || "准备通过后自动切换，请勿重复提交。")
+        if (preparation.phase === "cleanup_pending") return preparation.error || "临时内容尚未清理完成，请重试候选清理。"
+        if (this.restoreTask.cancel_requested) return "取消请求已提交，请等待清理完成，不要重复操作。"
+        if (preparation.error) return preparation.error
+        if (preparation.confirmation_required) return "请查看下方影响变化，确认后继续，或取消本次恢复。"
+        if (this.restoreNeedsAttention) return "准备暂未完成，请处理当前问题后继续原任务，或取消本次恢复。"
+        return "准备通过后将自动切换并导入。当前仍可取消本次恢复，请勿重复提交。"
       }
-      const labels = { preparing: "准备中", pending: "等待停写", snapshot_ready: "快照已保存", applying: "应用依赖与文件", awaiting_orm: "等待控制台处理插件数据库", importing: "导入中", verifying: "启动验证中", committing: "提交结算中", failed_import: "准备回滚", rollback_import: "回滚中", rollback_target: "目标数据库回退中", rollback_verifying: "回滚验证中", done: "恢复完成", done_partial: "部分恢复完成", rolled_back: "失败且已确认回滚", failed: "准备失败", recovery_required: "结果待核验", canceled: "已取消" }
       const names = { target_database: "目标数据库", original_instance: "原实例启动", dependencies: "依赖层", files: "文件", orm: "插件 ORM" }
       const states = { confirmed: "已确认", pending: "等待核验", unconfirmed: "结果未确认", not_applicable: "无需回退" }
       const components = Object.entries(this.restoreTask.rollback_components || {}).map(([name, state]) => (names[name] || name) + "：" + (states[state] || state)).join("；")
-      return "原恢复任务：" + (labels[this.restoreTask.state] || this.restoreTask.state) + "。" + (this.restoreTask.rollback_error || this.restoreTask.error || (this.restoreTaskRunning ? "正在续查原任务，请勿重复上传或提交。" : "")) + (components ? " " + components : "")
+      return "原恢复任务：" + (restoreStateLabels[this.restoreTask.state] || this.restoreTask.state) + "。" + (this.restoreTask.rollback_error || this.restoreTask.error || (this.restoreTaskRunning ? "正在续查原任务，请勿重复上传或提交。" : "")) + (components ? " " + components : "")
     },
     canApply() {
       const noErrors = this.reviewItems.every((item) => item.status !== "error")
@@ -564,14 +675,16 @@ export default {
     },
   },
   watch: {
-    database: { deep: true, handler() { this.results.database = null } },
-    cache: { deep: true, handler() { this.results.cache = null } },
-    network: { deep: true, handler() { this.results.network = null } },
+    step() { this.$nextTick(() => { const body = this.$el.querySelector(".step-body"); if (body) body.scrollTop = 0 }) },
+    database: { deep: true, handler() { this.invalidateProbe("database") } },
+    cache: { deep: true, handler() { this.invalidateProbe("cache") } },
+    network: { deep: true, handler() { this.invalidateProbe("network") } },
   },
-  created() { this.readSequence = 0; this.requestControllers = new Set(); this.onExpired = () => { this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.claimed = false; this.accessError = "会话已过期，连接已断开。" }; window.addEventListener("zhenxun-auth-expired", this.onExpired) },
+  created() { this.probeControllers = new Map(); this.readSequence = 0; this.requestControllers = new Set(); this.onExpired = () => { this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.claimed = false; this.accessError = "会话已过期，连接已断开。" }; window.addEventListener("zhenxun-auth-expired", this.onExpired) },
   mounted() { document.addEventListener("visibilitychange", this.restoreVisibilityChanged); this.loadStatus() },
   beforeDestroy() { this.disposed = true; document.removeEventListener("visibilitychange", this.restoreVisibilityChanged); window.removeEventListener("zhenxun-auth-expired", this.onExpired); this.cancelReads(); for (const controller of this.requestControllers) controller.abort(); this.requestControllers.clear() },
   methods: {
+    formatBytes,
     cancelReads() { this.readSequence++; clearTimeout(this.restoreTimer); this.statusController?.abort(); this.initializing = false },
     restoreVisibilityChanged() {
       this.cancelReads()
@@ -619,7 +732,7 @@ export default {
             try { this.restartUrls = JSON.parse(window.sessionStorage.getItem(RESTART_TARGETS_KEY) || "[]") } catch (error) { this.restartUrls = [] }
             this.claimed = true
             this.mode = "fresh"
-            this.step = 3
+            this.step = this.setupSteps.length - 1
           }
           return
         }
@@ -665,50 +778,78 @@ export default {
       }
     },
     nextStep() {
-      if (this.step === 0 && !this.accountReady) {
+      if (this.currentStep.key === "account" && !this.accountReady) {
         this.$message.warning("请先完成 WebUI 管理员账户和密码规则")
         return
       }
-      if (this.step === 1 && (!this.results.database || !this.results.cache)) {
+      if (this.currentStep.key === "services" && (!this.results.database || !this.results.cache)) {
         this.$message.warning("请手动测试数据库和缓存")
         return
       }
-      if (this.step === 2 && !this.results.network) {
+      if (this.currentStep.key === "network" && !this.results.network) {
         this.$message.warning("请先测试监听地址")
         return
       }
-      this.step += 1
+      if (!this.isLastStep) this.step += 1
     },
     selectDatabaseMode(mode) {
+      if (this.mode === "restore" && this.restoreParametersLocked) return
       this.database.mode = mode
       if (mode === "mysql") this.database.port = 3306
       if (mode === "postgres") this.database.port = 5432
     },
-    async runProbe(key, path, payload) {
-      if (this.probing[key]) return false
-      const controller = new AbortController(); this.requestControllers.add(controller)
+    /** 清除配置项的检测结果并终止对应请求。 */
+    invalidateProbe(key) {
+      this.probeVersions[key] += 1
+      this.results[key] = null
+      this.acceptWarnings = false
+      this.probeControllers.get(key)?.abort()
+      this.probeControllers.delete(key)
+      this.probing[key] = false
+    },
+    /** 使用当前配置快照检测连接，仅接收同一配置和会话的结果。 */
+    async runProbe(key, path) {
+      if (this.probing[key] || this.disposed || !this.claimed) return false
+      await this.$nextTick()
+      if (this.probing[key] || this.disposed || !this.claimed) return false
+      const controller = new AbortController()
+      const version = this.probeVersions[key]
+      const sequence = this.readSequence
+      const input = JSON.stringify(this[key])
+      const payload = { [key]: JSON.parse(input) }
+      const current = () => !controller.signal.aborted && !this.disposed && !this._isDestroyed
+        && this.claimed && sequence === this.readSequence
+        && version === this.probeVersions[key] && input === JSON.stringify(this[key])
+      this.requestControllers.add(controller)
+      this.probeControllers.set(key, controller)
       this.probing[key] = true
+      this.results[key] = null
       try {
         const response = await this.postRequest(`${this.$root.prefix}/configure/probe/${path}`, payload, { ...this.setupHeaders, signal: controller.signal })
-        if (controller.signal.aborted || this._isDestroyed) return false
+        if (!current()) return false
+        if (!response?.suc || !response.data) throw new Error("检测结果无效")
         this.results[key] = response.data
         return response.data.status !== "error"
       } catch (error) {
-        if (!controller.signal.aborted && !this._isDestroyed) this.results[key] = { status: "error", message: "连接检测失败，请重新检测。" }
+        if (current()) this.results[key] = { status: "error", message: "连接检测失败，请重新检测。" }
         return false
       } finally {
         this.requestControllers.delete(controller)
-        if (!this._isDestroyed) this.probing[key] = false
+        if (this.probeControllers.get(key) === controller) {
+          this.probeControllers.delete(key)
+          if (!this.disposed && !this._isDestroyed) this.probing[key] = false
+        }
       }
     },
     probeDatabase() {
-      return this.runProbe("database", "database", { database: this.database })
+      if (this.mode === "restore" && this.restoreParametersLocked) return false
+      return this.runProbe("database", "database")
     },
     probeCache() {
-      return this.runProbe("cache", "cache", { cache: this.cache })
+      return this.runProbe("cache", "cache")
     },
     probeNetwork() {
-      return this.runProbe("network", "network", { network: this.network })
+      return this.runProbe("network", "network")
     },
     normalizedSuperusers() {
       return [...new Set(this.account.superusers.split(/[，,\n]/).map((value) => value.trim()).filter(Boolean))]
@@ -816,7 +957,7 @@ export default {
     async uploadBackup(event) {
       const file = event.target.files[0]
       event.target.value = ""
-      if (this.restoreTaskRunning || this.restoring) return
+      if (this.restoreParametersLocked) return
       if (!file) return
       Object.assign(this, { restoreOperationId: "", uploading: 0, restoreError: "", backupName: "", backupPassword: "", backupSummary: null })
       try {
@@ -831,7 +972,9 @@ export default {
       await this.inspectBackup()
     },
     async inspectBackup() {
-      if (this.inspecting || !this.backupName) return
+      if (this.restoreParametersLocked || this.inspecting || !this.backupName) return
+      const generation = this.readSequence
+      const inspectedName = this.backupName
       this.inspecting = true; this.restoreError = ""
       try {
         const response = await this.postRequest(
@@ -840,16 +983,16 @@ export default {
           { ...this.setupHeaders, suppressErrorToast: true }
         )
         if (!response?.suc) throw new Error(response?.info)
-        if (!response.data.categories.includes("configuration")) throw new Error("备份中没有配置分类，无法用于首次部署")
+        if (generation !== this.readSequence || inspectedName !== this.backupName || !this.claimed || this.disposed || this.restoreParametersLocked) return
         this.backupSummary = response.data
-        this.restoreCategories = [...response.data.categories]
-        if (!this.restoredUsername) this.restoreError = "备份中没有 WebUI 管理员账号或密码，无法用于首次部署"
+        this.restoreCategories = []
+        this.includedTables = Object.keys(response.data.database.tables)
       } catch (error) {
-        this.restoreError = this.requestError(error, "读取备份失败")
-      } finally { this.inspecting = false }
+        if (generation === this.readSequence && this.claimed && !this.disposed) this.restoreError = this.requestError(error, "读取备份失败")
+      } finally { if (generation === this.readSequence && !this.disposed) this.inspecting = false }
     },
     async cancelPreparation() {
-      if (this.retryingRestore || !this.claimed || this.restoreTask.state !== "preparing") return
+      if (this.retryingRestore || !this.claimed || this.restoreTask.state !== "preparing" || (this.restoreTask.cancel_requested && this.restoreTask.preparation?.phase !== "cleanup_pending")) return
       this.retryingRestore = true
       const sequence = this.readSequence
       try {
@@ -862,7 +1005,7 @@ export default {
       } finally { this.retryingRestore = false }
     },
     async retryPreparation() {
-      if (this.retryingRestore || !this.claimed || !this.restoreTask.preparation?.retryable) return
+      if (this.retryingRestore || !this.claimed || this.restoreTask.cancel_requested || !this.restoreTask.preparation?.retryable) return
       this.retryingRestore = true
       const sequence = this.readSequence
       try {
@@ -890,19 +1033,22 @@ export default {
       startRestartRecovery({
         bootId: data.boot_id, accessUrls: data.access_urls, accessTargets: data.access_targets,
         preferredUrl: data.preferred_url, returnRoute: "/", setup: true,
-        message: "候选已准备，正在自动切换。完成后请使用备份中的管理员登录并查看恢复结果。",
+        message: "候选已准备，正在自动切换。完成后请使用目标端管理员登录并查看恢复结果。",
       })
     },
     async startRestore() {
       if (!this.canRestore || this.restoreConfirming) return
+      const confirmationInput = JSON.stringify([this.restoreMode, this.backupBeforeReplace, this.includedTables, this.restoreCategories, this.sourceBinding, this.skipFailed, this.database, this.account])
       this.restoreConfirming = true
       try {
-        await this.$confirm(`备份中的配置、插件与数据将恢复到本机，完成后使用管理员账号 ${this.restoredUsername} 登录。`, "确认恢复", { type: "warning", confirmButtonText: "开始恢复", cancelButtonText: "取消" })
+        await this.$confirm(this.restoreModeDescription + "准备通过后切换并导入，完成后使用目标端管理员 " + this.account.username + " 登录。", "确认恢复", { type: "warning", confirmButtonText: "开始恢复", cancelButtonText: "取消" })
       } catch { return } finally { this.restoreConfirming = false }
-      if (this.restoring) return
-      if (!this.claimed) return
+      if (!this.canRestore || confirmationInput !== JSON.stringify([this.restoreMode, this.backupBeforeReplace, this.includedTables, this.restoreCategories, this.sourceBinding, this.skipFailed, this.database, this.account])) return
+      if (!this.claimed || this.disposed) return
       const generation = this.readSequence
-      const input = JSON.stringify([this.backupName, this.backupPassword, [...this.restoreCategories].sort(), this.skipFailed, this.database])
+      const options = restoreOptions(this.restoreMode, this.backupBeforeReplace, this.restoreMode === "replace_database" ? null : this.includedTables, this.sourceBinding)
+      const setupAccount = { username: this.account.username, password: this.account.password, confirm_password: this.account.confirmPassword }
+      const input = JSON.stringify([this.backupName, this.backupPassword, [...this.restoreCategories].sort(), this.skipFailed, this.database, options, setupAccount])
       if (input !== this.restoreOperationInput) { this.restoreOperationId = ""; this.restoreOperationInput = input }
       this.restoreOperationId = this.restoreOperationId || newOperationId()
       sessionStorage.setItem("zhenxun_restore_operation", this.restoreOperationId)
@@ -911,6 +1057,7 @@ export default {
         const response = await this.postRequest(
           `${this.$root.prefix}/configure/backup/restore`,
           {
+            ...options, setup_account: setupAccount,
             operation_id: this.restoreOperationId,
             name: this.backupName,
             password: this.backupPassword || null,
@@ -920,8 +1067,8 @@ export default {
           },
           { ...this.setupHeaders, timeout: 0, suppressErrorToast: true }
         )
+        if (generation !== this.readSequence || !this.claimed || this.disposed) return
         if (!response?.suc) throw new Error(response?.info)
-        if (generation !== this.readSequence || !this.claimed) return
         const data = response.data
         if (!data.boot_id) {
           await this.resumeRestore()
@@ -934,7 +1081,7 @@ export default {
           accessTargets: data.access_targets,
           preferredUrl: data.preferred_url,
           returnRoute: "/",
-          message: `正在从备份恢复，完成后请使用备份中的管理员账号 ${this.restoredUsername} 登录，并在 更新与维护 → 备份与恢复 中查看恢复结果。`,
+          message: `正在从备份恢复，完成后请使用目标端管理员账号 ${this.account.username} 登录，并在 更新与维护 → 备份与恢复 中查看恢复结果。`,
           setup: true,
         })
       } catch (error) {
@@ -996,21 +1143,39 @@ h1 { font-family: "fzrzFont", sans-serif; font-size: 25px; letter-spacing: 0; }
 .backup-summary { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 8px 12px; margin: 8px 0 14px; font-size: 13px; }
 .backup-summary dt { color: #7b7f89; }
 .backup-summary dd { margin: 0; overflow-wrap: anywhere; }
+.restore-modes { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
+.restore-modes .el-radio { margin-right: 0; white-space: normal; }
 .restore-categories { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
 .restore-categories .el-checkbox { margin-right: 0; }
 .restore-database-hint { margin-bottom: 14px; }
 .last-restore { margin-bottom: 16px; }
+.restore-progress { margin-bottom: 28px; padding: 20px; border: 1px solid #f0cedd; border-radius: 8px; background: #fff7fa; overflow-wrap: anywhere; }
+.restore-progress.needs-attention { border-color: #eed7ad; background: #fffaf1; }
+.restore-progress h2 { margin: 0 0 12px; color: #343740; font-size: 18px; }
+.restore-progress p { margin: 8px 0 0; color: #747984; font-size: 13px; line-height: 1.7; }
+.restore-progress .restore-progress-step { color: #343740; font-weight: 600; }
+.restore-progress-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.restore-progress-actions .el-button { margin-left: 0; white-space: normal; line-height: 1.5; }
+.restore-preparation-changes { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.step-intro .restore-lock-hint { color: #a24a70; font-size: 13px; }
 .database-choices { grid-template-columns: repeat(4, 1fr); }
 .network-choices { grid-template-columns: repeat(3, 1fr); }
 .choice-item { position: relative; min-height: 82px; padding: 14px; border: 1px solid #dfe2e8; border-radius: 6px; color: #343740; background: #fff; text-align: left; cursor: pointer; }
 .choice-item:hover, .choice-item.active { border-color: #dc6d9b; background: #fff7fa; }
+.choice-item:disabled { cursor: not-allowed; opacity: 0.65; }
 .choice-item strong, .choice-item span { display: block; }
 .choice-item span { margin-top: 6px; color: #858995; font-size: 12px; line-height: 1.45; }
 .choice-item em { position: absolute; top: 8px; right: 8px; color: #c74e80; font-size: 10px; font-style: normal; }
 .field-hint { margin-top: 5px; color: #90949e; font-size: 12px; }
 .probe-button { width: 132px; margin-top: 8px; }
+.probe-actions, .cache-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; }
+.probe-actions .probe-button, .cache-actions .probe-button { flex: 0 0 auto; width: auto; margin: 0; }
+.probe-actions .probe-result, .cache-actions .probe-result { min-width: 0; flex: 1 1 180px; margin: 0; }
+.cache-actions .segmented-control { margin: 0; }
+.cache-actions { margin-bottom: 18px; }
 .probe-result { display: flex; align-items: center; gap: 8px; min-height: 34px; margin-top: 4px; color: #8a8e98; font-size: 13px; }
-.probe-result b { margin-left: auto; font-size: 11px; }
+.probe-result span { min-width: 0; overflow-wrap: anywhere; }
+.probe-result b { flex-shrink: 0; margin-left: 4px; font-size: 11px; }
 .probe-result.ok { color: #318c5a; }
 .probe-result.warning { color: #be7918; }
 .probe-result.error { color: #c74343; }
@@ -1031,11 +1196,25 @@ h1 { font-family: "fzrzFont", sans-serif; font-size: 25px; letter-spacing: 0; }
 .warning-confirm { margin-top: 20px; }
 .inline-result { margin: 10px 0; font-size: 13px; }
 .setup-actions { z-index: 2; display: grid; flex: 0 0 auto; grid-template-columns: 120px 1fr 150px; gap: 12px; padding: 18px 56px 24px; border-top: 1px solid #eceef2; background: #fff; box-shadow: 0 -8px 20px rgba(61, 66, 84, 0.04); }
-.setup-actions .el-button { min-height: 40px; }
+.setup-actions .el-button { min-height: 40px; min-width: 0; white-space: normal; line-height: 1.5; }
 .final-action { min-height: 40px; border: 1px solid #cf588a; border-radius: 4px; color: #fff; background: #cf588a; cursor: pointer; }
 .final-action:disabled { border-color: #e5bdce; background: #e5bdce; cursor: not-allowed; }
 ::v-deep .el-button--primary { border-color: #cf588a; background: #cf588a; }
 ::v-deep .el-input-number { width: 100%; }
+
+@media (min-width: 701px) and (max-height: 650px) {
+  .setup-shell { padding: 12px 16px; }
+  .setup-header { padding: 12px 24px; }
+  .brand-logo { width: 80px; height: 38px; }
+  .brand-kicker, .brand-block p:last-child { display: none; }
+  h1 { font-size: 22px; }
+  .desktop-steps { padding: 12px 32px 4px; }
+  .step-body { padding: 12px 32px; }
+  .step-intro { margin-bottom: 12px; }
+  .step-intro h2 { margin-top: 4px; font-size: 20px; }
+  .setup-actions { padding: 10px 32px; }
+  .choice-grid { margin-bottom: 12px; }
+}
 
 @media (max-width: 700px) {
   .setup-shell { padding: 0; background: #fff; }
@@ -1055,7 +1234,7 @@ h1 { font-family: "fzrzFont", sans-serif; font-size: 25px; letter-spacing: 0; }
   .mode-layout { padding: 32px 18px 16px; }
   .choice-item { min-height: 70px; }
   .setup-actions { grid-template-columns: 1fr 1fr; padding: 12px 18px max(12px, env(safe-area-inset-bottom)); background: #fff; }
-  .setup-actions span { display: none; }
+  .setup-actions > span { display: none; }
   .setup-actions .el-button:last-child { grid-column: 2; }
 }
 </style>

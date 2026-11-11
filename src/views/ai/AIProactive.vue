@@ -3,7 +3,7 @@
     <div class="zx-section-heading">
       <div>
         <h2>按群主动对话</h2>
-        <p>群里没人叫 Bot 时，概率模式按概率让 AI 决定是否插话，监听模式攒够一批新消息后由监听模型判断该不该接话；偷表情会自动收集群里的表情包。这里可按群设置模式和限额，留空使用“聊天设置”中的全局值，0 为不限制。今日插话与监听共用 {{ overview.used_tokens }} tokens，偷表情判断 {{ overview.steal_judges }} 次。</p>
+        <p>群里没人叫 Bot 时，概率模式抽中后先判断是否值得接话，监听模式攒够一批新消息后判断；两种模式都在判断通过后生成回复。偷表情按消息选择未处理的表情，由视觉模型确认收藏价值。这里可按群设置模式和限额，留空使用“聊天设置”中的全局值，0 为不限制。今日插话与接话判断共用 {{ overview.used_tokens }} tokens，偷表情判断 {{ overview.steal_judges }} 次。</p>
       </div>
       <div class="heading-actions">
         <el-input v-model="search" size="small" clearable placeholder="搜索群号或群名" class="search" />
@@ -81,8 +81,8 @@ export default {
       loading: false, search: "", rows: [], tasks: [], bots: [], overview: { used_tokens: 0, steal_judges: 0 },
       modeNames: { off: "关闭", probability: "概率", listen: "监听" },
       taskForm: { visible: false, saving: false, id: null, name: "", prompt: "", kind: "cron", value: "", bot_id: "", target: "group", target_id: "" },
-      runNames: { ok: "已发送", silent: "无内容", error: "出错", stopped: "已停止" },
-      runTypes: { ok: "success", silent: "info", error: "danger", stopped: "info" },
+      runNames: { ok: "已发送", silent: "无内容", partial: "已发送，后续中断", error: "出错", stopped: "已停止" },
+      runTypes: { ok: "success", silent: "info", partial: "warning", error: "danger", stopped: "info" },
       valueHints: { cron: "分 时 日 月 周，如 0 8 * * *", interval: "间隔分钟，至少 10", date: "YYYY-MM-DD HH:MM" },
     }
   },

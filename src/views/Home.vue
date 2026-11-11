@@ -1127,6 +1127,7 @@ export default {
         if (requestSequence !== this.botRequestSequence) return
         if (resp.suc) {
           this.botList = resp.data || []
+          this.$store.commit("SET_BOT_IDENTITIES", this.botList)
           if (!this.botList.length) {
             this.$store.commit("SET_BOT", null)
             this.botState = "empty"

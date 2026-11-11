@@ -2,6 +2,9 @@
   <el-dialog
     :visible.sync="visible"
     :before-close="confirmClose"
+    :close-on-click-modal="!saving"
+    :close-on-press-escape="!saving"
+    :show-close="!saving"
     @closed="handleClosed"
     :class="{
       'neko-dialog': true,
@@ -38,7 +41,8 @@
     </div>
 
     <!-- 内容区域 -->
-    <div class="plugin-content">
+    <div class="plugin-content" v-loading="loadingDetails || saving" :element-loading-text="saving ? '正在保存配置，请稍候…' : '正在读取插件配置…'">
+      <div :inert="saving || loadingDetails ? '' : null">
       <el-tabs v-if="configGroups.length" v-model="activeTab" class="plugin-tabs">
         <el-tab-pane label="基础设置" name="basic" />
         <el-tab-pane :label="`插件配置 · ${configFieldCount} 项`" name="config" />
@@ -202,6 +206,7 @@
         <div v-if="!configGroups.some(group => groupMatches(group, configSearch))" class="config-empty">没有匹配的配置项</div>
       </div>
     </div>
+    </div>
 
     <!-- 底部操作区 -->
     <div class="dialog-footer">
@@ -209,19 +214,20 @@
         <button
           v-if="canUninstall"
           class="cancel-button uninstall-button"
+          :disabled="saving || loadingDetails"
           @click="requestUninstall"
         >
           <i class="el-icon-delete"></i>
           <span>{{ updateData.management_source === "nonebot_store" ? "前往卸载" : "卸载插件" }}</span>
         </button>
         <span v-else-if="updateData.uninstall_reason">{{ updateData.uninstall_reason }}</span>
-        <button class="cancel-button" @click="close">
+        <button class="cancel-button" :disabled="saving" @click="close">
           <i class="el-icon-close"></i>
           <span>取消</span>
         </button>
-        <button class="confirm-button" @click="commit">
-          <i class="el-icon-check"></i>
-          <span>确定</span>
+        <button class="confirm-button" :disabled="saving || loadingDetails" :aria-busy="saving" @click="commit">
+          <i :class="saving ? 'el-icon-loading' : 'el-icon-check'"></i>
+          <span>{{ saving ? '保存中…' : '确定' }}</span>
         </button>
       </div>
     </div>
@@ -260,6 +266,7 @@ export default {
     return {
       activeTab: this.tab, configSearch:"", configIssues: [], configGroups: [], configRevision: "",
       visible: false,
+      saving: false, loadingDetails: false, disposed: false,
       menuTypeList: [],
       menuTypeOptions: [],
       levelOptions: Array.from({ length: 10 }, (_, i) => ({
@@ -296,6 +303,7 @@ export default {
     this.getPluginMenuType()
   },
   beforeDestroy() {
+    this.disposed = true
     clearDirtyState(this.dirtySource)
   },
   watch: {
@@ -328,6 +336,7 @@ export default {
       this.$emit("close")
     },
     async confirmDiscard() {
+      if (this.saving) return false
       if (!this.isDirty()) return true
       try {
         await this.$confirm(
@@ -356,10 +365,12 @@ export default {
       this.$emit("close")
     },
     getPluginDetail() {
-      const loading = this.getLoading(".el-dialog")
+      this.visible = true
+      this.loadingDetails = true
       this.getRequest(`${this.$root.prefix}/plugin/get_plugin`, {
         module: this.module,
       }).then((resp) => {
+        if (this.disposed) return
         if (resp.suc && !resp.warning) {
           const { config_groups: groups, config_revision: revision, ...plugin } = resp.data
           this.updateData = plugin
@@ -373,12 +384,13 @@ export default {
           this.$emit("close")
         }
       }).catch(() => {
-        this.$emit("close")
-      }).finally(() => loading.close())
+        if (!this.disposed) this.$emit("close")
+      }).finally(() => { if (!this.disposed) this.loadingDetails = false })
     },
     getPluginMenuType() {
       this.getRequest(`${this.$root.prefix}/plugin/get_plugin_menu_type`).then(
         (resp) => {
+          if (this.disposed) return
           if (resp.suc) {
             if (resp.warning) {
               this.$message.warning(resp.warning)
@@ -413,6 +425,12 @@ export default {
       this.$nextTick(() => this.$el.querySelector(".field-error")?.scrollIntoView({ block: "center" }))
     },
     async commit() {
+      if (this.saving || this.loadingDetails || this.disposed) return
+      this.saving = true
+      try { await this.saveChanges() }
+      finally { if (!this.disposed) this.saving = false }
+    },
+    async saveChanges() {
       const changes = this.configChanges
       const baseChanged = this.baseChanged()
       if (!baseChanged && !Object.keys(changes).length) {
@@ -429,7 +447,6 @@ export default {
         this.activeTab = "basic"
         return
       }
-      const loading = this.getLoading(".el-dialog")
       let configResponse = null
       let baseResponse = null
       try {
@@ -456,8 +473,6 @@ export default {
         this.$message.error(prefix + apiErrorDetail(error, "保存失败"))
         if (this.configIssues.length) this.focusConfigIssue()
         return
-      } finally {
-        loading.close()
       }
       clearDirtyState(this.dirtySource)
       await handleApplyResult(this, configResponse || baseResponse, {
@@ -471,6 +486,7 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+.dialog-footer button:disabled { opacity: 0.65; cursor: wait; }
 // 主题颜色变量
 $primary: var(--el-color-primary, #409eff);
 $primary-light: var(--el-color-primary-light-3, #79bbff);

@@ -6,7 +6,7 @@
     </div>
     <div v-for="model in models" :key="model.name" class="model-table-row" :class="{ disabled: model.enabled === false }" role="row">
       <span class="cell-name" role="cell">
-        <button type="button" class="model-name" :title="`编辑 ${model.name}`" @click="$emit('edit', model)">{{ model.name }}</button>
+        <button type="button" class="model-name" :disabled="busy || Boolean(checks[model.name])" :title="`编辑 ${model.name}`" @click="$emit('edit', model)">{{ model.name }}</button>
         <el-tooltip v-if="isMissing(model)" content="上游模型列表中已没有该模型，可能已下线" placement="top"><i class="el-icon-warning-outline missing"></i></el-tooltip>
         <small v-if="model.reference">参照 {{ model.reference }}</small>
       </span>
@@ -15,39 +15,28 @@
       <span class="cell-tags" role="cell" data-label="能力"><template v-for="tag in tags(model)"><el-tooltip v-if="tag.off" :key="tag.label" :content="`${tag.label}已手动关闭`" placement="top"><el-tag size="mini" type="info" effect="plain" class="tag-off">{{ tag.label }}</el-tag></el-tooltip><el-tag v-else :key="tag.label" size="mini" effect="plain">{{ tag.label }}</el-tag></template><em v-if="!tags(model).length">—</em></span>
       <span role="cell" data-label="核验">
         <el-tooltip v-if="task(model) === 'chat'" :disabled="!checkTip(model)" :content="checkTip(model)" placement="top"><el-tag size="mini" effect="plain" :type="state(model).type">{{ state(model).label }}</el-tag></el-tooltip>
+        <el-tooltip v-else-if="outcomes[model.name] || checks[model.name]" :content="checkTip(model)" placement="top"><el-tag size="mini" effect="plain" :type="state(model).type">{{ state(model).label }}</el-tag></el-tooltip>
         <em v-else>—</em>
+        <small v-if="latency(model) !== null" class="check-latency">{{ task(model) === 'chat' ? '响应' : '测试耗时' }} {{ latency(model) }} ms</small>
+        <small v-else-if="task(model) === 'chat' && !checks[model.name] && !outcomes[model.name]?.failed" class="check-latency">响应 —</small>
       </span>
       <span role="cell" data-label="默认">
         <el-tag v-if="isDefault(model)" size="mini" type="success">默认{{ task(model) === "chat" ? "" : taskLabel(model) }}</el-tag>
         <el-tooltip v-else :disabled="canSetDefault(model)" :content="model.enabled === false ? '启用后可设为默认' : '保存后可设为默认'" placement="top">
-          <span><el-button type="text" size="mini" :disabled="!canSetDefault(model) || busy" @click="$emit('set-default', model)">设为默认</el-button></span>
+          <span><el-button type="text" size="mini" :disabled="!canSetDefault(model) || busy || Boolean(checks[model.name])" @click="$emit('set-default', model)">设为默认</el-button></span>
         </el-tooltip>
       </span>
-      <span role="cell" data-label="启用"><el-switch :value="model.enabled !== false" :disabled="busy" @change="$emit('toggle', model, $event)" /></span>
+      <span role="cell" data-label="启用"><el-switch :value="model.enabled !== false" :disabled="busy || Boolean(checks[model.name])" @change="$emit('toggle', model, $event)" /></span>
       <span class="cell-actions" role="cell">
-        <el-button v-if="task(model) === 'chat'" type="text" size="mini" :loading="loadingName === model.name" :disabled="busy" @click="$emit('check', model)">核验</el-button>
-        <el-button v-else type="text" size="mini" :loading="loadingName === model.name" :disabled="busy" @click="$emit('test', model)">测试</el-button>
-        <el-button type="text" size="mini" :disabled="busy" @click="$emit('edit', model)">编辑</el-button>
-        <el-button type="text" size="mini" class="danger-text" :disabled="busy" @click="$emit('remove', model)">删除</el-button>
+        <el-button v-if="task(model) === 'chat'" type="text" size="mini" :loading="checks[model.name]?.state === 'running'" :disabled="busy || Boolean(checks[model.name])" @click="$emit('check', model)">{{ checks[model.name]?.state === "queued" ? "排队中" : "核验" }}</el-button>
+        <el-button v-else type="text" size="mini" :loading="checks[model.name]?.state === 'running'" :disabled="busy || Boolean(checks[model.name])" @click="$emit('test', model)">{{ checks[model.name]?.state === "queued" ? "排队中" : "测试" }}</el-button>
+        <el-button type="text" size="mini" :disabled="busy || Boolean(checks[model.name])" @click="$emit('edit', model)">编辑</el-button>
+        <el-button type="text" size="mini" class="danger-text" :disabled="busy || Boolean(checks[model.name])" @click="$emit('remove', model)">删除</el-button>
       </span>
     </div>
     <div v-if="!models.length" class="model-table-empty"><slot name="empty">没有匹配的模型</slot></div>
   </div>
-  <section v-if="availableTotal" class="available">
-    <div class="available-head">
-      <button type="button" class="available-toggle" :aria-expanded="String(availableOpen)" @click="$emit('update:availableOpen', !availableOpen)"><i :class="availableOpen ? 'el-icon-arrow-down' : 'el-icon-arrow-right'"></i>上游未添加 <b>{{ availableTotal }}</b><small v-if="available.length !== availableTotal">，匹配 {{ available.length }}</small></button>
-      <el-button v-if="availableOpen && available.length" type="text" size="mini" icon="el-icon-plus" @click="$emit('add-all')">{{ available.length === availableTotal ? "全部添加" : `添加匹配的 ${available.length} 个` }}</el-button>
-    </div>
-    <div v-if="availableOpen" class="available-list">
-      <div v-for="item in shownAvailable" :key="item.name" class="available-row">
-        <span class="available-name" :title="item.name">{{ item.name }}</span>
-        <small :title="item.hint">{{ item.hint }}</small>
-        <el-button type="text" size="mini" icon="el-icon-plus" @click="$emit('add', item.name)">添加</el-button>
-      </div>
-      <div v-if="!available.length" class="model-table-empty">没有匹配的上游模型</div>
-      <el-button v-if="available.length > shownAvailable.length" type="text" size="mini" class="available-more" @click="showAll = true">显示其余 {{ available.length - shownAvailable.length }} 个</el-button>
-    </div>
-  </section>
+
   </div>
 </template>
 
@@ -63,18 +52,24 @@ export default {
     savedNames: { type: Array, default: () => [] },
     upstream: { type: Array, default: null },
     busy: Boolean,
-    loadingName: { type: String, default: "" },
-    available: { type: Array, default: () => [] },
-    availableTotal: { type: Number, default: 0 },
-    availableOpen: Boolean,
-  },
-  data() { return { showAll: false } },
-  computed: {
-    shownAvailable() { return this.showAll ? this.available : this.available.slice(0, 40) },
+    checks: { type: Object, default: () => ({}) },
+    outcomes: { type: Object, default: () => ({}) },
   },
   methods: {
+    latency(model) {
+      const outcome = this.outcomes?.[model.name]
+      if (this.checks?.[model.name] || outcome?.failed) return null
+      const value = this.task(model) === "chat" ? (model.check?.results || []).find((row) => row.item === "chat" && row.status === "supported")?.latency_ms : outcome?.data?.latency_ms
+      return Number.isFinite(value) && value >= 0 ? Math.round(value) : null
+    },
     task: modelTask,
-    state: checkState,
+    state(model) {
+      const check = this.checks[model.name]; const outcome = this.outcomes[model.name]
+      if (check) return { label: check.state === "queued" ? "排队中" : this.task(model) === "chat" ? "核验中" : "测试中", type: "info" }
+      if (outcome?.failed) return { label: this.task(model) === "chat" ? "核验失败" : "测试失败", type: "danger" }
+      if (this.task(model) !== "chat" && outcome) return { label: "已测试", type: "success" }
+      return checkState(model)
+    },
     tags: capabilityTags,
     taskLabel(model) { return TASK_LABELS[modelTask(model)] || modelTask(model) },
     taskText(model) { return modelProfile(model).tasks.map((item) => TASK_LABELS[item] || item).join("、") },
@@ -85,9 +80,14 @@ export default {
      * @returns {string} 提示文本
      */
     checkTip(model) {
+      const outcome = this.outcomes?.[model.name]
+      if (outcome?.failed) return outcome.message
+      const total = outcome?.data?.latency_ms
+      const timing = Number.isFinite(total) ? (outcome.kind === "check" ? "核验耗时 " : "测试耗时 ") + Math.round(total) + " ms" : ""
       const results = model.check?.results || []
       const failed = results.find((row) => row.item === "chat" && row.status === "failed")
-      return failed ? `基本对话失败：${briefDetail(failed.detail)}` : checkSummary(results)
+      const detail = failed ? `基本对话失败：${briefDetail(failed.detail)}` : checkSummary(results)
+      return [detail, timing].filter(Boolean).join("；")
     },
     isMissing(model) { return Boolean(this.upstream) && !model.protocol && !model.base_url && !this.upstream.includes(model.name) },
     isDefault(model) { return this.defaults[modelTask(model)] === `${this.providerName}/${model.name}` },
@@ -97,6 +97,7 @@ export default {
 </script>
 
 <style scoped>
+.check-latency { display: block; margin-top: 4px; color: var(--text-color-secondary); font-size: 11px; }
 .model-panel { font-size: 13px; container-type: inline-size; }
 .model-table { border-top: 1px solid var(--border-color-light); }
 .model-table-row { display: grid; min-height: 52px; grid-template-columns: minmax(170px, 2.2fr) minmax(64px, 0.8fr) 64px minmax(110px, 1.3fr) 76px 80px 52px 132px; align-items: center; gap: 10px; padding: 6px 4px; border-bottom: 1px solid var(--border-color-light); }
@@ -116,16 +117,6 @@ export default {
 .cell-actions .el-button + .el-button { margin-left: 8px; }
 .danger-text { color: var(--danger-color) !important; }
 .model-table-empty { padding: 30px 12px; color: var(--text-color-secondary); text-align: center; }
-.available { margin-top: 12px; padding: 4px 12px 8px; border: 1px dashed var(--border-color); border-radius: 8px; }
-.available-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 36px; }
-.available-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; color: var(--text-color); background: none; font: inherit; cursor: pointer; }
-.available-toggle small { color: var(--text-color-secondary); }
-.available-list { max-height: 420px; overflow-y: auto; border-top: 1px solid var(--border-color-light); }
-.available-row { display: grid; min-height: 40px; grid-template-columns: minmax(150px, 1.2fr) minmax(0, 2fr) auto; align-items: center; gap: 12px; border-bottom: 1px solid var(--border-color-light); }
-.available-row:hover { background: var(--bg-color-hover); }
-.available-name { overflow: hidden; font-family: Consolas, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.available-row small { overflow: hidden; color: var(--text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.available-more { width: 100%; }
 @container (max-width: 780px) {
   .model-table-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 10px 4px; }
   .cell-name { flex: 1 1 100%; }
@@ -134,8 +125,6 @@ export default {
   .model-table-row > [data-label]::before { color: var(--text-color-secondary); font-size: 12px; content: attr(data-label); }
   .cell-actions { margin-left: auto; }
   .model-table-row.model-table-head { display: none; }
-  .available-row { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 6px 0; }
-  .available-row small { grid-column: 1; grid-row: 2; }
-  .available-row .el-button { grid-column: 2; grid-row: 1 / 3; }
+
 }
 </style>
