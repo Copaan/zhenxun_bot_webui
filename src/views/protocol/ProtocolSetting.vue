@@ -13,7 +13,7 @@
       </button>
     </nav>
 
-    <section v-if="selectedPlatform === 'onebot_v11'" class="configuration-section">
+    <section v-if="selectedPlatform === 'onebot_v11'" key="onebot" class="configuration-section">
       <div class="section-heading"><div><h2>OneBot V11</h2><p>协议端使用反向 WebSocket 主动连接真寻。</p></div><el-tag type="primary" effect="plain">反向 WebSocket</el-tag></div>
       <div class="endpoint-section">
         <div class="endpoint-heading"><h3>当前运行连接地址</h3><el-button size="small" icon="el-icon-refresh" :loading="statusLoading" @click="loadStatus">刷新状态</el-button></div>
@@ -45,7 +45,7 @@
       <el-button type="primary" :loading="saving" :disabled="!configuration.revision" @click="saveConfiguration">保存配置</el-button>
     </section>
 
-    <section v-else-if="selectedPlatform === 'telegram'" class="configuration-section">
+    <section v-else-if="selectedPlatform === 'telegram'" key="telegram" class="configuration-section">
       <div class="section-heading"><div><h2>Telegram</h2><p>通过 Telegram Bot API 接入，配置写在 .env 中，修改后需重启生效。</p></div><el-tag :type="status.telegram_connected ? 'success' : status.telegram_enabled ? 'warning' : 'info'" effect="plain">{{ telegramStatus }}</el-tag></div>
       <div v-if="telegramConnections.length" class="connected-list">
         <div class="section-heading compact"><div><h3>在线机器人</h3></div><el-button size="small" icon="el-icon-refresh" :loading="statusLoading" @click="loadStatus">刷新</el-button></div>
@@ -71,7 +71,7 @@
       </div>
     </section>
 
-    <section v-else class="qq-workspace">
+    <section v-else key="qq" class="qq-workspace">
       <div class="qq-mode-toolbar">
         <el-radio-group v-model="qqSetupMode" size="small">
           <el-radio-button label="scan"><i class="el-icon-full-screen"></i> 扫码接入</el-radio-button>
@@ -98,7 +98,7 @@
         </div>
       </div>
 
-      <div v-if="qqSetupMode === 'scan'" class="scan-panel">
+      <div v-if="qqSetupMode === 'scan'" key="scan" class="scan-panel">
         <div class="scan-icon"><i class="el-icon-full-screen"></i></div>
         <div class="scan-copy">
           <el-tag size="mini" type="success" effect="plain">推荐</el-tag>
