@@ -344,7 +344,7 @@ export default {
     this.onVisibility = () => {
       if (document.hidden) {
         this.pauseJobPoll()
-        this.$store.dispatch("restartStatus/invalidate")
+        this.$store.dispatch("restartStatus/pause")
       } else this.resumeUpdateReads()
     }
     this.onAuthExpired = () => {

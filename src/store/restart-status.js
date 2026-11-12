@@ -46,6 +46,14 @@ export default {
     RESET(state) { state.snapshot = emptySnapshot(); state.known = false; state.loading = false; state.workerBootId = ""; state.verifyingSince = null },
   },
   actions: {
+    /** 中断进行中的读取，保留已知状态；页面转入后台时使用 */
+    pause({ commit }) {
+      sequence += 1
+      controller?.abort()
+      controller = null
+      flight = null
+      commit("LOADING", false)
+    },
     invalidate({ commit }, reset = false) {
       sequence += 1
       controller?.abort()

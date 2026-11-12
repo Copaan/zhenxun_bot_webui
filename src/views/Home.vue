@@ -708,6 +708,7 @@ export default {
     },
     handleRecoveryNetwork(frozen) {
       this.pauseStatusReads()
+      if (frozen) this.$store.dispatch("restartStatus/invalidate")
       this.pausePluginOperation()
       if (this.startupPollTimer) window.clearTimeout(this.startupPollTimer)
       this.startupPollTimer = null
@@ -762,7 +763,7 @@ export default {
       this.startupController = null
       window.clearTimeout(this.startupPollTimer)
       this.startupPollTimer = null
-      this.$store.dispatch("restartStatus/invalidate")
+      this.$store.dispatch("restartStatus/pause")
     },
     async loadStartupStatus() {
       window.clearTimeout(this.startupPollTimer)
