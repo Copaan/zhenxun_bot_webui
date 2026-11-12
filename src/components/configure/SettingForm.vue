@@ -497,6 +497,8 @@ const ProbeResult = {
   },
 }
 
+const restoreRunningStates = ["preparing", "pending", "snapshot_ready", "applying", "awaiting_orm", "importing", "verifying", "committing", "failed_import", "rollback_import", "rollback_target", "rollback_verifying", "recovery_required"]
+
 export default {
   name: "SettingForm",
   components: { DatabaseFields, ProbeResult },
@@ -619,7 +621,7 @@ export default {
       return Boolean(this.backupSummary && this.accountReady && (this.restoreMode === "replace_database" || this.includedTables.length > 0) && this.results.database && this.results.database.status !== "error" && !this.restoreParametersLocked)
     },
     restoreTaskRunning() {
-      return ["preparing", "pending", "snapshot_ready", "applying", "awaiting_orm", "importing", "verifying", "committing", "failed_import", "rollback_import", "rollback_target", "rollback_verifying", "recovery_required"].includes(this.restoreTask.state)
+      return restoreRunningStates.includes(this.restoreTask.state)
     },
     restoreParametersLocked() {
       return this.restoreConfirming || this.restoring || this.retryingRestore || this.restoreTaskRunning
@@ -947,6 +949,11 @@ export default {
       try {
         const response = await this.getRequest(`${this.$root.prefix}/configure/backup/restore`, null, { ...this.setupHeaders, suppressErrorToast: true })
         const status = response?.data || {}
+        if (status.operation_id && restoreRunningStates.includes(status.state)) {
+          sessionStorage.setItem("zhenxun_restore_operation", status.operation_id)
+          await this.resumeRestore()
+          return
+        }
         if (!["failed", "rolled_back", "rollback_failed", "recovery_required"].includes(status.state)) return
         const label = reasonLabels[status.error_code]
         this.lastRestoreError = status.rollback_error
@@ -1089,7 +1096,12 @@ export default {
       } finally { if (generation === this.readSequence) this.restoring = false }
     },
     requestError(error, fallback) {
-      return error.response?.data?.detail || error.message || fallback
+      const message = error.response?.data?.detail || error.message || fallback
+      if (String(message).includes("migration_operation_in_progress")) {
+        this.openRestore()
+        return "已有未结束的恢复任务，请在上方重试或取消后再操作。"
+      }
+      return message
     },
     buildRestartUrls(urls) {
       return buildRestartTargets({

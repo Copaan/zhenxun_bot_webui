@@ -20,15 +20,15 @@
         <div class="bubble user"><p>{{ run.input }}</p></div>
         <template v-for="(block, index) in run.blocks">
           <div v-if="block.type === 'turn'" :key="index" class="bubble assistant">
-            <details v-if="block.thought" class="thought" :open="block.open && !block.text"><summary>思考过程</summary><p>{{ block.thought }}</p></details>
-            <p v-if="block.text || block.open">{{ block.text }}<span v-if="block.open" class="cursor"></span></p>
+            <p>{{ block.text }}</p>
           </div>
           <div v-else-if="block.type === 'tool'" :key="index" class="tool-card" :class="{ failed: block.is_error }">
             <div class="tool-head"><i :class="block.done ? (block.is_error ? 'el-icon-warning-outline' : 'el-icon-circle-check') : 'el-icon-loading'"></i><strong>{{ block.name }}</strong><small class="muted">{{ block.done ? (block.is_error ? "失败" : "完成") : "执行中" }}</small></div>
             <details><summary>参数与结果</summary><pre>{{ block.arguments }}</pre><pre v-if="block.done">{{ block.result }}</pre></details>
           </div>
         </template>
-        <small v-if="run.done" class="run-footer" :class="{ error: run.done.error }">{{ footerText(run.done) }}</small>
+        <small v-if="!run.done" class="run-footer muted"><i class="el-icon-loading"></i> 生成中</small>
+        <small v-else class="run-footer" :class="{ error: run.done.error }">{{ footerText(run.done) }}</small>
       </div>
     </div>
 
@@ -154,24 +154,13 @@ export default {
      * @param {object} item 事件
      */
     apply(run, item) {
-      const last = run.blocks[run.blocks.length - 1]
-      const open = last && last.type === "turn" && last.open ? last : null
-      if (item.type === "delta") {
-        const turn = open || run.blocks[run.blocks.push({ type: "turn", text: "", thought: "", open: true }) - 1]
-        if (item.kind === "reset") { turn.text = ""; turn.thought = "" } else if (item.kind === "thought") turn.thought += item.text
-        else turn.text += item.text
-      } else if (item.type === "turn") {
-        if (open) run.blocks.pop()
-        if (item.text || item.thought) run.blocks.push({ type: "turn", text: item.text, thought: item.thought, open: false })
-      } else if (item.type === "tool_start") {
-        if (open && !open.text && !open.thought) run.blocks.pop()
+      if (item.type === "tool_start") {
         run.blocks.push({ type: "tool", name: item.name, arguments: item.arguments, result: "", is_error: false, done: false })
       } else if (item.type === "tool_end") {
         const tool = [...run.blocks].reverse().find((block) => block.type === "tool" && block.name === item.name && !block.done)
         if (tool) Object.assign(tool, { result: item.result, is_error: item.is_error, done: true })
       } else if (item.type === "done") {
-        run.blocks = run.blocks.filter((block) => !(block.type === "turn" && block.open && !block.text && !block.thought))
-        run.blocks.forEach((block) => { if (block.type === "turn") block.open = false })
+        if (item.output) run.blocks.push({ type: "turn", text: item.output })
         run.done = item
         if (!item.error && !item.stopped) this.$emit("done", item)
       }
@@ -249,11 +238,6 @@ export default {
 .bubble { max-width: 85%; padding: 8px 12px; border-radius: 10px; background: var(--bg-color-hover); }
 .bubble.user { align-self: flex-end; background: var(--primary-color); color: #fff; }
 .bubble p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.thought { margin-bottom: 6px; color: var(--text-color-secondary); font-size: 12px; }
-.thought summary { cursor: pointer; }
-.thought p { margin-top: 4px; }
-.cursor { display: inline-block; width: 7px; height: 1em; margin-left: 2px; vertical-align: text-bottom; background: var(--text-color-secondary); animation: blink 1s steps(2) infinite; }
-@keyframes blink { 50% { opacity: 0; } }
 .tool-card { max-width: 85%; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 13px; }
 .tool-card.failed { border-color: var(--el-color-danger, #f56c6c); }
 .tool-head { display: flex; align-items: center; gap: 6px; }

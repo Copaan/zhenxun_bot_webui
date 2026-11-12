@@ -37,7 +37,7 @@
             <p v-if="!personas.length" class="muted">还没有人设，未设置时使用内置默认人设。</p>
           </aside>
           <section class="zx-panel persona-editor">
-            <div class="zx-section-heading"><div><h2>{{ draft.id ? `编辑「${original.name}」` : "新建人设" }}</h2><p>保存后从下一条消息开始生效。</p></div></div>
+            <div class="zx-section-heading"><div><h2>{{ draft.id ? `编辑「${original.name}」` : "新建人设" }}</h2><p>保存后从下一条消息开始生效；切换人设保留已有历史，需要全新对话时可手动重置。</p></div></div>
             <el-form label-position="top">
               <div class="form-row">
                 <el-form-item label="人设名称"><el-input v-model="draft.name" maxlength="64" /></el-form-item>
@@ -167,10 +167,16 @@
           <div v-if="sandbox.sessions.length > 1" class="add-rule"><el-button size="small" type="danger" plain :loading="busy === 'clean-all'" @click="cleanSandbox()">全部清理</el-button></div>
         </section>
         <section class="zx-panel">
-          <div class="zx-section-heading"><div><h2>运行记录</h2><p>开启 Agent 后记录超级用户的对话、所有主动发言（插话、任务）以及监听、偷表情判断与记忆整理的输入、输出、用量与工具调用，保留 30 天；展开一行查看工具参数与结果。</p></div><div class="heading-actions"><el-select v-model="runQuery.source" size="small" clearable placeholder="全部来源" class="run-filter" @change="loadAgent()"><el-option label="QQ" value="qq" /><el-option label="控制台" value="webui" /><el-option v-for="(label, value) in proactiveSources" :key="value" :label="label" :value="value" /></el-select><el-select v-model="runQuery.status" size="small" clearable placeholder="全部状态" class="run-filter" @change="loadAgent()"><el-option v-for="(label, value) in statusNames" :key="value" :label="label" :value="value" /></el-select><el-button size="small" icon="el-icon-refresh" @click="loadAgent()">刷新</el-button></div></div>
+          <div class="zx-section-heading"><div><h2>运行记录</h2><p>记录普通聊天、控制台对话、所有主动发言（插话、任务）以及监听、偷表情判断与记忆整理的输入、输出、用量与工具调用，保留 30 天；展开一行查看工具参数与结果。</p></div><div class="heading-actions"><el-select v-model="runQuery.source" size="small" clearable placeholder="全部来源" class="run-filter" @change="loadAgent()"><el-option label="聊天" value="qq" /><el-option label="控制台" value="webui" /><el-option v-for="(label, value) in proactiveSources" :key="value" :label="label" :value="value" /></el-select><el-select v-model="runQuery.status" size="small" clearable placeholder="全部状态" class="run-filter" @change="loadAgent()"><el-option v-for="(label, value) in statusNames" :key="value" :label="label" :value="value" /></el-select><el-button size="small" icon="el-icon-refresh" @click="loadAgent()">刷新</el-button></div></div>
           <el-table :data="agent.runs" size="small" row-key="run_id" empty-text="暂无运行记录" @expand-change="loadRun">
             <el-table-column type="expand"><template #default="{ row }"><div class="call-detail">
               <strong>输入</strong><pre>{{ row.input }}</pre><strong>输出</strong><pre>{{ row.error || row.output || "无" }}</pre>
+              <template v-if="row.details && row.details.delivery">
+                <p>投递：{{ deliveryNames[row.details.delivery.status] || row.details.delivery.status }}<span v-if="row.details.delivery.uncertain">（结果未知，不自动补发）</span></p>
+                <pre v-if="row.details.delivery.text">确认送达内容：{{ row.details.delivery.text }}</pre>
+                <p v-if="row.details.delivery.error" class="error-text">{{ row.details.delivery.error }}</p>
+                <p class="muted">平台确认仅表示请求已被接受，不表示对方已阅读。</p>
+              </template>
               <strong>工具调用</strong>
               <p v-if="!runCalls[row.run_id]" class="muted">加载中…</p>
               <p v-else-if="!runCalls[row.run_id].length" class="muted">本次没有调用工具。</p>
@@ -264,7 +270,8 @@ export default {
       sandboxDraft: {}, sandboxSaved: "", sandboxTest: null,
       agentDraft: { enabled: false }, agentSaved: "", agentTimer: null,
       decisionNames: { auto: "自动放行", approved: "已批准", rejected: "已拒绝", timeout: "超时" }, decisionTypes: { auto: "info", approved: "success", rejected: "danger", timeout: "warning" },
-      statusNames: { ok: "完成", silent: "未发言", partial: "已发送，后续中断", error: "出错", stopped: "已停止" }, statusTypes: { ok: "success", silent: "info", partial: "warning", error: "danger", stopped: "info" },
+      deliveryNames: { sent: "全部送达", partial: "部分送达", failed: "失败", unknown: "结果未知", skipped: "主动跳过", pending: "尚未结算" },
+      statusNames: { ok: "完成", silent: "未发言", partial: "部分送达", failed: "投递失败", unknown: "投递结果未知", error: "出错", stopped: "已停止" }, statusTypes: { ok: "success", silent: "info", partial: "warning", failed: "danger", unknown: "warning", error: "danger", stopped: "info" },
       proactiveSources: { interject: "插话", task: "任务", listen: "接话判断", steal: "偷表情", memory: "记忆整理" },
       voiceNames: { off: "关闭", voice: "语音提问时", always: "总是" },
       runnerNames: { local: "本地 Agent", dsh: "DeepSeek Harness" },
