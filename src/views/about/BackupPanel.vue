@@ -245,7 +245,7 @@ export default {
     },
     preparationChanges() {
       const changes = this.restore.preparation?.changes || {}
-      return JSON.stringify({ 版本调整: changes.nearby || {}, 跳过插件: changes.skipped_plugins || [], 其他平台声明: changes.platform_only || {}, 影响文件: changes.files || [], 目标结构指纹: changes.structure }, null, 2)
+      return JSON.stringify({ 版本调整: changes.nearby || {}, 跳过插件: changes.skipped_plugins || [], 跳过依赖: changes.skipped_requirements || [], 跳过原因: changes.skip_reasons || {}, 其他平台声明: changes.platform_only || {}, 影响文件: changes.files || [], 目标结构指纹: changes.structure }, null, 2)
     },
     restoreView() {
       const restore = this.restore

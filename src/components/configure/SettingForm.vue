@@ -75,7 +75,7 @@
                 <p>{{ restoreTaskMessage }}</p>
               </div>
               <template v-if="restoreTask.state === 'preparing' && restoreTask.preparation">
-                <pre v-if="restoreTask.preparation.confirmation_required" class="restore-preparation-changes">{{ JSON.stringify({ 版本调整: (restoreTask.preparation.changes || {}).nearby, 跳过插件: (restoreTask.preparation.changes || {}).skipped_plugins }, null, 2) }}</pre>
+                <pre v-if="restoreTask.preparation.confirmation_required" class="restore-preparation-changes">{{ JSON.stringify({ 版本调整: (restoreTask.preparation.changes || {}).nearby, 跳过插件: (restoreTask.preparation.changes || {}).skipped_plugins, 跳过依赖: (restoreTask.preparation.changes || {}).skipped_requirements, 跳过原因: (restoreTask.preparation.changes || {}).skip_reasons }, null, 2) }}</pre>
                 <div class="restore-progress-actions">
                   <el-button v-if="restoreTask.preparation.retryable" :loading="retryingRestore" :disabled="retryingRestore || restoreTask.cancel_requested" @click="retryPreparation">{{ restoreTask.preparation.confirmation_required ? '确认变更并继续' : '重试原任务' }}</el-button>
                   <el-button :loading="retryingRestore" :disabled="retryingRestore || (restoreTask.cancel_requested && restoreTask.preparation.phase !== 'cleanup_pending')" @click="cancelPreparation">{{ restoreTask.preparation.phase === 'cleanup_pending' ? '重试候选清理' : '取消本次恢复' }}</el-button>
