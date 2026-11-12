@@ -115,6 +115,7 @@
                 重启后应用
               </el-button>
             </span>
+            <el-button v-else-if="isDownloading(component.key)" size="small" :loading="cancellingJobId === jobFor(component.key).job_id" :disabled="Boolean(cancellingJobId)" @click="cancelUpdate(jobFor(component.key))">取消下载</el-button>
             <el-button v-else type="primary" size="small" :loading="isUpdating(component.key)" :disabled="!canUpdate(component)" @click="startUpdate(component)">
               {{ updateButtonLabel(component) }}
             </el-button>
@@ -303,7 +304,7 @@ export default {
     return {
       logoUrl, checking: false, updateInfo: null, updateError: "",
       options: { ...loadUpdateOptions(), force: false },
-      jobs: {}, updateReadSequence: 0, updateController: null, pollController: null, pollTimer: null, pollSequence: 0, restarting: false, applyingJobId: "", cancellingJobId: "", destroyed: false, statusStale: false, unsubscribeNetwork: null,
+      jobs: {}, updateReadSequence: 0, updateController: null, pollController: null, pollTimer: null, pollSequence: 0, restarting: false, applyingJobId: "", cancellingJobId: "", destroyed: false, statusStale: false, statusLoadedAt: 0, unsubscribeNetwork: null,
     }
   },
   computed: {
@@ -342,14 +343,9 @@ export default {
     this.loadRestartStatus()
     this.onVisibility = () => {
       if (document.hidden) {
-        this.pauseUpdateReads()
+        this.pauseJobPoll()
         this.$store.dispatch("restartStatus/invalidate")
-      } else {
-        this.loadRestartStatus()
-        this.checkUpdates(false)
-        const activeJobId = sessionStorage.getItem("zhenxun_update_job_id")
-        if (activeJobId) this.pollJob(activeJobId, true)
-      }
+      } else this.resumeUpdateReads()
     }
     this.onAuthExpired = () => {
       this.pauseUpdateReads()
@@ -357,12 +353,7 @@ export default {
     }
     this.unsubscribeNetwork = onBusinessNetworkChange((frozen) => {
       if (frozen) this.onAuthExpired()
-      else if (!document.hidden) {
-        this.loadRestartStatus()
-        this.checkUpdates(false)
-        const activeJobId = sessionStorage.getItem("zhenxun_update_job_id")
-        if (activeJobId) this.pollJob(activeJobId, true)
-      }
+      else if (!document.hidden) this.resumeUpdateReads()
     })
     document.addEventListener("visibilitychange", this.onVisibility)
     window.addEventListener("zhenxun-auth-expired", this.onAuthExpired)
@@ -378,14 +369,25 @@ export default {
   methods: {
     pauseUpdateReads() {
       this.updateReadSequence += 1
-      this.pollSequence += 1
       this.updateController?.abort()
-      this.pollController?.abort()
       this.updateController = null
+      this.checking = false
+      this.pauseJobPoll()
+    },
+    /** 页面转入后台时只停止任务轮询，进行中的版本检查继续完成 */
+    pauseJobPoll() {
+      this.pollSequence += 1
+      this.pollController?.abort()
       this.pollController = null
       window.clearTimeout(this.pollTimer)
       this.pollTimer = null
-      this.checking = false
+    },
+    /** 页面回到前台或网络恢复后续接读取，版本信息在一分钟内读过时不重复检查 */
+    resumeUpdateReads() {
+      this.loadRestartStatus()
+      if (!this.updateController && Date.now() - this.statusLoadedAt > 60000) this.checkUpdates(false)
+      const activeJobId = sessionStorage.getItem("zhenxun_update_job_id")
+      if (activeJobId) this.pollJob(activeJobId, true)
     },
     pendingItemLabel(item) {
       const actions = { install: "安装插件", update: "更新插件", uninstall: "卸载插件" }
@@ -401,7 +403,7 @@ export default {
       const sequence = ++this.updateReadSequence
       const epoch = businessNetworkEpoch()
       const token = getAuthToken()
-      const current = () => sequence === this.updateReadSequence && !this.destroyed && !document.hidden && !isBusinessNetworkFrozen() && epoch === businessNetworkEpoch() && token === getAuthToken() && hasValidAuthToken()
+      const current = () => sequence === this.updateReadSequence && !this.destroyed && !isBusinessNetworkFrozen() && epoch === businessNetworkEpoch() && token === getAuthToken() && hasValidAuthToken()
       this.checking = true; this.updateError = ""
       try {
         const response = refresh
@@ -411,6 +413,7 @@ export default {
         if (!response || !response.suc) throw new Error(response && response.info)
         this.updateInfo = response.data
         this.statusStale = false
+        this.statusLoadedAt = Date.now()
         if (response.data.errors && response.data.errors.length) this.updateError = "官方版本服务暂时不可用，请稍后重试。"
         if (response.data.pending_job && response.data.pending_job.job_id) this.pollJob(response.data.pending_job.job_id)
         const automatic = response.data.resource_startup_job
@@ -440,6 +443,7 @@ export default {
       return component.comparable ? "已是最新" : "版本未知"
     },
     isPendingUpdate(component) { return this.jobFor(component)?.state === "pending_restart" },
+    isDownloading(component) { return ["queued", "preparing"].includes(this.jobFor(component)?.state) },
     isUpdating(component) { const job = this.jobFor(component); return Boolean(job && !["completed", "failed", "cancelled", "recovery_required"].includes(job.state)) },
     updateButtonLabel(component) { if (!component.updateAvailable) return "重新安装"; return component.key === "resource" ? "更新资源" : component.key === "webui" ? "更新并刷新" : "下载更新" },
     canUpdate(component) { if (this.jobFor(component.key)?.state === "recovery_required" || component.blocked || this.isUpdating(component.key) || component.latestVersion === "未知") return false; return component.key !== "webui" || (component.manifestAvailable && component.compatible) },
@@ -511,7 +515,9 @@ export default {
      */
     async cancelUpdate(job) {
       if (!job?.job_id || this.cancellingJobId || this.applyingJobId) return
-      try { await this.$confirm("将删除已下载的更新文件，之后重启不会再应用这次更新。", "取消更新", { type: "warning", confirmButtonText: "取消更新", cancelButtonText: "保留" }) } catch (error) { return }
+      const downloading = ["queued", "preparing"].includes(job.state)
+      const notice = downloading ? "将停止下载并删除已下载的文件。" : "将删除已下载的更新文件，之后重启不会再应用这次更新。"
+      try { await this.$confirm(notice, "取消更新", { type: "warning", confirmButtonText: downloading ? "取消下载" : "取消更新", cancelButtonText: "保留" }) } catch (error) { return }
       this.cancellingJobId = job.job_id
       try {
         const response = await this.postRequest(`${this.$root.prefix}/system/update/jobs/${job.job_id}/cancel`, {})
