@@ -56,7 +56,7 @@
           <p v-if="!groups.length" class="known-groups-hint">{{ loading ? "正在读取此 Bot 的群列表…" : "此 Bot 暂无已记录群，连接同步或收到群消息后会更新。" }}</p>
           <div class="account-list group-list">
           <button v-for="group in groups" :key="groupKey(group)" type="button" :disabled="saving" :class="{ active: groupKey(group) === selectedGroupKey }" @click="selectGroup(groupKey(group))">
-            <el-avatar :size="36" :src="groupAvatar(group)" icon="el-icon-chat-dot-round" /><span :title="group.group_name"><strong>{{ group.group_name }}</strong><small>{{ group.group_id }}{{ group.channel_id ? '/' + group.channel_id : '' }}</small></span>
+            <el-avatar :size="36" :src="groupAvatar(group)" icon="el-icon-chat-dot-round" /><span :title="group.group_name || '该群名称尚未同步，不代表数据库损坏'"><strong>{{ group.group_name || '群名未同步' }}</strong><small>{{ group.group_id }}{{ group.channel_id ? '/' + group.channel_id : '' }}</small></span>
           </button>
           </div>
         </div>
@@ -70,8 +70,8 @@
             <el-radio-button label="private">私聊设置</el-radio-button>
           </el-radio-group>
           <el-select v-if="policyScope === 'group'" :value="selectedGroupKey" @change="selectGroup" filterable placeholder="选择该 Bot 的已知群" :disabled="saving">
-            <el-option v-for="group in groups" :key="groupKey(group)" :value="groupKey(group)" :label="`${group.group_name} (${group.group_id}${group.channel_id ? '/' + group.channel_id : ''})`">
-              <div class="identity-option"><el-avatar :size="24" :src="groupAvatar(group)" icon="el-icon-chat-dot-round" /><span>{{ group.group_name }} ({{ group.group_id }})</span></div>
+            <el-option v-for="group in groups" :key="groupKey(group)" :value="groupKey(group)" :label="`${group.group_name || '群名未同步'} (${group.group_id}${group.channel_id ? '/' + group.channel_id : ''})`">
+              <div class="identity-option"><el-avatar :size="24" :src="groupAvatar(group)" icon="el-icon-chat-dot-round" /><span>{{ group.group_name || '群名未同步' }} ({{ group.group_id }})</span></div>
             </el-option>
           </el-select>
           <span v-if="policyScope === 'private'" class="scope-label">所有私聊</span>

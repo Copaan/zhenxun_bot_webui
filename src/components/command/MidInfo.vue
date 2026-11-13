@@ -102,6 +102,7 @@
 </template>
 
 <script>
+import { observeViewActivity, chartDisplayOptions, chartAnimation } from "@/utils/view-activity"
 import EventBus from "@/utils/event-bus"
 import { abbreviateNumber, getCssVar } from "@/utils/template"
 import { debounce } from "lodash"
@@ -146,7 +147,6 @@ export default {
       strokeWidth: 8,
       fontSize: 14,
       areaHeight: 300,
-      chartObserver: null,
       compact: window.innerWidth < 768,
       botInfo: null,
       chCnt: { num: 0, day: 0, week: 0, month: 0, year: 0 },
@@ -159,7 +159,6 @@ export default {
         year: { label: "近一年", color: "#10b981" },
       },
       countInterval: null,
-      chart: null,
       destroyed: false,
       sidebarResizeHandler: null,
       themeChangeHandler: null,
@@ -167,6 +166,14 @@ export default {
     }
   },
   created() {
+    this.chart = null
+    this.chartObserver = null
+    this.groupChart = null
+    this.hotPluginChart = null
+    this._viewActive = true
+    this._viewEpoch = 0
+    this._requests = new Map()
+    this._chartSizes = new Map()
     this.botInfo = this.$store.state.botInfo || {}
   },
   async mounted() {
@@ -180,11 +187,19 @@ export default {
     if (!this.botInfo.self_id) return
     const echarts = await this.$loadEcharts()
     if (this.destroyed || !this.$refs.chart) return
-    this.chart = echarts.init(this.$refs.chart)
+    this.chart = echarts.init(this.$refs.chart, null, chartDisplayOptions())
     const statsBotId = this.botInfo.storage_bot_id || this.botInfo.self_id
-    this.loadCounts(statsBotId)
-    this.loadMonth(statsBotId)
-    this.countInterval = setInterval(() => this.loadCounts(statsBotId, true), 30000)
+    this._stopView = observeViewActivity(this.$el, active => {
+      this._viewActive = active
+      this._viewEpoch += 1
+      clearInterval(this.countInterval)
+      if (active) {
+        this.loadCounts(statsBotId, true)
+        this.loadMonth(statsBotId)
+        this.countInterval = setInterval(() => this.loadCounts(statsBotId, true), 30000)
+        this.handleResize()
+      }
+    })
     this.handleResize()
     this.renderChart()
     this.sidebarResizeHandler = debounce(this.handleResize, 200)
@@ -204,6 +219,9 @@ export default {
     },
   },
   beforeDestroy() {
+    this._viewEpoch += 1
+    this._stopView?.()
+    window.cancelAnimationFrame(this._resizeFrame)
     this.destroyed = true
     clearInterval(this.countInterval)
     window.removeEventListener("resize", this.handleResize)
@@ -221,6 +239,15 @@ export default {
     this.chart = null
   },
   methods: {
+    resizeChart(name) {
+      if (this.destroyed || !this._viewActive) return
+      const element = this.$refs[name]
+      if (!element) return
+      const size = element.clientWidth + ":" + element.clientHeight
+      if (size === this._chartSizes.get(name)) return
+      this._chartSizes.set(name, size)
+      this[name]?.resize()
+    },
     updateAreaHeight() {
       if (this.$isMobile()) {
         // 移动端使用固定高度
@@ -258,7 +285,7 @@ export default {
       this.fontSize = Math.max(10, Math.min(18, Math.round(this.progressWidth / 6)))
 
       this.$nextTick(() => {
-        if (!this.destroyed && this.chart) this.chart.resize()
+        if (!this.destroyed && this.chart) this.resizeChart("chart")
       })
     },
     percentage(counts, key) {
@@ -266,10 +293,13 @@ export default {
       return Math.min(100, (counts[key] / counts.num) * 100)
     },
     async loadMonth(botId) {
+      if (!this._viewActive || this._requests.has("loadMonth")) return
+      const epoch = this._viewEpoch
+      this._requests.set("loadMonth", true)
       const loading = this.getLoading(".chart-area")
       try {
         const resp = await this.getRequest(`${this.$root.prefix}/dashboard/get_chat_and_call_month`, { bot_id: botId }).catch(() => null)
-        if (this.destroyed || !resp) return
+        if (this.destroyed || epoch !== this._viewEpoch || !resp) return
         if (!resp.suc) this.$message.error(resp.info)
         else if (resp.warning) this.$message.warning(resp.warning)
         else {
@@ -277,14 +307,19 @@ export default {
           this.renderChart()
         }
       } finally {
+        this._requests.delete("loadMonth")
+        if (!this.destroyed && this._viewActive && epoch !== this._viewEpoch) this.loadMonth(this.botInfo.storage_bot_id || this.botInfo.self_id)
         loading.close()
       }
     },
     async loadCounts(botId, silent = false) {
+      if (!this._viewActive || this._requests.has("loadCounts")) return
+      const epoch = this._viewEpoch
+      this._requests.set("loadCounts", true)
       const loadings = silent ? [] : [this.getLoading(".message-area"), this.getLoading(".function-area")]
       try {
         const resp = await this.getRequest(`${this.$root.prefix}/main/get_chat_and_call_count`, { bot_id: botId }, { suppressErrorToast: silent }).catch(() => null)
-        if (this.destroyed || !resp) return
+        if (this.destroyed || epoch !== this._viewEpoch || !resp) return
         if (resp.suc && !resp.warning) {
           this.chCnt = resp.data.chat
           this.callCnt = resp.data.call
@@ -292,12 +327,15 @@ export default {
           this.$message[resp.suc ? "warning" : "error"](resp.warning || resp.info)
         }
       } finally {
+        this._requests.delete("loadCounts")
         loadings.forEach((item) => item.close())
+        if (!this.destroyed && this._viewActive && epoch !== this._viewEpoch) this.loadCounts(this.botInfo.storage_bot_id || this.botInfo.self_id, true)
       }
     },
     chartOption() {
       const textStyle = { color: getCssVar("--text-color"), fontSize: 14 }
       const option = {
+        animation: chartAnimation(),
         title: { text: "近30天消息/调用统计", textStyle: { color: getCssVar("--primary-color"), fontSize: 16 } },
         tooltip: {
           trigger: "axis",
@@ -352,7 +390,7 @@ export default {
       if (this.destroyed || !this.chart) return
       this.chart.setOption(this.chartOption(), true)
       this.$nextTick(() => {
-        if (!this.destroyed && this.chart) this.chart.resize()
+        if (!this.destroyed && this.chart) this.resizeChart("chart")
       })
     },
   },

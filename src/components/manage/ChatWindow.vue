@@ -1,5 +1,6 @@
 <template>
   <div class="chat-window">
+    <p v-if="chatLimited" class="history-note" role="status">实时连接已暂停，请关闭多余聊天页面后手动重连。<el-button type="text" size="mini" @click="$chatWebSocket.retryWebSocket()">重新连接</el-button></p>
     <el-empty v-if="!isStartChat" class="chat-empty" :image="emptyChatUrl" :image-size="180" description="选择一个好友或群组开始聊天" />
 
     <template v-else>
@@ -11,11 +12,14 @@
             <p>{{ chatInfo.group_id ? `群号 ${chatInfo.group_id}` : `QQ ${chatInfo.user_id}` }}</p>
           </div>
         </div>
-        <el-button size="mini" icon="el-icon-delete" @click="clearMessage">清空本地消息</el-button>
+        <div class="chat-history-actions"><el-button v-if="chatInfo.group_id" size="mini" :loading="historyLoading" @click="loadHistory(true)">读取最近记录</el-button><el-button size="mini" icon="el-icon-delete" @click="clearMessage">清空本地消息</el-button></div>
       </header>
 
       <div id="chat" class="chat-body">
-        <p v-if="!msgList.length" class="chat-placeholder">暂无消息。打开本页后收到的消息和在此发送的消息会显示在这里，不含历史记录</p>
+        <p v-if="historyError" class="history-error">{{ historyError }} <el-button type="text" size="mini" :loading="historyLoading" @click="loadHistory(true)">重试</el-button></p>
+        <p v-if="historyNote" class="history-note">{{ historyNote }}</p>
+        <p v-if="historyLoading" class="chat-placeholder">正在读取当前 Bot、当前群最近的已存消息…</p>
+        <p v-if="!msgList.length && !historyLoading" class="chat-placeholder">{{ chatInfo.group_id ? "暂无已存消息，实时消息会继续显示。" : "私聊显示打开本页后收到和发出的消息。" }}</p>
         <div
           v-for="(data, index) in msgList"
           :key="index"
@@ -35,7 +39,7 @@
                 />
                 <span v-else class="message-text">{{ msg.msg }}</span>
               </div>
-              <span class="message-time">{{ msg.time }}</span>
+              <span class="message-time">{{ displayTime(msg.time) }}</span>
             </div>
           </div>
         </div>
@@ -61,6 +65,9 @@
 
 <script>
 import emptyChatUrl from "@/assets/image/empty1.png"
+import { apiErrorDetail } from "@/utils/api-error"
+import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
+import { hasValidAuthToken } from "@/utils/auth-token"
 
 export default {
   name: "ChatWindow",
@@ -71,6 +78,7 @@ export default {
       isStartChat: false,
       chatInfo: {},
       chatId: "default",
+      historyLoading: false, historyError: "", historyNote: "", historyRequest: 0, disposed: false, chatLimited: false,
     }
   },
   computed: {
@@ -84,12 +92,47 @@ export default {
     },
   },
   created() {
+    this._chatSocketState = event => { if (event.detail?.channel === "chat") this.chatLimited = event.detail.status === "limited" }
+    window.addEventListener("zhenxun-websocket-state", this._chatSocketState)
     this.botInfo = this.$store.state.botInfo || {}
+    this._historyTimes = new Map()
+    this._invalidateHistory = () => { this.historyRequest++; this.historyLoading = false }
+    this._historyVisibility = () => { if (document.hidden) this._invalidateHistory(); else if (this.isStartChat) this.loadHistory() }
+    document.addEventListener("visibilitychange", this._historyVisibility)
+    window.addEventListener("zhenxun-auth-expired", this._invalidateHistory)
+    this._offHistoryNetwork = onBusinessNetworkChange(frozen => { this._invalidateHistory(); if (!frozen && this.isStartChat) this.loadHistory() })
   },
   mounted() {
     if (this.botInfo.self_id) this.$store.dispatch("initChatSocket")
   },
+  beforeDestroy() {
+    window.removeEventListener("zhenxun-websocket-state", this._chatSocketState)
+    this.disposed = true; this._invalidateHistory()
+    document.removeEventListener("visibilitychange", this._historyVisibility)
+    window.removeEventListener("zhenxun-auth-expired", this._invalidateHistory)
+    this._offHistoryNetwork?.()
+    this.$chatWebSocket.closeWebSocket()
+  },
   methods: {
+    displayTime(value) { const date = new Date(String(value).replace(" ", "T")); return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false }) },
+    async loadHistory(force = false) {
+      if (this.disposed || this.historyLoading || !this.chatInfo.group_id || document.hidden || !hasValidAuthToken() || isBusinessNetworkFrozen()) return
+      const chatId = this.chatId, bot = this.botInfo, epoch = businessNetworkEpoch()
+      if (!force && Date.now() - (this._historyTimes.get(chatId) || 0) < 30000) return
+      const request = ++this.historyRequest
+      const current = () => !this.disposed && request === this.historyRequest && chatId === this.chatId && epoch === businessNetworkEpoch() && hasValidAuthToken() && !isBusinessNetworkFrozen() && (this.$store.state.botInfo?.bot_key || this.$store.state.botInfo?.self_id) === (bot.bot_key || bot.self_id)
+      this.historyLoading = true; this.historyError = ""
+      try {
+        const response = await this.getRequest(this.$root.prefix + "/manage/chat/history", { bot_id: bot.self_id, group_id: this.chatInfo.group_id, limit: 50 }, { timeout: 15000, suppressErrorToast: true })
+        if (!current()) return
+        if (!response.suc || response.warning) throw new Error(response.info || "历史消息暂不可用")
+        const items = (response.data.items || []).map(item => item.isSelf ? { ...item, name: bot.nickname || item.name, ava_url: bot.ava_url || item.ava_url } : item)
+        this.$store.commit("MERGE_CHAT_HISTORY", { chatId, items })
+        this._historyTimes.set(chatId, Date.now())
+        this.historyNote = response.data.recording_enabled ? "显示最近 50 条已存消息及实时消息；未入库或已清理的内容不包含在内。" : "消息存储当前关闭；仅显示已有记录及本页实时消息。"
+      } catch (error) { if (current()) this.historyError = apiErrorDetail(error, "历史读取失败，实时消息不受影响。") }
+      finally { if (!this.disposed && request === this.historyRequest) this.historyLoading = false }
+    },
     async sendMessage() {
       if (!this.message.trim() || !this.botInfo.self_id) return
 
@@ -128,6 +171,7 @@ export default {
     },
 
     startChat(data) {
+      this._invalidateHistory(); this.historyError = ""; this.historyNote = ""
       this.chatInfo = data
       const chatId = data.group_id || data.user_id
       this.chatId = chatId
@@ -135,16 +179,20 @@ export default {
       this.$store.commit("ADD_CHAT_MSG", { chatId })
       this.isStartChat = true
       this.$nextTick(this.scrollToBottom)
+      this.loadHistory()
     },
 
     async clearMessage() {
+      const chatId = this.chatId
       const result = await this.$confirmAction({
         title: "清空本地消息",
         message: `只清空当前页面缓存的消息，不会删除服务器上的聊天记录。确认清空？`,
         cancelButtonText: "我再想想",
         confirmButtonText: "清空内容",
       })
-      if (result) {
+      if (result && !this.disposed && chatId === this.chatId) {
+        this._invalidateHistory()
+        this._historyTimes.set(chatId, Date.now())
         this.$store.commit("CLEAR_CHAT", this.chatId)
         this.$message.success("本地消息已清空")
       }
@@ -154,6 +202,8 @@ export default {
 </script>
 
 <style scoped>
+.history-note { margin: 0 0 12px; font-size: 12px; line-height: 1.6; color: var(--text-color-secondary); overflow-wrap: anywhere; }
+.chat-history-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }.chat-history-actions .el-button { margin-left: 0; }.history-error { color: var(--danger-color, #c45656); font-size: 13px; overflow-wrap: anywhere; }
 .chat-window {
   display: flex;
   flex-direction: column;

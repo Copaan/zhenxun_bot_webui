@@ -162,6 +162,7 @@
 </template>
 
 <script>
+import { observeViewActivity, chartDisplayOptions, chartAnimation } from "@/utils/view-activity"
 import { debounce } from "lodash"
 import { abbreviateNumber, getChartOption } from "@/utils/template"
 import EventBus from "@/utils/event-bus"
@@ -185,8 +186,6 @@ export default {
       connectTime: "",
       selectGroupType: "all",
       selectHotPluginType: "all",
-      groupChart: null,
-      hotPluginChart: null,
       groupCntInterval: null,
       timer: null,
       destroyed: false,
@@ -204,6 +203,14 @@ export default {
     },
   },
   created() {
+    this.chart = null
+    this.chartObserver = null
+    this.groupChart = null
+    this.hotPluginChart = null
+    this._viewActive = true
+    this._viewEpoch = 0
+    this._requests = new Map()
+    this._chartSizes = new Map()
     this.botInfo = this.$store.state.botInfo || {}
     if (this.botInfo) {
       this.botConfig = this.botInfo.config || {}
@@ -215,13 +222,27 @@ export default {
     if (this.destroyed) return
     this.handleResize()
     this.setupResizeListener()
-    this.startTimers()
+    this._stopView = observeViewActivity(this.$el, active => {
+      this._viewActive = active
+      this._viewEpoch += 1
+      clearInterval(this.timer)
+      clearInterval(this.groupCntInterval)
+      if (active) {
+        this.getActiveGroupData(this.selectGroupType, true)
+        this.getHotPlugin(this.selectHotPluginType, true)
+        this.startTimers()
+        this.handleResize()
+      }
+    })
     this.sidebarResizeHandler = debounce(this.handleResize, 200)
     this.themeChangeHandler = debounce(this.updateChartTheme, 200)
     EventBus.$on("sidebar-aside", this.sidebarResizeHandler)
     EventBus.$on("change-theme", this.themeChangeHandler)
   },
   beforeDestroy() {
+    this._viewEpoch += 1
+    this._stopView?.()
+    window.cancelAnimationFrame(this._resizeFrame)
     this.destroyed = true
     if (this.groupCntInterval) clearInterval(this.groupCntInterval)
     if (this.timer) clearInterval(this.timer)
@@ -243,6 +264,15 @@ export default {
     this.hotPluginChart = null
   },
   methods: {
+    resizeChart(name) {
+      if (this.destroyed || !this._viewActive) return
+      const element = this.$refs[name]
+      if (!element) return
+      const size = element.clientWidth + ":" + element.clientHeight
+      if (size === this._chartSizes.get(name)) return
+      this._chartSizes.set(name, size)
+      this[name]?.resize()
+    },
     async initCharts() {
       const echarts = await this.$loadEcharts()
       if (
@@ -250,17 +280,15 @@ export default {
         !this.$refs.groupChart ||
         !this.$refs.hotPluginChart
       ) return
-      this.groupChart = echarts.init(this.$refs.groupChart)
-      this.hotPluginChart = echarts.init(this.$refs.hotPluginChart)
-      this.getActiveGroupData()
-      this.getHotPlugin()
+      this.groupChart = echarts.init(this.$refs.groupChart, null, chartDisplayOptions())
+      this.hotPluginChart = echarts.init(this.$refs.hotPluginChart, null, chartDisplayOptions())
     },
     updateChartTheme() {
       if (this.destroyed || !this.groupChart || !this.hotPluginChart) return
       this.groupChart.setOption(this.rankingOption("群组", this.activeGroupData), true)
       this.hotPluginChart.setOption(this.rankingOption("插件", this.hotPluginData), true)
-      this.groupChart?.resize()
-      this.hotPluginChart?.resize()
+      this.resizeChart("groupChart")
+      this.resizeChart("hotPluginChart")
     },
 
     /**
@@ -293,8 +321,8 @@ export default {
             this.narrow = narrow
             this.updateChartTheme()
           }
-          this.groupChart?.resize()
-          this.hotPluginChart?.resize()
+          this.resizeChart("groupChart")
+          this.resizeChart("hotPluginChart")
         })
       })
     },
@@ -350,6 +378,7 @@ export default {
 
     rankingOption(name, data) {
       const option = getChartOption()
+      option.animation = chartAnimation()
       option.xAxis.name = name
       option.xAxis.data = data.map((item) => item.name)
       option.series[0].data = data
@@ -369,20 +398,36 @@ export default {
     },
 
     loadRanking(url, dateType, selector, silent) {
-      if (!this.botInfo.self_id || this.destroyed) return Promise.resolve(null)
+      if (!this.botInfo.self_id || this.destroyed || !this._viewActive) return Promise.resolve(null)
+      const botId = this.botInfo.storage_bot_id || this.botInfo.self_id
+      const key = url + ":" + dateType + ":" + botId
+      if (this._requests.has(key)) return this._requests.get(key)
+      const epoch = this._viewEpoch
+      const sequence = (this._rankingSequence || 0) + 1
+      this._rankingSequence = sequence
+      this._requests.set(url, sequence)
       const loading = silent ? null : this.getLoading(selector)
-      return this.getRequest(`${this.$root.prefix}${url}`, {
+      const request = this.getRequest(`${this.$root.prefix}${url}`, {
         date_type: dateType === "all" ? null : dateType,
-        bot_id: this.botInfo.storage_bot_id || this.botInfo.self_id,
+        bot_id: botId,
       })
         .then((resp) => {
-          if (this.destroyed) return null
+          if (this.destroyed || !this._viewActive || epoch !== this._viewEpoch || botId !== (this.botInfo.storage_bot_id || this.botInfo.self_id) || this._requests.get(url) !== sequence) return null
           if (resp.suc && !resp.warning) return resp.data
           if (!silent) this.$message.warning(resp.warning || resp.info)
           return null
         })
         .catch(() => null)
-        .finally(() => loading?.close())
+        .finally(() => {
+          loading?.close()
+          this._requests.delete(key)
+          if (!this.destroyed && this._viewActive && this._requests.get(url) === sequence && (epoch !== this._viewEpoch || botId !== (this.botInfo.storage_bot_id || this.botInfo.self_id))) {
+            if (url === "/main/get_active_group") this.getActiveGroupData(this.selectGroupType, true)
+            else this.getHotPlugin(this.selectHotPluginType, true)
+          }
+        })
+      this._requests.set(key, request)
+      return request
     },
 
     async getActiveGroupData(dateType, silent) {

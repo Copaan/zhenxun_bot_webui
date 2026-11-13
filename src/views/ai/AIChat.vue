@@ -69,10 +69,10 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="按群设置" name="groups">
+      <el-tab-pane label="按群设置" name="groups" lazy>
         <section class="zx-panel">
           <div class="zx-section-heading"><div><h2>按群覆盖</h2><p>为单个群指定人设、模型、插话概率等，留空的项使用全局设置；关闭开关后该群不触发 AI 聊天。</p></div><el-input v-model="groupSearch" size="small" clearable placeholder="搜索群号或群名" class="search" /></div>
-          <el-table :data="filteredGroups" size="small" empty-text="暂无群">
+          <el-table :data="pagedGroups" size="small" row-key="group_id" empty-text="暂无群">
             <el-table-column label="开启" width="70"><template #default="{ row }"><el-switch v-model="row.enabled" /></template></el-table-column>
             <el-table-column label="群" min-width="150"><template #default="{ row }"><div>{{ row.group_name || "未命名" }}</div><small class="muted">{{ row.group_id }}</small></template></el-table-column>
             <el-table-column label="人设" min-width="130"><template #default="{ row }"><el-select v-model="row.persona_id" size="mini" clearable placeholder="默认"><el-option v-for="item in personas" :key="item.id" :label="item.enabled ? item.name : `${item.name}（停用）`" :value="item.id" /></el-select></template></el-table-column>
@@ -84,6 +84,7 @@
             <el-table-column label="唤醒词" min-width="240"><template #default="{ row }"><el-checkbox v-model="row.overrideWords" class="override">覆盖</el-checkbox><el-select v-if="row.overrideWords" v-model="row.words" size="mini" multiple filterable allow-create default-first-option placeholder="不使用唤醒词" class="words" /><span v-else class="muted">全局</span></template></el-table-column>
             <el-table-column label="" width="90"><template #default="{ row }"><el-button size="mini" type="primary" plain :loading="busy === `group-${row.group_id}`" @click="saveGroup(row)">保存</el-button></template></el-table-column>
           </el-table>
+          <el-pagination v-if="filteredGroups.length > 20" :current-page.sync="groupPage" :page-size="20" :total="filteredGroups.length" layout="total, prev, pager, next" />
         </section>
       </el-tab-pane>
 
@@ -259,7 +260,7 @@ export default {
       loading: false, error: "", busy: "", configModule: "",
       sectionLoading: {}, sectionErrors: {}, loadedSections: {}, dataGeneration: 0, dataRequests: {}, disposed: false,
       providers: [], defaultChat: "", chatEnabled: false, switchRevision: "",
-      personas: [], tools: [], skillList: [], knowledgeBases: [], groups: [], groupSearch: "",
+      personas: [], tools: [], skillList: [], knowledgeBases: [], groups: [], groupSearch: "", groupPage: 1,
       draft: emptyDraft(), original: emptyDraft(), tested: false,
       sessions: { total: 0, items: [] }, sessionQuery: { keyword: "", page: 1, page_size: 20 }, sessionLoading: false, summarizing: "",
       usage: { day: "", total: 0, users: 0, top: [] }, detail: null, detailVisible: false,
@@ -312,8 +313,10 @@ export default {
       const query = this.groupSearch.trim().toLowerCase()
       return query ? this.groups.filter((item) => `${item.group_id} ${item.group_name}`.toLowerCase().includes(query)) : this.groups
     },
+    pagedGroups() { return this.filteredGroups.slice((this.groupPage - 1) * 20, this.groupPage * 20) },
   },
   watch: {
+    groupSearch() { this.groupPage = 1 },
     personaDirty(value) { setDirtyState("ai-chat", value) },
     tab(value) {
       if (!this.loading) this.loadSection(value, ["agent", "sessions", "console"].includes(value))

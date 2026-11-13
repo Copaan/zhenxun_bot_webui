@@ -80,10 +80,9 @@
         <div><strong>{{ formatDuration(overview.process.uptime_seconds) }}</strong><span>运行时间</span></div>
       </div>
       <div v-if="overview.bots.length" class="bot-list">
-        <article v-for="bot in overview.bots" :key="bot.self_id" class="bot-row">
-          <span class="protocol-mark">{{ platformMark(bot) }}</span>
-          <div><strong>{{ platformName(bot) }}</strong><span>{{ bot.self_id }}</span></div>
-          <span v-if="bot.adapter !== platformName(bot)" class="bot-adapter">{{ bot.adapter }}</span>
+        <article v-for="bot in overview.bots" :key="bot.platform + ':' + bot.self_id" class="bot-row">
+          <el-avatar :src="botIdentity(bot).ava_url || ''" :size="40" class="runtime-bot-avatar">{{ platformMark(bot) }}</el-avatar>
+          <div><strong :title="botIdentity(bot).nickname">{{ botIdentity(bot).nickname || '昵称暂未获取' }}</strong><span>{{ bot.self_id }} · {{ platformName(bot) }}</span></div>
           <span class="muted">已连接 {{ formatDuration(bot.connect_seconds) }}</span>
         </article>
       </div>
@@ -319,6 +318,7 @@ export default {
       if (bot.platform === "qq_official") return "QQ官方机器人"
       return bot.adapter || "其他协议"
     },
+    botIdentity(bot) { return (this.$store.state.botIdentities || []).find(item => item.runtime_bot_id === String(bot.self_id) && item.platform === bot.platform) || {} },
     platformMark(bot) {
       if (bot.platform === "qq_official") return "官"
       if (bot.platform === "onebot_v11") return "11"
@@ -383,6 +383,7 @@ export default {
 .bot-row { min-height: 64px; gap: 14px; border-bottom: 1px solid var(--border-color); }
 .bot-row > div { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .bot-row > div span { color: var(--text-color-secondary); font-family: Consolas, monospace; font-size: 12px; }
+.bot-row > div strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.runtime-bot-avatar { flex: none; }.bot-row .muted { flex: none; font-size: 12px; }
 .protocol-mark { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--primary-color); color: var(--primary-color); font-weight: 700; }
 .bot-adapter { color: var(--text-color-secondary); }
 .empty-state { display: flex; min-height: 110px; align-items: center; justify-content: center; gap: 10px; color: var(--text-color-secondary); border: 1px dashed var(--border-color); }

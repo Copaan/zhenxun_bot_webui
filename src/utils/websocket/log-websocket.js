@@ -1,12 +1,13 @@
 // import router from "@/router/routers" //引入router, 作页面跳转
 // import store from "@/store" //引入store, 作聊天消息存储
 import {
+  bindSocketActivity,
   createAuthenticatedWebSocket,
   emitWebSocketState,
   handleAuthenticatedWebSocketClose,
   safeWebSocketSend,
 } from "./create-websocket"
-import { isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
+import { isBusinessNetworkFrozen } from "@/utils/restart-network"
 
 var ws = null
 var heartbeatInterval = null
@@ -16,7 +17,7 @@ var reconnectEnabled = true
 function startHeartbeat() {
   heartbeatInterval = setInterval(() => {
     safeWebSocketSend(ws, "ping")
-  }, 5000)
+  }, 15000)
 }
 
 function stopHeartbeat() {
@@ -47,9 +48,10 @@ const logWebSocket = {
       if (!websocket) return
       ws = websocket
       this.ws = websocket
-      startHeartbeat()
       websocket.onopen = () => {
         if (isBusinessNetworkFrozen() || ws !== websocket) return
+        stopHeartbeat()
+        startHeartbeat()
         console.log("LOG_WS_URL WebSocket 已连接...")
         emitWebSocketState("log", "connected")
       }
@@ -97,8 +99,6 @@ const logWebSocket = {
   },
 }
 
-onBusinessNetworkChange((frozen) => {
-  if (frozen) logWebSocket.closeWebSocket()
-})
+bindSocketActivity(logWebSocket)
 
 export default logWebSocket

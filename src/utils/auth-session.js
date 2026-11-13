@@ -3,6 +3,12 @@ import { clearAuthToken, hasValidAuthToken, setAuthToken } from "./auth-token"
 
 let lastNotificationAt = 0
 let authenticationExpired = false
+let transportNotice = null
+
+export const showTransportWarning = (text) => {
+  if (transportNotice) transportNotice.close()
+  transportNotice = text && hasValidAuthToken() ? Message.warning({ message: text, duration: 8000, showClose: true, customClass: "kawaii-message webui-transport-warning" }) : null
+}
 window.addEventListener("zhenxun-auth-token-changed", () => { if (hasValidAuthToken()) authenticationExpired = false })
 export const isAuthenticationExpired = () => authenticationExpired
 
@@ -12,6 +18,7 @@ export const establishSession = (token) => {
 }
 
 export const clearAuthenticationState = () => {
+  if (transportNotice) { transportNotice.close(); transportNotice = null }
   clearAuthToken()
   window.sessionStorage.removeItem("isAuthenticated")
 }

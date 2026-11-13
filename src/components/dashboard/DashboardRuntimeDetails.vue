@@ -40,6 +40,7 @@
             </el-dropdown>
           </div>
         </div>
+        <p class="detail-feedback">{{ logNotice }} · 页面隐藏时暂停实时流；完整记录请下载今日日志。</p>
         <div ref="logBox" class="log-box" :style="{ fontSize: `${(12 * logScale) / 100}px` }">
           <div v-if="!logs.length" class="detail-feedback">等待新的运行日志</div>
           <div v-for="item in logs" :key="item.id" v-html="item.html"></div>
@@ -73,6 +74,7 @@ export default {
     logExpanded: false,
     autoScroll: localStorage.getItem(LOG_AUTO_SCROLL_KEY) !== "0",
     exporting: false,
+    logNotice: "仅保留最近日志",
     ansi: new AnsiUp(),
   }),
   computed: {
@@ -83,6 +85,7 @@ export default {
     },
     logStateLabel() {
       if (this.logState === "connected") return "已连接"
+      if (this.logState === "idle") return "已暂停"
       if (this.logState === "reconnecting") return "正在重连"
       return "正在连接"
     },
@@ -94,12 +97,27 @@ export default {
       this.$nextTick(this.scrollLogToEnd)
     },
   },
+  created() {
+    this._pendingLogs = []
+    this._logFlushTimer = null
+    this._logDestroyed = false
+    this._logVisibility = () => {
+      window.clearTimeout(this._logFlushTimer)
+      this._logFlushTimer = null
+      if (!document.hidden) this.flushLogs()
+    }
+  },
   mounted() {
+    document.addEventListener("visibilitychange", this._logVisibility)
     this.loadHistory()
     window.addEventListener("zhenxun-websocket-state", this.handleSocketState)
     this.$store.dispatch("initLogSocket", this.appendLog)
   },
   beforeDestroy() {
+    this._logDestroyed = true
+    window.clearTimeout(this._logFlushTimer)
+    this._pendingLogs = []
+    document.removeEventListener("visibilitychange", this._logVisibility)
     window.removeEventListener("zhenxun-websocket-state", this.handleSocketState)
     window.removeEventListener("keydown", this.handleExpandedKey)
     this.$logWebSocket.closeWebSocket()
@@ -120,11 +138,29 @@ export default {
       }
     },
     appendLog(raw) {
-      let html = this.ansi.ansi_to_html(raw)
-      html = html.replace("color:rgb(0,0,187)", "color:rgb(55,186,255)")
-      this.logs.push({ id: ++this.logSequence, html, text: raw.replace(ANSI_PATTERN, "") })
-      if (this.logs.length > (this.autoScroll ? LOG_LIMIT : PAUSED_LOG_LIMIT)) this.logs.shift()
-      this.$nextTick(this.scrollLogToEnd)
+      if (this._logDestroyed) return
+      this._pendingLogs.push(String(raw))
+      const limit = this.autoScroll ? LOG_LIMIT : PAUSED_LOG_LIMIT
+      if (this._pendingLogs.length > limit) {
+        this._pendingLogs.splice(0, this._pendingLogs.length - limit)
+        this.logNotice = "日志过快，较早的显示缓存已淘汰"
+      }
+      if (!document.hidden && !this._logFlushTimer) {
+        this._logFlushTimer = window.setTimeout(this.flushLogs, 200)
+      }
+    },
+    flushLogs() {
+      window.clearTimeout(this._logFlushTimer)
+      this._logFlushTimer = null
+      if (this._logDestroyed || !this._pendingLogs.length) return
+      const additions = this._pendingLogs.splice(0).map(raw => ({
+        id: ++this.logSequence,
+        html: this.ansi.ansi_to_html(raw).replace("color:rgb(0,0,187)", "color:rgb(55,186,255)"),
+        text: raw.replace(ANSI_PATTERN, ""),
+      }))
+      const limit = this.autoScroll ? LOG_LIMIT : PAUSED_LOG_LIMIT
+      this.logs = this.logs.concat(additions).slice(-limit)
+      if (!document.hidden) this.$nextTick(this.scrollLogToEnd)
     },
     scrollLogToEnd() {
       if (this.autoScroll && this.$refs.logBox) this.$refs.logBox.scrollTop = this.$refs.logBox.scrollHeight
@@ -133,6 +169,7 @@ export default {
      * 切换新日志到达时是否自动滚动到底部，暂停期间最多保留 1000 条
      */
     toggleAutoScroll() {
+      this.flushLogs()
       this.autoScroll = !this.autoScroll
       localStorage.setItem(LOG_AUTO_SCROLL_KEY, this.autoScroll ? "1" : "0")
       if (this.autoScroll) {
@@ -157,6 +194,7 @@ export default {
      * @param {string} command 导出范围
      */
     async exportLog(command) {
+      this.flushLogs()
       if (command === "panel") {
         const stamp = new Date().toLocaleString("sv").replace(/[-: ]/g, "").slice(0, 14)
         const text = this.logs.map((item) => item.text).join("\n") + "\n"

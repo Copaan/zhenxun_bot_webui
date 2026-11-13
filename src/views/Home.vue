@@ -253,16 +253,15 @@
                   :disabled="bot.bot_key === botInfo.bot_key"
                   class="bot-switch-item"
                 >
-                  <el-image
+                  <div class="bot-switch-identity"><el-image
                     :src="bot.ava_url || logoUrl"
                     class="w-9 h-9 rounded-full object-cover border-2"
                     :style="{ borderColor: 'var(--primary-color-light)' }"
                   >
                     <img slot="error" class="w-full h-full object-cover" :src="logoUrl" alt="机器人头像" />
-                  </el-image>
-                  <div class="bot-switch-copy">
-                    <strong>{{ bot.nickname }}</strong>
-                    <span>{{ bot.runtime_bot_id }} · {{ bot.platform === "qq_official" ? "QQ_Official" : bot.platform === "onebot_v11" ? "OneBot V11" : bot.adapter }}</span>
+                  </el-image><strong :title="bot.nickname">{{ bot.nickname }}</strong></div>
+                  <div class="bot-switch-meta">
+                    <span>{{ bot.runtime_bot_id }}</span><span>{{ bot.platform === "qq_official" ? "QQ 官方" : bot.platform === "onebot_v11" ? "OneBot V11" : bot.adapter }}</span>
                   </div>
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -794,7 +793,7 @@ export default {
       await this.loadRestartStatus()
       if (!current()) return
       const settled = ["warmup_ready", "degraded", "failed", "unknown"].includes(this.startupStatus.state) && (this.restartStatusUnknown || !this.restartSnapshot.reconciliation_pending)
-      this.startupPollTimer = window.setTimeout(this.loadStartupStatus, settled ? 10000 : 1200)
+      this.startupPollTimer = window.setTimeout(this.loadStartupStatus, settled ? (this.isMobile ? 30000 : 10000) : 1200)
     },
     async openStartupReport() {
       this.startupDrawerVisible = true
@@ -1312,7 +1311,7 @@ export default {
 }
 
 .header-icon-button:disabled { opacity: .45; cursor: not-allowed; }
-.bot-switch-menu { min-width: 280px; }.bot-switch-item { height: auto !important; padding: 8px 12px !important; line-height: 1.2 !important; }.bot-switch-item ::v-deep .el-dropdown-menu__item { display: flex; }.bot-switch-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; margin-left: 10px; }.bot-switch-copy strong, .bot-switch-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.bot-switch-copy span { color: var(--text-color-secondary); font-size: 12px; }
+.bot-switch-menu { width: 280px; max-width: calc(100vw - 24px); max-height: min(70vh, 600px); overflow-y: auto; }.bot-switch-item { height: auto !important; padding: 10px 12px !important; line-height: 1.4 !important; }.bot-switch-identity { display: flex; align-items: center; min-width: 0; gap: 10px; }.bot-switch-identity .el-image { flex: none; }.bot-switch-identity strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.bot-switch-meta { display: flex; justify-content: space-between; gap: 10px; margin-top: 5px; font-size: 12px; color: var(--text-color-secondary); }.bot-switch-meta span { min-width: 0; overflow-wrap: anywhere; }
 
 .app-main {
   flex: 1;

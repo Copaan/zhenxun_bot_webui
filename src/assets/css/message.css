@@ -5,12 +5,14 @@
     'PingFang SC', 'Microsoft YaHei', cursive, sans-serif !important;
   border-radius: 20px !important;
   box-shadow: 0 4px 20px rgba(255, 105, 180, 0.25) !important;
-  min-width: 200px !important;
+  min-width: min(200px, calc(100vw - 32px)) !important;
+  max-width: min(620px, calc(100vw - 32px));
+  box-sizing: border-box;
   padding: 15px 20px !important;
   border: none !important;
   backdrop-filter: blur(5px) !important;
   background-color: rgba(255, 255, 255, 0.95) !important;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+  transition: opacity 0.2s ease, top 0.2s ease, box-shadow 0.2s ease !important;
   border-top: 3px solid transparent !important;
 }
 
@@ -26,6 +28,9 @@
   font-size: 16px !important;
   vertical-align: middle !important;
   text-shadow: 0 1px 1px rgba(0, 0, 0, 0.1) !important;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
 
 /* 关闭按钮样式 */
@@ -69,7 +74,6 @@
 
 /* 悬停效果 */
 .kawaii-message:hover {
-  transform: translateY(-3px) !important;
   box-shadow: 0 6px 24px rgba(255, 105, 180, 0.35) !important;
 }
 
@@ -85,29 +89,29 @@
 
 @keyframes kawaii-bounce-in {
   0% {
-    transform: scale(0.8);
+    transform: translateX(-50%) scale(0.8);
     opacity: 0;
   }
   50% {
-    transform: scale(1.1);
+    transform: translateX(-50%) scale(1.1);
   }
   100% {
-    transform: scale(1);
+    transform: translateX(-50%) scale(1);
     opacity: 1;
   }
 }
 
 @keyframes kawaii-bounce-out {
   0% {
-    transform: scale(1);
+    transform: translateX(-50%) scale(1);
     opacity: 1;
   }
   50% {
-    transform: scale(1.1);
+    transform: translateX(-50%) scale(1.1);
     opacity: 0.7;
   }
   100% {
-    transform: scale(0.8);
+    transform: translateX(-50%) scale(0.8);
     opacity: 0;
   }
 }

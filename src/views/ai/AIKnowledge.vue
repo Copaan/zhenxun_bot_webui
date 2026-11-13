@@ -30,7 +30,7 @@
       <aside class="zx-panel kb-list">
         <el-button type="primary" size="small" icon="el-icon-plus" class="full" :disabled="!status.models.embedding && !embeddingModels.length" @click="editBase(null)">新建知识库</el-button>
         <button v-for="kb in bases" :key="kb.id" type="button" class="kb-item" :class="{ active: current && current.id === kb.id }" @click="selectBase(kb)">
-          <span>{{ kb.name }}</span>
+          <span :title="kb.name">{{ kb.name }}</span>
           <small class="muted">{{ kb.docs }} 个文档<template v-if="kb.global"> · 全局</template><template v-if="kb.rebuilding"> · 重建中</template></small>
         </button>
         <p v-if="!bases.length" class="muted">还没有知识库。</p>
@@ -338,9 +338,9 @@ export default {
 .status-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .status-row { display: flex; justify-content: space-between; gap: 12px; width: 100%; font-size: 13px; }
 .kb-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 14px; align-items: start; }
-.kb-list { display: flex; flex-direction: column; gap: 6px; }
+.kb-list { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
 .kb-list .full { margin-bottom: 6px; }
-.kb-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--text-color); text-align: left; cursor: pointer; }
+.kb-item { display: flex; min-width: 0; width: 100%; box-sizing: border-box; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--text-color); text-align: left; cursor: pointer; }.kb-item > span, .kb-item > small { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 .kb-item:hover { background: var(--bg-color-hover); }
 .kb-item.active { border-color: var(--primary-color); background: var(--bg-color-hover); }
 .docs { margin-top: 8px; }

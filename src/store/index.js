@@ -9,6 +9,8 @@ import restartStatus from "./restart-status"
 
 Vue.use(Vuex)
 
+const chatMessageKey = item => item.message_id != null && String(item.message_id) !== "" ? "message:" + item.message_id : item.history_id != null ? "history:" + item.history_id : null
+
 export default new Vuex.Store({
   modules: { restartStatus },
   plugins: [
@@ -68,7 +70,7 @@ export default new Vuex.Store({
       if (botInfo && botInfo.bot_key) state.selectedBotKey = botInfo.bot_key
     },
     SET_BOT_IDENTITIES(state, bots) {
-      state.botIdentities = (bots || []).map(({ storage_bot_id, nickname, ava_url }) => ({ storage_bot_id, nickname, ava_url }))
+      state.botIdentities = (bots || []).map(({ storage_bot_id, runtime_bot_id, platform, nickname, ava_url }) => ({ storage_bot_id, runtime_bot_id, platform, nickname, ava_url }))
     },
     START_PLUGIN_OPERATION(state, payload) {
       state.pluginOperation = {
@@ -143,6 +145,8 @@ export default new Vuex.Store({
         }
       }
       if (data.obj) {
+        const key = chatMessageKey(data.obj)
+        if (key && chatObj[data.chatId].msgList.some(item => chatMessageKey(item) === key)) return
         chatObj[data.chatId].msgList.push(data.obj)
         chatObj[data.chatId].time = Date.now()
 
@@ -154,6 +158,18 @@ export default new Vuex.Store({
         }
       }
       state.chatObj = chatObj
+    },
+    MERGE_CHAT_HISTORY(state, { chatId, items }) {
+      const current = state.chatObj[chatId] || { unreadCount: 0, msgList: [], time: 0 }
+      const messages = [], indexes = new Map()
+      for (const item of [...items, ...current.msgList]) {
+        const key = chatMessageKey(item)
+        if (key && indexes.has(key)) messages[indexes.get(key)] = item
+        else { if (key) indexes.set(key, messages.length); messages.push(item) }
+      }
+      const stamp = item => Date.parse(String(item.message?.[0]?.time || "").replace(" ", "T")) || 0
+      messages.sort((a, b) => stamp(a) - stamp(b))
+      state.chatObj = { ...state.chatObj, [chatId]: { ...current, msgList: messages.slice(-50) } }
     },
     READ_CHAT(state, chatId) {
       let chatObj = { ...state.chatObj }

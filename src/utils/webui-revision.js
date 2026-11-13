@@ -13,18 +13,20 @@ let requestController = null
 let requestStartedAt = 0
 let draftNotice = null
 let reloadIssued = false
+let lastSocketRevisionAt = 0
 
 const closeDraftNotice = () => {
   draftNotice?.close()
   draftNotice = null
 }
 
-export const handleWebuiRevision = (value) => {
+export const handleWebuiRevision = (value, fromSocket = true) => {
   if (DEVELOPMENT || isAuthenticationExpired() || isBusinessNetworkFrozen() || document.hidden || reloadIssued) return
   const manifest = typeof value === "string" ? { revision: value } : (value || {})
   if (manifest.resources_ready === false) return
   const actual = manifest.revision || manifest.webui_revision || ""
   if (!actual || !EXPECTED_REVISION) return
+  if (fromSocket) lastSocketRevisionAt = Date.now()
   if (actual === EXPECTED_REVISION) {
     closeDraftNotice()
     return
@@ -52,6 +54,7 @@ export const handleWebuiRevision = (value) => {
 
 const checkManifest = async () => {
   if (isAuthenticationExpired() || isBusinessNetworkFrozen() || document.hidden || reloadIssued) return
+  if (lastSocketRevisionAt && Date.now() - lastSocketRevisionAt < 45000) return
   if (requestController) {
     if (Date.now() - requestStartedAt < 10000) return
     requestController.abort()
@@ -60,6 +63,7 @@ const checkManifest = async () => {
   const epoch = businessNetworkEpoch()
   requestController = controller
   requestStartedAt = Date.now()
+  const timeout = window.setTimeout(() => controller.abort(), 10000)
   try {
     const response = await fetch(`/version.json?_=${Date.now()}`, {
       cache: "no-store",
@@ -69,10 +73,11 @@ const checkManifest = async () => {
     if (!response.ok) return
     const manifest = await response.json()
     if (controller.signal.aborted || isBusinessNetworkFrozen() || epoch !== businessNetworkEpoch()) return
-    handleWebuiRevision(manifest)
+    handleWebuiRevision(manifest, false)
   } catch (error) {
     // A transient network failure is handled by the next polling cycle.
   } finally {
+    window.clearTimeout(timeout)
     if (requestController === controller) requestController = null
   }
 }
@@ -82,7 +87,7 @@ export const startWebuiRevisionPolling = () => {
   pollingStarted = true
   if (isAuthenticationExpired() || isBusinessNetworkFrozen() || document.hidden || pollTimer) return
   checkManifest()
-  pollTimer = window.setInterval(checkManifest, 3000)
+  pollTimer = window.setInterval(checkManifest, 30000)
 }
 
 const stopPolling = () => {

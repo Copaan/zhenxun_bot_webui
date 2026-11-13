@@ -72,6 +72,12 @@
     </section>
 
     <section v-else key="qq" class="qq-workspace">
+      <el-radio-group v-model="qqWorkspace" size="small" class="qq-section-tabs">
+        <el-radio-button label="connection">接入设置</el-radio-button>
+        <el-radio-button label="presentation">菜单与卡片</el-radio-button>
+      </el-radio-group>
+      <QQPresentation v-if="qqWorkspace === 'presentation'" :bots="savedQQBots" />
+      <template v-else>
       <div class="qq-mode-toolbar">
         <el-radio-group v-model="qqSetupMode" size="small">
           <el-radio-button label="scan"><i class="el-icon-full-screen"></i> 扫码接入</el-radio-button>
@@ -148,6 +154,7 @@
             <div v-if="hasWebhookBots" class="callback-panel" :class="{ ready: callbackReady }"><div class="callback-state"><i :class="callbackReady ? 'el-icon-circle-check' : 'el-icon-warning-outline'"></i></div><div><strong>Webhook 入口状态</strong><p>{{ callbackDescription }}</p><p>运行配置：{{ status.qq_webhook_callback_url ? '已配置' : '未配置' }} · 入口：{{ status.qq_webhook_mode === 'external' ? '外部反代未验证' : status.qq_webhook_ingress?.state === 'ready' ? '已监听' : '未确认监听' }} · 账号：{{ status.qq_bots.some(bot => bot.mode === 'webhook' && bot.connected) ? '已连接' : '未连接' }} · 公网验证：未知</p><code v-if="callbackUrl">{{ callbackUrl }}</code></div><el-button v-if="callbackUrl" size="small" icon="el-icon-document-copy" @click="copyText(callbackUrl)">复制回调地址</el-button></div>
             <div class="manual-actions"><span>配置会先保存，是否立即重启将由你确认；禁用 QQ 时会保留原有凭据。</span><el-button type="primary" :loading="saving" :disabled="!configuration.revision" @click="saveConfiguration">保存配置</el-button></div>
       </div>
+      </template>
     </section>
 
     <el-dialog title="扫码接入 QQ 官方机器人" :visible.sync="registration.visible" width="min(420px, calc(100vw - 32px))" custom-class="qq-registration-dialog" :close-on-click-modal="false" :before-close="closeRegistration">
@@ -180,7 +187,7 @@ const emptyRegistration = () => ({ visible: false, starting: false, registration
 
 export default {
   name: "ProtocolSetting",
-  components: { QQDiagnostic },
+  components: { QQDiagnostic, QQPresentation: () => import("@/components/protocol/QQPresentation.vue") },
   data() {
     return {
       selectedPlatform: "qq_official", loading: false, saving: false, statusLoading: false,
@@ -195,7 +202,7 @@ export default {
       ],
       status: { onebot_v11_connected: false, qq_official_enabled: false, qq_official_connected: false, telegram_enabled: false, telegram_connected: false, qq_webhook_mode: "external", qq_webhook_callback_url: null, connections: [], qq_bots: [], onebot_v11_reverse_ws_path: "/onebot/v11/ws", qq_webhook_path: "/qq/webhook" },
       configuration: { revision: "", launcher_managed: false, onebot: { access_token: "" }, qq: { bots: [] } },
-      onebotToken: "", onebotHost: "", qqSetupMode: "scan", logoUrl, registration: emptyRegistration(), registrationTimer: null,
+      onebotToken: "", onebotHost: "", qqSetupMode: "scan", qqWorkspace: "connection", logoUrl, registration: emptyRegistration(), registrationTimer: null,
       telegramEnabled: false,
       qqForm: { enabled: false, proactive_fallback: true, bots: [], webhook_mode: "external", public_base_url: "", listen_host: "0.0.0.0", listen_port: 443, tls_certfile: "", tls_keyfile: "" },
       originalProtocol: "",
@@ -204,6 +211,7 @@ export default {
     }
   },
   computed: {
+    savedQQBots() { return (this.configuration.qq?.bots || []).map(bot => ({ id: String(bot.id), name: this.status.qq_bots.find(item => item.app_id === String(bot.id))?.username || "" })) },
     endpoint() { return this.statusConfirmed ? this.status.onebot_endpoint || {} : {} },
     savedEndpoint() { return this.configuration.onebot.configured_endpoint || {} },
     protocolDirty() { return Boolean(this.originalProtocol && this.protocolSnapshot() !== this.originalProtocol) },
@@ -465,4 +473,8 @@ export default {
 @media (max-width: 900px) { .platform-grid, .form-grid, .bot-grid { grid-template-columns: 1fr; }.span-2 { grid-column: span 1; }.scan-panel { grid-template-columns: auto 1fr; }.scan-panel > .el-button { grid-column: 2; justify-self: start; }.callback-panel { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 640px) { .section-heading, .bot-list-heading, .qq-mode-toolbar, .adapter-controls { align-items: stretch; flex-direction: column; }.configuration-section, .scan-panel, .connected-list, .manual-settings { padding: 16px; }.scan-panel { display: flex; align-items: stretch; flex-direction: column; }.scan-icon { width: 48px; height: 48px; }.scan-copy ul { display: block; }.connection-row { grid-template-columns: auto 1fr auto; }.connection-row > span:nth-child(3) { display: none; }.connection-row > .danger-text { grid-column: 3; grid-row: 1; }.connection-error { grid-column: 1 / -1; }.manual-actions { align-items: stretch; flex-direction: column; }.manual-actions span { margin: 0; }.field-actions, .probe-row { align-items: flex-start; flex-direction: column; }.qr-frame { width: min(282px, 78vw); height: min(282px, 78vw); }.qr-frame img { width: min(260px, 72vw); height: min(260px, 72vw); } }
 .tls-hint { display: block; margin-top: 4px; font-size: 11px; line-height: 1.5; color: var(--text-color-secondary); overflow-wrap: anywhere; }
+</style>
+
+<style scoped>
+.qq-section-tabs { margin-bottom: 20px; }
 </style>

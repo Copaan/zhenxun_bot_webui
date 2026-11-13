@@ -10,17 +10,20 @@
         <el-button size="small" icon="el-icon-refresh" @click="load">刷新</el-button>
       </div>
     </div>
-    <el-table :data="filteredRows" size="small" row-key="group_id" empty-text="暂无群">
+    <el-alert v-if="stateError" :title="stateError" type="warning" :closable="false" show-icon />
+    <p v-if="statesLoading" class="muted">正在读取当前页的运行状态，群设置可先编辑。</p>
+    <el-table :data="pagedRows" size="small" row-key="group_id" empty-text="暂无群">
       <el-table-column label="群" min-width="160"><template #default="{ row }"><div>{{ row.group_name || "未命名" }}</div><small class="muted">{{ row.group_id }}<template v-if="!row.enabled"> · AI 已关闭</template></small></template></el-table-column>
       <el-table-column label="插话" width="110"><template #default="{ row }"><el-select v-model="row.form.mode" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in modeNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
       <el-table-column label="冷却（秒）" width="110"><template #default="{ row }"><el-input-number v-model="row.form.cooldown" size="mini" :min="0" :max="86400" :controls="false" placeholder="全局" /></template></el-table-column>
       <el-table-column label="每日次数" width="110"><template #default="{ row }"><el-input-number v-model="row.form.daily_count" size="mini" :min="0" :controls="false" placeholder="全局" /></template></el-table-column>
       <el-table-column label="本群日预算" width="110"><template #default="{ row }"><el-input-number v-model="row.form.daily_tokens" size="mini" :min="0" :controls="false" placeholder="不限" /></template></el-table-column>
       <el-table-column label="偷表情" width="110"><template #default="{ row }"><el-select v-model="row.form.steal" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in modeNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
-      <el-table-column label="运行状态" min-width="240"><template #default="{ row }"><span v-if="!row.states.length" class="muted">本次运行以来该群还没有消息</span><div v-for="item in row.states" :key="item.bot_id"><small>Bot {{ item.bot_id }} · {{ modeNames[item.mode] }} · 今日插话 {{ item.count }} 次、{{ item.used_tokens }} tokens<template v-if="item.stolen"> · 偷了 {{ item.stolen }} 张表情</template><template v-if="item.mode === 'listen'"> · 待判断 {{ item.pending }} 条</template><template v-if="item.unanswered"> · 连续 {{ item.unanswered }} 次没人理</template><template v-if="item.last_proactive_at"> · 上次插话 {{ formatTime(item.last_proactive_at * 1000) }}</template><template v-if="item.cooldown_left"> · 冷却剩 {{ item.cooldown_left }} 秒</template></small></div></template></el-table-column>
+      <el-table-column label="运行状态" min-width="240"><template #default="{ row }"><span v-if="!row.states.length" class="muted">{{ statesLoading ? "正在读取运行状态…" : stateError ? "状态暂不可确认" : "本次运行以来该群还没有消息" }}</span><div v-for="item in row.states" :key="item.bot_id"><small>Bot {{ item.bot_id }} · {{ modeNames[item.mode] }} · 今日插话 {{ item.count }} 次、{{ item.used_tokens }} tokens<template v-if="item.stolen"> · 偷了 {{ item.stolen }} 张表情</template><template v-if="item.mode === 'listen'"> · 待判断 {{ item.pending }} 条</template><template v-if="item.unanswered"> · 连续 {{ item.unanswered }} 次没人理</template><template v-if="item.last_proactive_at"> · 上次插话 {{ formatTime(item.last_proactive_at * 1000) }}</template><template v-if="item.cooldown_left"> · 冷却剩 {{ item.cooldown_left }} 秒</template></small></div></template></el-table-column>
       <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }"><el-button type="text" size="mini" :loading="row.saving" @click="save(row)">保存</el-button></template></el-table-column>
     </el-table>
 
+    <el-pagination v-if="filteredRows.length > 20" :current-page.sync="page" :page-size="20" :total="filteredRows.length" layout="total, prev, pager, next" />
     <div class="zx-section-heading tasks-heading">
       <div>
         <h2>主动任务</h2>
@@ -63,8 +66,10 @@
 
 <script>
 import { apiErrorDetail } from "@/utils/api-error"
+import { businessNetworkEpoch } from "@/utils/restart-network"
+import { hasValidAuthToken } from "@/utils/auth-token"
 
-const QUIET = { suppressErrorToast: true }
+const QUIET = { suppressErrorToast: true, timeout: 15000 }
 const number = (value) => (value === undefined || value === null || value === "" ? null : value)
 const FIELDS = ["mode", "cooldown", "daily_count", "daily_tokens", "steal"]
 /**
@@ -78,7 +83,8 @@ export default {
   name: "AIProactive",
   data() {
     return {
-      loading: false, search: "", rows: [], tasks: [], bots: [], overview: { used_tokens: 0, steal_judges: 0 },
+      loading: false, search: "", page: 1, rows: [], tasks: [], bots: [], overview: { used_tokens: 0, steal_judges: 0 },
+      statesLoading: false, stateError: "", disposed: false, loadRequest: 0, stateRequest: 0,
       modeNames: { off: "关闭", probability: "概率", listen: "监听" },
       taskForm: { visible: false, saving: false, id: null, name: "", prompt: "", kind: "cron", value: "", bot_id: "", target: "group", target_id: "" },
       runNames: { ok: "已发送", silent: "无内容", partial: "已发送，后续中断", error: "出错", stopped: "已停止" },
@@ -87,12 +93,16 @@ export default {
     }
   },
   computed: {
+    pagedRows() { return this.filteredRows.slice((this.page - 1) * 20, this.page * 20) },
+    visibleGroupIds() { return this.pagedRows.map(row => row.group_id) },
     filteredRows() {
       const keyword = this.search.trim()
       return keyword ? this.rows.filter((row) => row.group_id.includes(keyword) || (row.group_name || "").includes(keyword)) : this.rows
     },
   },
+  watch: { search() { this.page = 1 }, visibleGroupIds() { this.loadStates() } },
   mounted() { this.load() },
+  beforeDestroy() { this.disposed = true; this.loadRequest++; this.stateRequest++ },
   methods: {
     async request(method, url, data) {
       const response = await this[`${method}Request`](`${this.$root.prefix}/ai${url}`, data, QUIET)
@@ -105,24 +115,43 @@ export default {
      * 加载按群设置、运行状态与主动任务
      */
     async load() {
+      if (this.loading || this.disposed || this.rows.some(row => row.saving)) return
+      const request = ++this.loadRequest, epoch = businessNetworkEpoch()
+      const current = () => !this.disposed && request === this.loadRequest && epoch === businessNetworkEpoch() && hasValidAuthToken()
       this.loading = true
       try {
-        const [groups, state, tasks] = await Promise.all([this.request("get", "/chat/groups"), this.request("get", "/chat/proactive"), this.request("get", "/chat/tasks")])
-        this.overview = state.data
+        const [groups, tasks] = await Promise.all([this.request("get", "/chat/groups"), this.request("get", "/chat/tasks")])
+        if (!current()) return
         this.rows = groups.data.map((item) => ({
           group_id: item.group_id, group_name: item.group_name, enabled: item.enabled, saving: false,
           form: formOf(item.proactive || {}),
-          states: state.data.groups.filter((s) => s.group_id === item.group_id),
+          states: [],
         }))
         this.tasks = tasks.data.tasks
         this.bots = tasks.data.bots
-      } catch (error) { this.fail(error, "主动对话加载失败。") } finally { this.loading = false }
+      } catch (error) { if (current()) this.fail(error, "主动对话加载失败，可点击刷新重试。") } finally { if (!this.disposed && request === this.loadRequest) this.loading = false }
+    },
+    async loadStates() {
+      const request = ++this.stateRequest, epoch = businessNetworkEpoch(), ids = this.visibleGroupIds.slice()
+      if (this.disposed || !ids.length || !hasValidAuthToken()) { this.statesLoading = false; return }
+      const current = () => !this.disposed && request === this.stateRequest && epoch === businessNetworkEpoch() && hasValidAuthToken()
+      this.statesLoading = true; this.stateError = ""
+      try {
+        const { data } = await this.request("get", "/chat/proactive", { group_ids: ids })
+        if (!current()) return
+        this.overview = data
+        const states = new Map()
+        for (const item of data.groups || []) { const items = states.get(item.group_id) || []; items.push(item); states.set(item.group_id, items) }
+        for (const row of this.pagedRows) row.states = states.get(row.group_id) || []
+      } catch (error) { if (current()) this.stateError = apiErrorDetail(error, "当前页运行状态暂不可确认，请刷新重试。") }
+      finally { if (!this.disposed && request === this.stateRequest) this.statesLoading = false }
     },
     /**
      * 保存一个群的主动对话设置，全部为空时清除覆盖
      * @param {object} row 群
      */
     async save(row) {
+      if (this.loading || this.disposed || row.saving) return
       const payload = Object.fromEntries(FIELDS.map((key) => [key, number(row.form[key])]))
       row.saving = true
       try { this.$message.success((await this.request("put", `/chat/groups/${encodeURIComponent(row.group_id)}/proactive`, payload)).info) }

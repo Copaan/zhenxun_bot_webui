@@ -45,9 +45,10 @@
       <el-form label-width="90px" size="small" @submit.native.prevent>
         <el-form-item label="备注"><el-input v-model="stickerForm.remark" maxlength="64" show-word-limit placeholder="表情的意思" /></el-form-item>
         <el-form-item label="标签">
-          <el-select v-model="stickerForm.tags" multiple filterable allow-create default-first-option :multiple-limit="10" placeholder="输入后回车" class="full" />
+          <el-select v-model="stickerForm.tags" multiple filterable allow-create default-first-option :multiple-limit="10" placeholder="选择已有标签，或输入后回车" no-data-text="暂无已加载标签，可输入后回车创建" class="full"><el-option v-for="tag in tagOptions" :key="tag" :label="tag" :value="tag" /></el-select>
+          <small class="muted">候选来自当前页和此表情；也可直接输入新标签。</small>
         </el-form-item>
-        <el-form-item label="适用场合"><el-input v-model="stickerForm.usage" type="textarea" :rows="2" maxlength="255" show-word-limit /></el-form-item>
+        <el-form-item label="适用场合"><el-input v-model="stickerForm.usage" type="textarea" :autosize="{ minRows: 4, maxRows: 9 }" maxlength="255" show-word-limit /></el-form-item>
       </el-form>
       <template #footer>
         <el-button size="small" @click="stickerForm.visible = false">取消</el-button>
@@ -93,6 +94,7 @@ export default {
     }
   },
   computed: {
+    tagOptions() { return [...new Set([...this.stickerForm.tags, ...this.stickers.flatMap(s => s.tags || [])])].sort((a, b) => a.localeCompare(b)) },
     allSelected() { return this.stickers.length > 0 && this.selected.length === this.stickers.length },
     selectedStickers() { return this.stickers.filter((s) => this.selected.includes(s.id)) },
   },
@@ -238,7 +240,7 @@ export default {
 
 <style scoped>
 .heading-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.search { width: 180px; }
+.search { width: 240px; max-width: 100%; }.search ::v-deep .el-input__inner { font-size: 14px; }.search ::v-deep .el-input__inner::placeholder { font-size: 13px; }
 .filter { width: 120px; }
 .full { width: 100%; }
 .wrap { overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -264,4 +266,5 @@ export default {
 .merge-item img { width: 40px; height: 40px; object-fit: contain; margin-right: 8px; vertical-align: middle; }
 .preview { display: flex; align-items: center; justify-content: center; min-height: 160px; }
 .preview img { max-width: 100%; max-height: 60vh; }
+@media (max-width: 700px) { .search { width: 100%; }.search ::v-deep .el-input__inner { font-size: 16px; } }
 </style>
