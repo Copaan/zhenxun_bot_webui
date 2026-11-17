@@ -71,12 +71,13 @@
 
       <el-tab-pane label="按群设置" name="groups" lazy>
         <section class="zx-panel">
-          <div class="zx-section-heading"><div><h2>按群覆盖</h2><p>为单个群指定人设、模型、插话概率等，留空的项使用全局设置；关闭开关后该群不触发 AI 聊天。</p></div><el-input v-model="groupSearch" size="small" clearable placeholder="搜索群号或群名" class="search" /></div>
+          <div class="zx-section-heading"><div><h2>群基础设置</h2><p>这里是各账号继承的群基础设置。账号场景的显式覆盖优先；需单独修改模型、执行器或开关时，请选择“账号场景设置”。</p></div><el-input v-model="groupSearch" size="small" clearable placeholder="搜索群号或群名" class="search" /></div>
           <el-table :data="pagedGroups" size="small" row-key="group_id" empty-text="暂无群">
             <el-table-column label="开启" width="70"><template #default="{ row }"><el-switch v-model="row.enabled" /></template></el-table-column>
             <el-table-column label="群" min-width="150"><template #default="{ row }"><div>{{ row.group_name || "未命名" }}</div><small class="muted">{{ row.group_id }}</small></template></el-table-column>
             <el-table-column label="人设" min-width="130"><template #default="{ row }"><el-select v-model="row.persona_id" size="mini" clearable placeholder="默认"><el-option v-for="item in personas" :key="item.id" :label="item.enabled ? item.name : `${item.name}（停用）`" :value="item.id" /></el-select></template></el-table-column>
             <el-table-column label="模型" min-width="170"><template #default="{ row }"><el-select v-model="row.model" size="mini" clearable filterable allow-create placeholder="跟随人设"><el-option v-for="name in chatModels" :key="name" :label="name" :value="name" /></el-select></template></el-table-column>
+            <el-table-column label="账号场景设置" min-width="220"><template #default="{ row }"><el-select size="mini" :value="null" placeholder="选择机器人账号" @change="openScene"><el-option v-for="target in row.scene_targets || []" :key="target.scene_id" :value="target.scene_id" :label="target.label + (target.overrides.length ? '（有显式覆盖）' : '（继承）')" /></el-select><small v-if="!(row.scene_targets || []).length" class="muted">暂无已连接账号或已有场景</small></template></el-table-column>
             <el-table-column label="插话判断概率" width="120"><template #default="{ row }"><el-input v-model="row.probabilityText" size="mini" placeholder="全局" /></template></el-table-column>
             <el-table-column label="语音回复" width="120"><template #default="{ row }"><el-select v-model="row.voice_reply" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in voiceNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
             <el-table-column label="执行器" width="140"><template #default="{ row }"><el-select v-model="row.agent_runner" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in runnerNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
@@ -223,20 +224,25 @@
         <section class="zx-panel">
           <div class="zx-section-heading"><div><h2>会话</h2><p>每个群共用一段短期记忆，私聊按用户区分；可查看、导出或重置。</p></div><el-input v-model="sessionQuery.keyword" size="small" clearable placeholder="群号或用户 id" class="search" @change="sessionQuery.page = 1; loadSessions()" /></div>
           <el-table v-loading="sessionLoading" :data="sessions.items" size="small" empty-text="暂无会话">
+            <el-table-column prop="bot_id" label="机器人账号" min-width="120" />
             <el-table-column label="场景" min-width="120"><template #default="{ row }">{{ row.group_id ? `群 ${row.group_id}` : "私聊" }}</template></el-table-column>
             <el-table-column label="用户" min-width="120"><template #default="{ row }">{{ row.user_id || (row.group_id ? "全群" : "") }}</template></el-table-column>
+            <el-table-column label="对话" min-width="150"><template #default="{ row }">{{ row.name || '历史对话' }} <el-tag v-if="row.active" size="mini" type="success">当前</el-tag><el-tag v-if="row.archived" size="mini" type="info">已归档</el-tag></template></el-table-column>
             <el-table-column prop="messages" label="消息数" width="80" />
             <el-table-column label="最后消息" min-width="160"><template #default="{ row }">{{ formatTime(row.last_at) }}</template></el-table-column>
-            <el-table-column label="" width="330"><template #default="{ row }"><el-button size="mini" @click="viewSession(row)">查看</el-button><el-button size="mini" @click="exportSession(row)">导出</el-button><el-button size="mini" :loading="summarizing === row.session_id" @click="summarizeSession(row)">整理记忆</el-button><el-button size="mini" type="danger" plain @click="resetSession(row)">重置</el-button></template></el-table-column>
+            <el-table-column label="" min-width="460"><template #default="{ row }"><el-button v-if="row.local && (row.group_id || row.user_id)" size="mini" @click="openScene(row.scene_id)">场景设置</el-button><el-button size="mini" @click="viewSession(row)">查看</el-button><el-button size="mini" @click="exportSession(row)">导出</el-button><el-button size="mini" :loading="summarizing === row.session_id" @click="summarizeSession(row)">整理记忆</el-button><el-button size="mini" type="danger" plain @click="resetSession(row)">重置</el-button>
+              <el-dropdown v-if="row.local" trigger="click" @command="sessionAction(row, $event)"><el-button size="mini" :disabled="Boolean(sessionBusy)">管理对话<i class="el-icon-arrow-down el-icon--right"></i></el-button><el-dropdown-menu slot="dropdown"><el-dropdown-item command="new">在此场景新建</el-dropdown-item><el-dropdown-item command="switch" :disabled="row.active || row.archived">切换到此对话</el-dropdown-item><el-dropdown-item command="rename">重命名</el-dropdown-item><el-dropdown-item :command="row.archived ? 'unarchive' : 'archive'">{{ row.archived ? '恢复归档' : '归档' }}</el-dropdown-item><el-dropdown-item command="delete" divided>删除短期对话</el-dropdown-item></el-dropdown-menu></el-dropdown>
+            </template></el-table-column>
           </el-table>
           <el-pagination layout="total, prev, pager, next" :total="sessions.total" :page-size="sessionQuery.page_size" :current-page.sync="sessionQuery.page" @current-change="loadSessions" />
+          <p>使用每行“管理对话”新建、切换或归档。/ai help 可查看聊天控制命令；删除短期对话不会删除长期记忆。</p>
         </section>
       </el-tab-pane>
 
       <el-tab-pane label="统计" name="stats" lazy>
         <section class="zx-panel"><AIStats /></section>
       </el-tab-pane>
-      <el-tab-pane v-if="chatExecutor === 'dsh'" label="DSH 桌面" name="dsh" lazy><DSHStatus v-if="tab === 'dsh'" @status="dshConnected = Boolean($event.connected)" /></el-tab-pane>
+      <el-tab-pane v-if="chatExecutor === 'dsh'" label="DSH 执行器" name="dsh" lazy><DSHStatus v-if="tab === 'dsh'" @configure="configModule = 'ai_chat'" @status="dshConnected = Boolean($event.connected)" /></el-tab-pane>
     </el-tabs>
 
     <el-dialog :title="detail ? `会话 ${detail.session_id}` : ''" :visible.sync="detailVisible" width="min(760px, 94vw)" append-to-body>
@@ -244,6 +250,8 @@
         <div v-for="(item, index) in detail.messages" :key="index" class="chat-line" :class="item.role"><small>{{ roleName(item) }} · {{ formatTime(item.created_at) }}</small><p>{{ item.text }}</p></div>
       </div>
     </el-dialog>
+
+    <el-dialog title="账号场景设置" :visible.sync="sceneDialog" width="min(800px, 94vw)" append-to-body><SceneSettings v-if="sceneDialog && selectedScene" :key="selectedScene" :scene-id="selectedScene" :personas="personas" /></el-dialog>
 
     <UpdateDialog v-if="configModule" :module="configModule" tab="config" @close="configModule = ''" />
   </main>
@@ -253,6 +261,7 @@
 import UpdateDialog from "@/components/plugin/UpdateDialog.vue"
 import AgentConsole from "./AgentConsole.vue"
 import DSHStatus from "./DSHStatus.vue"
+import SceneSettings from "./SceneSettings.vue"
 import AIStats from "./AIStats.vue"
 import AIProactive from "./AIProactive.vue"
 import AISocial from "./AISocial.vue"
@@ -263,6 +272,8 @@ import AICharacters from "./AICharacters.vue"
 import AIMcp from "./AIMcp.vue"
 import { apiErrorDetail } from "@/utils/api-error"
 import { modelProfile } from "@/utils/ai-models"
+import { getAuthToken, hasValidAuthToken } from "@/utils/auth-token"
+import { businessNetworkEpoch, isBusinessNetworkFrozen } from "@/utils/restart-network"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 
 const BUILTIN = "ai_chat"
@@ -274,7 +285,7 @@ const emptyDraft = () => ({ id: null, name: "", enabled: true, prompt: "", style
 
 export default {
   name: "AIChat",
-  components: { UpdateDialog, AgentConsole, DSHStatus, AIStats, AIProactive, AISocial, AISkills, AIKnowledge, AIMemory, AICharacters, AIMcp },
+  components: { UpdateDialog, AgentConsole, DSHStatus, SceneSettings, AIStats, AIProactive, AISocial, AISkills, AIKnowledge, AIMemory, AICharacters, AIMcp },
   data() {
     return {
       tab: TABS.includes(this.$route.query.tab) ? this.$route.query.tab : "start",
@@ -283,9 +294,9 @@ export default {
       providers: [], defaultChat: "", chatEnabled: false, switchRevision: "", chatExecutor: 'local', dshConnected: false,
       personas: [], tools: [], skillList: [], knowledgeBases: [], groups: [], groupSearch: "", groupPage: 1,
       draft: emptyDraft(), original: emptyDraft(), tested: false,
-      sessions: { total: 0, items: [] }, sessionQuery: { keyword: "", page: 1, page_size: 20 }, sessionLoading: false, summarizing: "",
+      sessions: { total: 0, items: [] }, sessionQuery: { keyword: "", page: 1, page_size: 20 }, sessionLoading: false, summarizing: "", sessionBusy: "",
       usage: { day: "", total: 0, users: 0, top: [] }, detail: null, detailVisible: false,
-      consolePersona: null,
+      consolePersona: null, sceneDialog: false, selectedScene: "",
       agent: { enabled: false, sandbox: { ready: false, reason: "" }, runs: [] },
       runQuery: { source: "", status: "" }, runCalls: {},
       sandbox: { ready: false, reason: "", docker: { ok: false, version: "", error: "" }, image: { name: "", installed: false }, pull: { status: "idle" }, sessions: [], settings: {} },
@@ -321,7 +332,7 @@ export default {
         { key: "persona", title: "设置人设", done: this.personas.length > 0, description: persona ? `${this.personas.length} 个人设，默认「${persona.name}」` : "未设置时使用内置默认人设", label: "管理人设", run: () => { this.tab = "persona" } },
         { key: "test", title: "试聊", done: this.tested, description: "在 WebUI 里先聊几句，确认模型与人设正常", label: "开始试聊", run: () => this.openConsole(persona ? persona.id : null) },
       ]
-      if (this.chatExecutor === "dsh") steps.splice(0, 2, { key: "desktop", title: "连接已登录的 DSH 桌面", done: this.dshConnected, description: this.dshConnected ? "桌面已连接，沿用桌面的模型" : "无需 API Key；在“DSH 桌面”页确认已连接、预设就绪", label: "查看桌面状态", run: () => { this.tab = "dsh" } })
+      if (this.chatExecutor === "dsh") steps.splice(0, 2, { key: "desktop", title: "连接所选 DSH 后端", done: this.dshConnected, description: "在聊天设置中选择 desktop 或 sdk，再到 DSH 执行器页核对能力；两种后端不自动互相回退。", label: "查看执行器状态", run: () => { this.tab = "dsh" } })
       return steps
     },
     agentDirty() { return JSON.stringify(this.agentPayload()) !== this.agentSaved },
@@ -494,6 +505,7 @@ export default {
       const response = await this.request("get", "/knowledge/bases")
       if (isCurrent()) this.knowledgeBases = response.data
     },
+    openScene(scene) { this.selectedScene = scene; this.sceneDialog = true; if (!this.personas.length) this.loadPersonas().catch(error => this.fail(error, "人设列表暂不可用")) },
     async loadGroups() {
       const isCurrent = this.beginDataRead("groups")
       const response = await this.request("get", "/chat/groups")
@@ -666,7 +678,30 @@ export default {
         this.$message.success((await this.request("post", "/memory/summarize", { session_id: row.session_id })).info)
       } catch (error) { this.fail(error, "整理失败。") } finally { this.summarizing = "" }
     },
+    async sessionAction(row, action) {
+      if (this.sessionBusy || this.disposed || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
+      const generation = this.dataGeneration, token = getAuthToken(), epoch = businessNetworkEpoch()
+      const current = () => !this.disposed && !document.hidden && generation === this.dataGeneration && token === getAuthToken() && epoch === businessNetworkEpoch() && hasValidAuthToken()
+      let name
+      try {
+        if (["new", "rename"].includes(action)) {
+          const result = await this.$prompt("请输入对话名称", action === "new" ? "新建对话" : "重命名", { inputValue: action === "rename" ? row.name : "新对话", inputValidator: value => Boolean(value && value.trim() && value.trim().length <= 80) || "名称为 1～80 个字符" })
+          name = result.value.trim()
+        } else if (["archive", "delete", "reset"].includes(action)) {
+          const message = action === "delete" ? "删除短期对话？长期记忆和用量记录保留。" : action === "reset" ? "清空此对话的短期历史？长期记忆保留。" : "归档此对话并停止当前运行？历史保留。"
+          if (!(await this.confirm(message, "管理对话"))) return
+        }
+        if (!current() || this.sessionBusy) return
+        this.sessionBusy = row.session_id
+        const response = await this.request("post", "/chat/sessions", { scene_id: row.scene_id, session_id: row.session_id, expected_revision: row.revision, action, ...(name ? { name } : {}) })
+        if (!current()) return
+        this.$message.success(response.info)
+        await this.loadSessions(true)
+      } catch (error) { if (error !== "cancel" && error !== "close" && current()) this.fail(error, "操作未完成，请刷新会话后重试。") }
+      finally { this.sessionBusy = "" }
+    },
     async resetSession(row) {
+      if (row.local) return this.sessionAction(row, "reset")
       if (!(await this.confirm("清空该会话的短期记忆？用户下次聊天将从头开始。", "重置会话"))) return
       try {
         const response = await this.request("delete", `/chat/sessions?session_id=${encodeURIComponent(row.session_id)}`)
