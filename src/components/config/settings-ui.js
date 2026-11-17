@@ -87,10 +87,20 @@ const aiSectionSettings = {
       mcp_cleanup_timeout: { label: 'MCP 闲置回收', unit: '秒', description: 'MCP 服务闲置超过该时间后自动关闭；0 表示常驻不回收。' },
     } },
   ],
+  deepseek_tools: [
+    { key: 'media', title: 'DeepSeek 媒体工具', icon: 'el-icon-microphone', description: '使用 DeepSeek 官方的 OCR、语音识别和语音合成接口。默认关闭；启用后会把对应图片或语音发给 DeepSeek，并按用量计费。已指定视觉或语音模型时优先使用模型。不影响 DSH 桌面自带的工具。', fields: {
+      provider: { label: '官方服务商名称', placeholder: '自动选择已保存的官方 DeepSeek 服务商', description: '填写“服务商与模型”中的名称，复用其 API Key。仅接受 api.deepseek.com 官方地址；DSH 登录账号不能当作 API Key。' },
+      ocr_enabled: { label: '图片文字识别', description: '对话线路不支持图片、且未指定视觉模型时使用 OCR。只识别文字，不等同于图片理解；识别不完整时会明确标注。' },
+      asr_enabled: { label: '语音识别', description: '未指定语音识别模型时使用 DeepSeek ASR；单条最长 120 秒、8 MiB。非 WAV 格式需安装 ffmpeg 转换。' },
+      tts_enabled: { label: '语音合成', description: '未指定语音合成模型时使用 DeepSeek TTS，输出 WAV；不支持调节语速。' },
+      voice: { label: '默认音色', options: [{ value: 'stella', label: 'stella · 女声' }, { value: 'tide', label: 'tide · 男声' }] },
+      timeout: { label: '请求总超时', unit: '秒', description: '单次请求的总时长上限。超时后不会自动重试，已发出的请求可能仍会计费。' },
+    } },
+  ],
   web_search: [
     { key: 'search', title: '联网搜索', icon: 'el-icon-search', description: '让 AI 能上网查资料。原生搜索由模型厂商执行；搜索服务由 Bot 调用搜索接口，适用于任何支持工具调用的模型。', fields: {
       mode: { label: '搜索方式', description: '开启后 AI 聊天会获得联网搜索工具。自动：模型支持原生搜索（官方接口或核验通过的线路）时用原生搜索，否则用搜索服务。', options: [{ value: 'auto', label: '自动' }, { value: 'native', label: '仅原生搜索' }, { value: 'api', label: '仅搜索服务' }, { value: 'off', label: '关闭' }] },
-      provider: { label: '搜索服务', placeholder: '自动选择', description: '未选择时使用第一个已配置官方密钥的 DeepSeek / Kimi / 智谱 / Jina 服务商。DeepSeek 搜索按次计费，Tavily 与博查需要单独填写密钥。', options: [{ value: 'deepseek', label: 'DeepSeek' }, { value: 'kimi', label: 'Kimi (Moonshot)' }, { value: 'glm', label: '智谱 GLM' }, { value: 'jina', label: 'Jina AI' }, { value: 'tavily', label: 'Tavily' }, { value: 'bocha', label: '博查' }] },
+      provider: { label: '搜索服务', placeholder: '自动选择', description: '未选择时使用第一个已配置官方密钥的 DeepSeek / Kimi / 智谱 / Jina 服务商。DeepSeek 独立搜索只搜网页，图片搜索需 deepseek-flash 原生联网工具；搜索按次计费。Tavily 与博查需单独密钥。', options: [{ value: 'deepseek', label: 'DeepSeek' }, { value: 'kimi', label: 'Kimi (Moonshot)' }, { value: 'glm', label: '智谱 GLM' }, { value: 'jina', label: 'Jina AI' }, { value: 'tavily', label: 'Tavily' }, { value: 'bocha', label: '博查' }] },
       api_keys: { label: '搜索服务密钥', description: '可填写多个，轮流使用，某个失败时自动换下一个；留空时复用同厂商服务商（官方接口）的密钥。' },
       max_results: { label: '结果数量', unit: '条', description: '每次搜索返回的结果数量。' },
     } },

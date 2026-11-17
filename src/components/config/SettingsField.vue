@@ -118,7 +118,11 @@ export default {
     nullable() { return this.base.type === 'null' || this.variants.some(item => item.type === 'null') || this.untyped },
     hasDefault() { return !this.base.writeOnly && Object.prototype.hasOwnProperty.call(this.base, 'default') },
     displayValue() { return this.value === undefined && this.hasDefault ? this.base.default : this.value },
-    placeholder() { return this.value === null ? '空' : this.hasDefault ? `默认：${valueSummary(this.base.default)}` : this.ui.placeholder || '未设置' },
+    placeholder() {
+      if (this.value === null) return '空'
+      if (this.ui.placeholder && (!this.hasDefault || this.base.default === '')) return this.ui.placeholder
+      return this.hasDefault ? `默认：${valueSummary(this.base.default)}` : '未设置'
+    },
     description() { return this.ui.description || this.resolved.description || '' },
     options() { return (this.ui.options || this.resolved.enum || []).map(item => item && typeof item === 'object' ? item : { label: String(item), value: item }) },
     matches() { return fieldMatches(this.query, `${this.path} ${this.label} ${this.description}`, this.schema, this.value, this.root) },

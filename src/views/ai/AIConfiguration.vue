@@ -219,7 +219,7 @@ import ModelEditor from "./ModelEditor.vue"
 import ModelTable from "./ModelTable.vue"
 import ProviderStarter from "./ProviderStarter.vue"
 
-const SECTION_KEYS = { context: "context_settings", agent: "agent_settings", web_search: "web_search" }
+const SECTION_KEYS = { context: "context_settings", agent: "agent_settings", web_search: "web_search", deepseek_tools: "deepseek_tools" }
 const CONNECTION_ERRORS = ["providers.name", "providers.protocol", "providers.base_url", "providers.timeout", "api_key"]
 const hostOf = (url) => { try { return new URL(url).host } catch (_) { return url || "" } }
 
@@ -239,9 +239,9 @@ export default {
   components: { ModelEditor, ModelTable, ProviderStarter, SchemaField, SettingsLayout, SectionAction },
   data() {
     return {
-      settingsCategory: { context: "llm_summary", agent: "loop", web_search: "search", advanced: "client_settings" }, settingsSearch: { context: "", agent: "", web_search: "", advanced: "" }, settingsLocalIssues: {}, repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
+      settingsCategory: { context: "llm_summary", agent: "loop", web_search: "search", deepseek_tools: "media", advanced: "client_settings" }, settingsSearch: { context: "", agent: "", web_search: "", deepseek_tools: "", advanced: "" }, settingsLocalIssues: {}, repairVisible: false, repairPreview: {}, sessionExpired: false, loginUsername: "", loginPassword: "", loggingIn: false, aiEpoch: 0,
       loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, presets: {}, protocols: [], providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
-      providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, web_search: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
+      providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, web_search: {}, deepseek_tools: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
       discovering: false, discoveryVisible: false, discoverySearch: "", discoverySelected: [], discoveryError: "", discoveryScope: "", modelChecks: {}, modelOutcomes: {}, draftGeneration: 0, catalog: {}, catalogUpdating: false, batchChecking: false,
       connectionOpen: false, editorVisible: false, editorModel: null, editorIndex: null, settingsTab: "context",
       taskLabels: TASK_LABELS,
@@ -250,6 +250,7 @@ export default {
         { name: "context", label: "上下文", saveLabel: "保存上下文设置", effect: "保存后立即热加载", link: { text: "群聊背景消息数、分段发送与长回复在 AI 聊天的「聊天设置」中。", label: "打开聊天设置", route: { path: "/ai/chat", query: { settings: "ai_chat" } } } },
         { name: "agent", label: "Agent", saveLabel: "保存 Agent 设置", effect: "保存后立即热加载", link: { text: "Agent 开关、MCP 服务与沙箱在 AI 聊天的「Agent」页。", label: "打开 Agent 页", route: { path: "/ai/chat", query: { tab: "agent" } } } },
         { name: "web_search", label: "联网搜索", saveLabel: "保存联网搜索设置", effect: "保存后立即热加载" },
+        { name: "deepseek_tools", label: "DeepSeek 工具", saveLabel: "保存 DeepSeek 工具设置", effect: "保存后立即热加载；按工具用量计费，不改变 DSH 原生工具" },
         { name: "advanced", label: "高级设置", saveLabel: "保存高级设置", effect: "保存后立即热加载" },
       ],
     }

@@ -114,7 +114,7 @@
 
       <el-tab-pane label="控制台" name="console" lazy>
         <section class="zx-panel">
-          <AgentConsole :personas="personas" :agent-enabled="agent.enabled" :initial-persona="consolePersona" @done="onConsoleDone" />
+          <AgentConsole v-if="tab === 'console'" :personas="personas" :agent-enabled="agent.enabled" :initial-persona="consolePersona" @done="onConsoleDone" />
         </section>
       </el-tab-pane>
 
@@ -173,14 +173,33 @@
             <el-table-column type="expand"><template #default="{ row }"><div class="call-detail">
               <strong>输入</strong><pre>{{ row.input }}</pre><strong>输出</strong><pre>{{ row.error || row.output || "无" }}</pre>
               <template v-if="row.details && row.details.delivery">
+                <p v-if="row.details.external_stop_guarantee === 'unverified'" class="error-text">外部执行器是否已停止尚未确认；真寻已停止等待，但外部操作可能仍在进行。</p>
                 <p>投递：{{ deliveryNames[row.details.delivery.status] || row.details.delivery.status }}<span v-if="row.details.delivery.uncertain">（结果未知，不自动补发）</span></p>
                 <pre v-if="row.details.delivery.text">确认送达内容：{{ row.details.delivery.text }}</pre>
                 <p v-if="row.details.delivery.error" class="error-text">{{ row.details.delivery.error }}</p>
+                <p v-if="row.details.delivery.deduplicated">已避免重复发送 {{ row.details.delivery.deduplicated }} 个片段。</p>
+                <p v-if="row.details.delivery.reused_operations">复用了 {{ row.details.delivery.reused_operations }} 次已完成操作，没有再次执行。</p>
+                <p v-if="row.details.delivery.permission_reason" class="error-text">权限检查：{{ row.details.delivery.permission_reason }}</p>
+                <p v-if="row.details.delivery.operation_uncertain" class="error-text">外部操作结果待核查，不自动重试。</p>
+                <p v-if="row.details.delivery.tool_conflicts && row.details.delivery.tool_conflicts.length" class="error-text">同名工具冲突：{{ row.details.delivery.tool_conflicts.join('、') }}</p>
                 <p class="muted">平台确认仅表示请求已被接受，不表示对方已阅读。</p>
               </template>
+              <strong>本轮准备与注入</strong>
+              <p>准备：{{ preparationLabel(row.details) }}</p>
+              <p v-if="row.details && row.details.configuration">执行器：{{ runnerNames[row.details.configuration.executor] || row.details.configuration.executor }} · 人设：{{ row.persona || '内置默认' }} · 模型：{{ row.details.configuration.model || '未记录' }}</p>
+              <p v-else class="muted">配置快照：未记录</p>
+              <template v-if="row.details && row.details.injections">
+                <p>可用工具：{{ (row.details.injections.tools || []).join('、') || '无' }}</p>
+                <p v-if="row.details.injections.dynamic" class="muted">运行期提醒 · {{ row.details.injections.dynamic.count }} 项 / {{ row.details.injections.dynamic.characters }} 字符 · 仅本轮请求</p>
+                <p v-for="(source, index) in row.details.injections.sources || []" :key="`injection-${index}`" class="muted">{{ injectionSource(source.source) }} · {{ source.role }} · {{ source.count }} 项 / {{ source.characters }} 字符 · {{ source.temporary ? '仅本轮请求' : '随回复保存' }}</p>
+              </template>
+              <p v-else class="muted">注入摘要：未记录</p>
+              <p v-if="row.details && row.details.background">背景：已使用 {{ row.details.background.confirmed }} / {{ row.details.background.read }} 段<span v-if="row.details.background.reason"> · {{ backgroundReason(row.details.background.reason) }}</span><span v-if="row.details.background.truncated"> · 背景消息过多，只使用了部分</span></p>
+              <p v-else class="muted">背景确认：未记录或本轮未使用</p>
               <strong>工具调用</strong>
+              <p v-for="(tool, callId) in row.details.dsh_tools || {}" :key="callId">DSH · {{ tool.name }} · {{ tool.status === 'completed' ? '已完成' : tool.status === 'unknown' ? '结果待核验' : tool.status === 'failed' ? '未完成' : '执行中' }}</p>
               <p v-if="!runCalls[row.run_id]" class="muted">加载中…</p>
-              <p v-else-if="!runCalls[row.run_id].length" class="muted">本次没有调用工具。</p>
+              <p v-else-if="!runCalls[row.run_id].length && !Object.keys(row.details.dsh_tools || {}).length" class="muted">本次没有调用工具。</p>
               <div v-for="call in runCalls[row.run_id] || []" :key="call.id" class="run-call">
                 <div><strong>{{ call.tool }}</strong> <el-tag size="mini" :type="decisionTypes[call.decision]">{{ decisionNames[call.decision] || call.decision }}</el-tag><small v-if="call.approver" class="muted"> {{ call.approver }}</small><template v-if="call.decision === 'auto' || call.decision === 'approved'"> <el-tag size="mini" :type="call.is_error ? 'danger' : 'success'">{{ call.is_error ? "失败" : "成功" }}</el-tag><small class="muted"> {{ call.duration }}ms</small></template></div>
                 <pre>{{ call.arguments }}</pre><pre v-if="call.result">{{ call.result }}</pre>
@@ -217,6 +236,7 @@
       <el-tab-pane label="统计" name="stats" lazy>
         <section class="zx-panel"><AIStats /></section>
       </el-tab-pane>
+      <el-tab-pane v-if="chatExecutor === 'dsh'" label="DSH 桌面" name="dsh" lazy><DSHStatus v-if="tab === 'dsh'" @status="dshConnected = Boolean($event.connected)" /></el-tab-pane>
     </el-tabs>
 
     <el-dialog :title="detail ? `会话 ${detail.session_id}` : ''" :visible.sync="detailVisible" width="min(760px, 94vw)" append-to-body>
@@ -232,6 +252,7 @@
 <script>
 import UpdateDialog from "@/components/plugin/UpdateDialog.vue"
 import AgentConsole from "./AgentConsole.vue"
+import DSHStatus from "./DSHStatus.vue"
 import AIStats from "./AIStats.vue"
 import AIProactive from "./AIProactive.vue"
 import AISocial from "./AISocial.vue"
@@ -245,7 +266,7 @@ import { modelProfile } from "@/utils/ai-models"
 import { setDirtyState, clearDirtyState } from "@/utils/dirty-state"
 
 const BUILTIN = "ai_chat"
-const TABS = ["start", "persona", "groups", "proactive", "social", "knowledge", "characters", "console", "agent", "sessions", "stats"]
+const TABS = ["start", "persona", "groups", "proactive", "social", "knowledge", "characters", "console", "agent", "sessions", "stats", "dsh"]
 const QUIET = { suppressErrorToast: true }
 const lines = (text) => text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
 const blocks = (text) => text.split(/(?:\r?\n){2,}/).map((item) => item.trim()).filter(Boolean)
@@ -253,13 +274,13 @@ const emptyDraft = () => ({ id: null, name: "", enabled: true, prompt: "", style
 
 export default {
   name: "AIChat",
-  components: { UpdateDialog, AgentConsole, AIStats, AIProactive, AISocial, AISkills, AIKnowledge, AIMemory, AICharacters, AIMcp },
+  components: { UpdateDialog, AgentConsole, DSHStatus, AIStats, AIProactive, AISocial, AISkills, AIKnowledge, AIMemory, AICharacters, AIMcp },
   data() {
     return {
       tab: TABS.includes(this.$route.query.tab) ? this.$route.query.tab : "start",
       loading: false, error: "", busy: "", configModule: "",
       sectionLoading: {}, sectionErrors: {}, loadedSections: {}, dataGeneration: 0, dataRequests: {}, disposed: false,
-      providers: [], defaultChat: "", chatEnabled: false, switchRevision: "",
+      providers: [], defaultChat: "", chatEnabled: false, switchRevision: "", chatExecutor: 'local', dshConnected: false,
       personas: [], tools: [], skillList: [], knowledgeBases: [], groups: [], groupSearch: "", groupPage: 1,
       draft: emptyDraft(), original: emptyDraft(), tested: false,
       sessions: { total: 0, items: [] }, sessionQuery: { keyword: "", page: 1, page_size: 20 }, sessionLoading: false, summarizing: "",
@@ -272,7 +293,7 @@ export default {
       agentDraft: { enabled: false }, agentSaved: "", agentTimer: null,
       decisionNames: { auto: "自动放行", approved: "已批准", rejected: "已拒绝", timeout: "超时" }, decisionTypes: { auto: "info", approved: "success", rejected: "danger", timeout: "warning" },
       deliveryNames: { sent: "全部送达", partial: "部分送达", failed: "失败", unknown: "结果未知", skipped: "主动跳过", pending: "尚未结算" },
-      statusNames: { ok: "完成", silent: "未发言", partial: "部分送达", failed: "投递失败", unknown: "投递结果未知", error: "出错", stopped: "已停止" }, statusTypes: { ok: "success", silent: "info", partial: "warning", failed: "danger", unknown: "warning", error: "danger", stopped: "info" },
+      statusNames: { completed: "执行完成", queued: "排队中", running: "执行中", delivering: "投递中", settling: "收尾中", stopping: "停止中", interrupted: "已中断", cancelled: "已取消", timeout: "已超时", exhausted: "预算耗尽", skipped: "已跳过", ok: "完成", silent: "未发言", partial: "部分送达", failed: "投递失败", unknown: "结果待核验", error: "出错", stopped: "已停止" }, statusTypes: { completed: "success", queued: "info", running: "info", delivering: "info", settling: "info", stopping: "info", interrupted: "warning", cancelled: "info", timeout: "warning", exhausted: "warning", skipped: "info", ok: "success", silent: "info", partial: "warning", failed: "danger", unknown: "warning", error: "danger", stopped: "info" },
       proactiveSources: { interject: "插话", task: "任务", listen: "接话判断", steal: "偷表情", memory: "记忆整理" },
       voiceNames: { off: "关闭", voice: "语音提问时", always: "总是" },
       runnerNames: { local: "本地 Agent", dsh: "DeepSeek Harness" },
@@ -293,13 +314,15 @@ export default {
     steps() {
       const ready = this.providers.filter((item) => (item.api_keys || []).length)
       const persona = this.personas.find((item) => item.is_default)
-      return [
+      const steps = [
         { key: "provider", title: "配置模型服务商", done: ready.length > 0, description: ready.length ? `已配置 ${ready.length} 个服务商` : "添加服务商并填写 API Key", label: "去配置", run: () => this.$router.push({ path: "/ai", query: { section: "providers" } }) },
         { key: "model", title: "设置默认对话模型", done: Boolean(this.defaultChat), description: this.defaultChat || "未设置；人设也可以单独指定模型", label: "去设置", run: () => this.$router.push({ path: "/ai", query: { section: "routing" } }) },
         { key: "switch", title: "启用 AI 聊天", done: this.chatEnabled, description: this.chatEnabled ? "已启用，可在“聊天设置”中调整唤醒词、分段与配额" : "未启用", label: this.chatEnabled ? "聊天设置" : "启用", run: this.chatEnabled ? () => { this.configModule = BUILTIN } : this.enableBuiltin },
         { key: "persona", title: "设置人设", done: this.personas.length > 0, description: persona ? `${this.personas.length} 个人设，默认「${persona.name}」` : "未设置时使用内置默认人设", label: "管理人设", run: () => { this.tab = "persona" } },
         { key: "test", title: "试聊", done: this.tested, description: "在 WebUI 里先聊几句，确认模型与人设正常", label: "开始试聊", run: () => this.openConsole(persona ? persona.id : null) },
       ]
+      if (this.chatExecutor === "dsh") steps.splice(0, 2, { key: "desktop", title: "连接已登录的 DSH 桌面", done: this.dshConnected, description: this.dshConnected ? "桌面已连接，沿用桌面的模型" : "无需 API Key；在“DSH 桌面”页确认已连接、预设就绪", label: "查看桌面状态", run: () => { this.tab = "dsh" } })
+      return steps
     },
     agentDirty() { return JSON.stringify(this.agentPayload()) !== this.agentSaved },
     sandboxDirty() { return Boolean(this.sandboxSaved) && JSON.stringify(this.sandboxDraft) !== this.sandboxSaved },
@@ -330,6 +353,16 @@ export default {
   },
   beforeDestroy() { this.disposed = true; this.dataGeneration++; clearDirtyState("ai-chat"); clearInterval(this.agentTimer) },
   methods: {
+    preparationLabel(details) {
+      const prep = details && details.preparation
+      return prep ? ({ running: '准备中', completed: '已完成', cancelled: '已取消', failed: '准备失败', unknown: '未确认结束' }[prep.status] || '待核验') : '未记录'
+    },
+    injectionSource(source) {
+      return { persona_and_capabilities: '人设与能力约束', filtered_tool_instructions: '最终工具说明', current_input_with_background: '当前问题与群背景', follow_up_with_background: '追加问题与群背景', _time_prompt: '本轮时间', _background_prompt: '任务临时背景', MemoryToolkit: '长期记忆', KnowledgeToolkit: '知识库', SkillToolkit: '技能', StickerToolkit: '表情候选' }[source] || source
+    },
+    backgroundReason(reason) {
+      return { no_effective_delivery: '回复未送达，背景消息留待下次使用', stale_revision: '会话已重置，旧结果未写回', history_unconfirmed: '输入保存未确认，背景消息留待下次使用' }[reason] || '结果待核验'
+    },
     /** 为同一数据源保留当前代际的最新请求。 */
     beginDataRead(key) {
       const generation = this.dataGeneration
@@ -376,7 +409,20 @@ export default {
         if (!this.disposed && generation === this.dataGeneration) this.$set(this.sectionErrors, section, apiErrorDetail(error, "当前页数据加载失败。"))
       } finally { if (!this.disposed && generation === this.dataGeneration) this.$set(this.sectionLoading, section, false) }
     },
-    applySwitch(data) { this.chatEnabled = data.enabled; this.switchRevision = data.revision },
+    applySwitch(data) {
+      this.chatEnabled = data.enabled; this.switchRevision = data.revision
+      if (data.executor) this.chatExecutor = data.executor
+      if (this.chatExecutor === "dsh") this.loadDshStatus()
+      else if (this.tab === "dsh") this.tab = "start"
+    },
+    /** 读取 DSH 桌面是否已连接，用于快速开始清单。 */
+    async loadDshStatus() {
+      const generation = this.dataGeneration
+      try {
+        const response = await this.request("get", "/dsh/status")
+        if (!this.disposed && generation === this.dataGeneration) this.dshConnected = Boolean(response.data.connected)
+      } catch (_) { if (!this.disposed && generation === this.dataGeneration) this.dshConnected = false }
+    },
     async confirm(message, title) {
       try { await this.$confirm(message, title, { type: "warning" }); return true } catch (_) { return false }
     },
@@ -677,6 +723,7 @@ export default {
 .chat-line p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-line small { color: var(--text-color-secondary); font-size: 11px; }
 .call-detail pre { margin: 4px 0 8px; padding: 8px 10px; border-radius: 6px; background: var(--bg-color-hover); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; }
+.call-detail p { white-space: normal; overflow-wrap: anywhere; }
 .agent-form { max-width: 720px; }
 .tools-hint { display: block; line-height: 1.6; }
 .heading-actions { display: flex; gap: 8px; }
@@ -696,4 +743,5 @@ export default {
 .run-call { padding: 6px 0; border-top: 1px dashed var(--border-color); }
 .ellipsis { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 @media (max-width: 900px) { .persona-layout, .form-row { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .call-detail { max-width: calc(100vw - 64px); } }
 </style>

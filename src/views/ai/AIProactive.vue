@@ -27,20 +27,21 @@
     <div class="zx-section-heading tasks-heading">
       <div>
         <h2>主动任务</h2>
-        <p>按时执行任务说明并把结果发到指定的群或私聊，没有要说的会跳过。用户可以在对话中让 AI 创建（每人上限见“聊天设置”），以创建者身份运行、用量计入创建者；这里创建的任务以超级用户身份运行。</p>
+        <p>按时执行任务说明并把结果发到指定的群或私聊，没有要说的会跳过。用户可以在对话中让 AI 创建（每人上限见“聊天设置”），以创建者身份运行、用量计入创建者；这里创建的任务绑定当前管理账号，用量归属该账号。关闭 Bot 会中断当前运行；错过的任务不补跑，周期计划仅保留未来触发。</p>
       </div>
       <el-button size="small" type="primary" icon="el-icon-plus" @click="openTask()">新建任务</el-button>
     </div>
     <el-table :data="tasks" size="small" row-key="id" empty-text="暂无主动任务">
-      <el-table-column label="任务" min-width="200"><template #default="{ row }"><div>#{{ row.id }} {{ row.name }}</div><small class="muted ellipsis">{{ row.prompt }}</small></template></el-table-column>
+      <el-table-column label="任务" min-width="200"><template #default="{ row }"><div>#{{ row.id }} {{ row.name }}</div><small class="muted ellipsis">{{ row.prompt }}</small><div class="muted task-owner">{{ row.source === "management" ? "管理账号" : row.source === "legacy" ? "历史来源" : "聊天创建者" }}：{{ String(row.creator || "").replace(/^webui:/, "") }}</div></template></el-table-column>
       <el-table-column label="触发" min-width="130"><template #default="{ row }">{{ row.trigger }}</template></el-table-column>
       <el-table-column label="发到" min-width="130"><template #default="{ row }"><div>{{ row.group_id ? `群 ${row.group_id}` : `私聊 ${row.user_id}` }}</div><small class="muted">Bot {{ row.bot_id }}</small></template></el-table-column>
-      <el-table-column label="状态" width="80"><template #default="{ row }"><el-tag size="mini" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? "启用" : "暂停" }}</el-tag></template></el-table-column>
-      <el-table-column label="最近执行" min-width="200"><template #default="{ row }"><template v-if="row.last_run"><el-tag size="mini" :type="runTypes[row.last_run.status]">{{ runNames[row.last_run.status] || row.last_run.status }}</el-tag> <small class="muted">{{ formatTime(row.last_run.at) }}</small><div class="ellipsis">{{ row.last_run.output }}</div></template><span v-else class="muted">尚未执行</span></template></el-table-column>
-      <el-table-column label="操作" width="210" fixed="right"><template #default="{ row }">
-        <el-button type="text" size="mini" @click="taskAction(row, 'run')">立即执行</el-button>
-        <el-button type="text" size="mini" @click="taskAction(row, row.enabled ? 'pause' : 'resume')">{{ row.enabled ? "暂停" : "恢复" }}</el-button>
-        <el-button type="text" size="mini" @click="openTask(row)">编辑</el-button>
+      <el-table-column label="状态" width="96"><template #default="{ row }"><el-tag size="mini" :type="row.finished ? runTypes[runKey(row.last_run_status)] || 'info' : row.enabled ? 'success' : 'info'">{{ row.finished ? (runNames[runKey(row.last_run_status)] || "已结束") : row.enabled ? "启用" : "暂停" }}</el-tag></template></el-table-column>
+      <el-table-column label="最近执行" min-width="200"><template #default="{ row }"><template v-if="row.last_run"><el-tag size="mini" :type="runTypes[runKey(row.last_run.status)]">{{ runNames[runKey(row.last_run.status)] || row.last_run.status }}</el-tag> <small class="muted">{{ formatTime(row.last_run.at) }}</small><div class="ellipsis">{{ row.last_run.output }}</div></template><span v-else class="muted">{{ runNames[runKey(row.last_run_status)] || row.last_run_status || "尚未执行" }}</span><div v-if="row.active_run" class="muted">{{ row.active_run.phase === "stopping" ? "停止中" : row.active_run.phase === "queued" ? "排队中" : "执行中" }}</div><div v-if="row.last_run_reason" class="muted task-owner">{{ row.last_run_reason }}</div></template></el-table-column>
+      <el-table-column label="操作" width="260" fixed="right"><template #default="{ row }">
+        <el-button type="text" size="mini" :disabled="row.finished || Boolean(row.active_run) || taskBusy.includes(row.id)" @click="taskAction(row, 'run')">立即执行</el-button>
+        <el-button type="text" size="mini" :disabled="row.finished || taskBusy.includes(row.id)" @click="taskAction(row, row.enabled ? 'pause' : 'resume')">{{ row.enabled ? "暂停" : "恢复" }}</el-button>
+        <el-button type="text" size="mini" :disabled="row.finished" @click="openTask(row)">编辑</el-button>
+        <el-button v-if="row.active_run" type="text" size="mini" :loading="taskBusy.includes(row.id)" @click="taskAction(row, 'stop')">停止本次</el-button>
         <el-button type="text" size="mini" class="danger" @click="removeTask(row)">删除</el-button>
       </template></el-table-column>
     </el-table>
@@ -87,8 +88,9 @@ export default {
       statesLoading: false, stateError: "", disposed: false, loadRequest: 0, stateRequest: 0,
       modeNames: { off: "关闭", probability: "概率", listen: "监听" },
       taskForm: { visible: false, saving: false, id: null, name: "", prompt: "", kind: "cron", value: "", bot_id: "", target: "group", target_id: "" },
-      runNames: { ok: "已发送", silent: "无内容", partial: "已发送，后续中断", error: "出错", stopped: "已停止" },
-      runTypes: { ok: "success", silent: "info", partial: "warning", error: "danger", stopped: "info" },
+      taskBusy: [],
+      runNames: { completed: "执行完成", success: "执行完成", failed: "失败", failure: "失败", interrupted: "已中断", cancelled: "已取消", timeout: "已超时", exhausted: "预算耗尽", unknown: "结果待核验", queued: "排队中", running: "执行中", stopping: "停止中", missed: "已错过", skipped: "已跳过", ok: "已发送", silent: "无内容", partial: "已发送，后续中断", error: "出错", stopped: "已停止" },
+      runTypes: { completed: "success", success: "success", failed: "danger", failure: "danger", interrupted: "warning", cancelled: "info", timeout: "warning", exhausted: "warning", unknown: "warning", missed: "info", skipped: "info", ok: "success", silent: "info", partial: "warning", error: "danger", stopped: "info" },
       valueHints: { cron: "分 时 日 月 周，如 0 8 * * *", interval: "间隔分钟，至少 10", date: "YYYY-MM-DD HH:MM" },
     }
   },
@@ -177,11 +179,16 @@ export default {
         await this.load()
       } catch (error) { this.fail(error, "任务保存失败。") } finally { form.saving = false }
     },
+    runKey(status) { return String(status || "").toLowerCase() },
     async taskAction(task, action) {
+      if (this.disposed || this.taskBusy.includes(task.id)) return
+      const runId = task.active_run?.run_id
+      if (action === "stop" && !runId) return
+      this.taskBusy.push(task.id)
       try {
-        this.$message.success((await this.request("post", `/chat/tasks/${task.id}/${action}`)).info || "已完成。")
+        this.$message.success((await this.request("post", "/chat/tasks/" + task.id + "/" + action + (action === "stop" ? "?run_id=" + encodeURIComponent(runId) : ""))).info || "已完成。")
         await this.load()
-      } catch (error) { this.fail(error, "操作失败。") }
+      } catch (error) { this.fail(error, "操作失败。") } finally { this.taskBusy = this.taskBusy.filter((id) => id !== task.id) }
     },
     async removeTask(task) {
       try { await this.$confirm(`删除主动任务 #${task.id}？`, "删除任务", { type: "warning" }) } catch (error) { return }
@@ -203,5 +210,6 @@ export default {
 .bot-select { width: 130px; margin-right: 8px; }
 .ellipsis { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .muted { color: var(--text-color-secondary, #909399); }
+.task-owner { font-size: 12px; }
 .danger { color: var(--danger-color); }
 </style>
