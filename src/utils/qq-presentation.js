@@ -17,6 +17,12 @@ export const safeHttpsUrl = value => {
   } catch (error) { return false }
 }
 export const textLength = value => Array.from(value || "").reduce((n, c) => n + (c.codePointAt(0) < 128 ? 1 : 2), 0)
+export const httpsLinkError = value => {
+  if (typeof value !== "string" || !value.trim()) return "请填写完整的 HTTPS 链接"
+  if (!/^https:\/\//i.test(value)) return "链接需以 https:// 开头"
+  if (textLength(value) > 2048) return "链接不能超过 2048 个字符（中文计 2）"
+  return safeHttpsUrl(value) ? "" : "请使用无空格、无凭据的公网 HTTPS 地址"
+}
 const length = textLength
 export const fitLabel = (value, limit) => { let result = ""; for (const c of Array.from(value || "")) { if (length(result + c) > limit) break; result += c } return result }
 export const commandOptions = plugins => {
@@ -43,7 +49,7 @@ export const generateItems = (options, panel, scope = "c2c") => {
 }
 export const panelName = item => item.panel?.remark || item.remark || (item.panel?.items || []).slice(0, 3).map(value => value.name).filter(Boolean).join("、") || "未命名面板"
 export const describeChanges = (before, after, actor = "远端") => {
-  const changes = [], fields = { name: "名称／指令", send_message: "指令", link: "链接", type: "类型", desc: "说明", remark: "备注", enabled: "启用状态", title: "标题", body: "正文", image_url: "图片", quote: "引用说明", rows: "按钮", switch: "开关设置", only_admin: "管理员限制", help: "帮助卡片", welcome_friend: "好友欢迎", welcome_group: "入群欢迎" }
+  const changes = [], fields = { name: "名称／指令", send_message: "指令", link: "链接", type: "类型", desc: "说明", remark: "备注", enabled: "启用状态", title: "标题", body: "正文", image_url: "图片", quote: "引用说明", rows: "按钮", switch: "开关设置", only_admin: "管理员限制", help: "菜单卡片", welcome_friend: "好友欢迎", welcome_group: "入群欢迎" }
   const walk = (old, next, path) => {
     if (JSON.stringify(old) === JSON.stringify(next)) return
     if (Array.isArray(old) && Array.isArray(next)) {
@@ -71,12 +77,12 @@ export const describeChanges = (before, after, actor = "远端") => {
   return [...new Set(changes)]
 }
 const required = (value, limit, label) => { if (typeof value !== "string" || !value.trim() || length(value) > limit) throw new Error(label + "为空或超过字符限制（中文计 2）。") }
-const link = value => { if (!safeHttpsUrl(value)) throw new Error("请填写有效的公网 HTTPS 地址。") }
+const link = (value, label = "链接") => { const error = httpsLinkError(value); if (error) throw new Error(label + "：" + error) }
 
 export const validatePresentation = (type, value) => {
   if (type === "cards") {
     for (const [kind, card] of Object.entries(value)) {
-     const cardName = { help: "帮助卡片", welcome_friend: "好友欢迎", welcome_group: "入群欢迎" }[kind] || "卡片"
+     const cardName = { help: "菜单卡片", welcome_friend: "好友欢迎", welcome_group: "入群欢迎" }[kind] || "卡片"
      try {
       for (const [field, limit] of [["title", 200], ["body", 8000], ["quote", 2000]]) {
         if (length(card[field]) > limit) throw new Error("的" + ({ title: "标题", body: "正文", quote: "引用说明" }[field]) + "超过 " + limit + " 个字符（中文计 2）。")
@@ -88,7 +94,7 @@ export const validatePresentation = (type, value) => {
         if (row.buttons.length > 5) throw new Error("每行最多 5 个按钮。")
         for (const button of row.buttons) {
           required(button.label, 10, "按钮文字")
-          if (button.type === "link") link(button.data)
+          if (button.type === "link") link(button.data, "按钮「" + button.label + "」")
           else required(button.data, 2000, "按钮指令")
           if (kind === "welcome_group" && button.enter) throw new Error("群聊不能直接发送按钮指令。")
         }
@@ -102,7 +108,7 @@ export const validatePresentation = (type, value) => {
     if (items.length > limit) throw new Error("项目数量超过上限 " + limit)
     for (const item of items) {
       required(item.name, type === "panel" || child ? 14 : 10, "项目名称")
-      if (item.type === "link") link(item.link)
+      if (item.type === "link") link(item.link, "项目「" + item.name + "」")
       else if (item.type === "send_message") required(item.send_message, 2000, "指令")
       else if (item.type === "menu") { if (child) throw new Error("子菜单不能继续嵌套。"); check(item.sub_menu_items || [], true) }
       else if (item.type === "switch") required(item.switch?.switch_id, 100, "开关标识")

@@ -4,14 +4,14 @@
       <el-form label-position="top" :disabled="disabled" size="small">
         <el-form-item label="启用此回复"><el-switch v-model="draft.enabled" /><span class="hint"> 保存后生效，不会立即发送。</span></el-form-item>
         <el-form-item label="标题（纯文本）" :error="limitError(draft.title, 200)"><el-input v-model="draft.title" maxlength="200" /></el-form-item>
-        <el-form-item label="图片地址（可选）" :error="draft.image_url && !safeUrl(draft.image_url) ? '请使用公网 HTTPS 图片直链' : ''"><el-input v-model="draft.image_url" placeholder="https://你的图床/图片.png" maxlength="2048" /><details class="image-help"><summary>只有本地图片？查看准备方法</summary><p>先将图片上传到你有权限使用的图床或公网 HTTPS 静态站点，再粘贴图片直链。地址应能直接打开图片，无需登录；分享网页地址、本机路径和内网地址不能使用。</p><p>请使用允许 QQ 客户端访问的图片，勿上传隐私资料。本页不提供图床服务，也不会自动把本机文件公开到互联网。</p></details></el-form-item>
+        <el-form-item label="图片地址（可选）" :error="draft.image_url && !safeUrl(draft.image_url) ? '请使用公网 HTTPS 图片直链' : ''"><el-input :value="draft.image_url" clearable placeholder="https://你的图床/图片.png" maxlength="2048" @input="setImageUrl" /><small class="hint">清空地址并保存即可移除图片；浏览器预览成功不代表 QQ 一定支持该图片格式。</small><p v-if="/\.avif(?:[?#]|$)/i.test(draft.image_url)" class="hint">当前地址使用 AVIF。若 QQ 无法显示，请换用同一图片的 JPEG／PNG 直链；本页不会自动修改图片地址。</p><details class="image-help"><summary>只有本地图片？查看准备方法</summary><p>先将图片上传到你有权限使用的图床或公网 HTTPS 静态站点，再粘贴图片直链。地址应能直接打开图片，无需登录；分享网页地址、本机路径和内网地址不能使用。</p><p>请使用允许 QQ 客户端访问的图片，勿上传隐私资料。本页不提供图床服务，也不会自动把本机文件公开到互联网。</p></details></el-form-item>
         <el-form-item label="正文（纯文本）" :error="limitError(draft.body, 8000)"><el-input v-model="draft.body" type="textarea" :autosize="{ minRows: 4, maxRows: 12 }" maxlength="8000" /><small class="hint">支持换行；**加粗**、HTML 等标记会作为普通文字显示。</small></el-form-item>
         <el-form-item label="引用说明（纯文本）" :error="limitError(draft.quote, 2000)"><el-input v-model="draft.quote" type="textarea" :rows="2" maxlength="2000" /></el-form-item>
       </el-form>
       <section class="buttons-section"><h3>消息按钮</h3><p class="hint">点击列表或右侧预览中的按钮编辑，不会发送指令。</p>
         <div v-for="(row, ri) in draft.rows" :key="ri" class="button-row-editor">
           <header><strong>第 {{ ri + 1 }} 行</strong><div class="button-actions"><el-button size="mini" :disabled="disabled || !ri" @click="move(draft.rows, ri, -1)">上移</el-button><el-button size="mini" :disabled="disabled || ri === draft.rows.length - 1" @click="move(draft.rows, ri, 1)">下移</el-button><el-button size="mini" :disabled="disabled" @click="removeRow(ri)">删除行</el-button></div></header>
-          <div class="button-chips"><button v-for="button in row.buttons" :key="button.id" type="button" :class="{ selected: activeId === button.id, invalid: limitError(button.label, 10) || !button.label }" :aria-pressed="activeId === button.id" @click="activeId = button.id">{{ button.label || '未命名按钮' }}</button><el-button size="mini" :disabled="disabled || row.buttons.length >= 5" @click="addButton(row)">＋ 按钮</el-button></div>
+          <div class="button-chips"><button v-for="button in row.buttons" :key="button.id" type="button" :class="{ selected: activeId === button.id, invalid: limitError(button.label, 10) || !button.label || (button.type === 'link' && linkError(button.data)) }" :aria-pressed="activeId === button.id" @click="activeId = button.id">{{ button.label || '未命名按钮' }}</button><el-button size="mini" :disabled="disabled || row.buttons.length >= 5" @click="addButton(row)">＋ 按钮</el-button></div>
         </div>
         <el-button :disabled="disabled || draft.rows.length >= 5" size="small" @click="addRow">添加按钮行（{{ draft.rows.length }}/5）</el-button>
       </section>
@@ -19,7 +19,7 @@
         <h3>编辑「{{ selectedButton.label || '未命名按钮' }}」</h3>
         <el-form-item label="按钮文字" :error="!selectedButton.label ? '请输入按钮文字' : limitError(selectedButton.label, 10)"><el-input v-model="selectedButton.label" maxlength="20" /><small>{{ length(selectedButton.label) }} / 10（中文计 2）</small></el-form-item>
         <el-form-item label="动作"><el-select v-model="selectedButton.type"><el-option value="command" label="填入指令" /><el-option value="link" label="打开 HTTPS 链接" /></el-select></el-form-item>
-        <el-form-item :label="selectedButton.type === 'link' ? 'HTTPS 地址' : '指令内容'"><el-input v-if="selectedButton.type === 'link'" v-model="selectedButton.data" maxlength="2048" /><QQCommandInput v-else v-model="selectedButton.data" :options="commands" :disabled="disabled" /></el-form-item>
+        <el-form-item :label="selectedButton.type === 'link' ? 'HTTPS 地址' : '指令内容'" :error="selectedButton.type === 'link' ? linkError(selectedButton.data) : ''"><el-input v-if="selectedButton.type === 'link'" v-model.trim="selectedButton.data" placeholder="https://example.com" maxlength="2048" /><QQCommandInput v-else v-model="selectedButton.data" :options="commands" :disabled="disabled" /></el-form-item>
         <el-form-item label="外观"><el-select v-model="selectedButton.style"><el-option :value="0" label="灰色线框" /><el-option :value="1" label="蓝色线框" /><el-option :value="3" label="白底红字" /><el-option :value="4" label="蓝底白字" /></el-select></el-form-item>
         <el-checkbox v-if="kind !== 'welcome_group' && selectedButton.type === 'command'" v-model="selectedButton.enter">私聊点击后直接发送（群聊始终仅填入）</el-checkbox>
         <div class="button-actions"><el-button size="mini" :disabled="disabled || !selectedIndex" @click="move(selectedRow.buttons, selectedIndex, -1)">左移</el-button><el-button size="mini" :disabled="disabled || selectedIndex === selectedRow.buttons.length - 1" @click="move(selectedRow.buttons, selectedIndex, 1)">右移</el-button><el-button size="mini" :disabled="disabled || selectedRow.buttons.length >= 5" @click="copyButton(selectedRow, selectedButton)">复制按钮</el-button><el-button size="mini" :disabled="disabled" @click="removeButton">删除按钮</el-button></div>
@@ -28,7 +28,7 @@
     <aside class="card-preview" aria-label="图文卡片预览">
       <span class="hint">点击按钮编辑属性；实际外观以 QQ 客户端为准。</span>
       <article>
-        <img v-if="previewImage" :src="previewImage" loading="lazy" referrerpolicy="no-referrer" alt="卡片图片" @error="imageError = true" @load="imageError = false" />
+        <img v-if="previewImage" :key="previewImage" :src="previewImage" loading="lazy" referrerpolicy="no-referrer" alt="卡片图片" @error="imageStatus($event, true)" @load="imageStatus($event, false)" />
         <p v-if="imageError" class="hint">图片暂不可用，请检查公网地址。</p>
         <h2>{{ draft.title || '卡片标题' }}</h2><p class="body-text">{{ draft.body || '填写正文，预览会同步显示。' }}</p><blockquote v-if="draft.quote">{{ draft.quote }}</blockquote>
         <div v-for="(row, index) in draft.rows" :key="index" class="preview-row"><button v-for="button in row.buttons" :key="button.id" type="button" :class="['style-' + button.style, { selected: activeId === button.id }]" :title="'编辑按钮：' + button.label" :aria-pressed="activeId === button.id" @click="activeId = button.id">{{ button.label || '按钮' }}{{ button.type === 'link' ? ' ↗' : '' }}</button></div>
@@ -38,7 +38,7 @@
 </template>
 <script>
 import QQCommandInput from "./QQCommandInput.vue"
-import { safeHttpsUrl, newOperationId, textLength } from "@/utils/qq-presentation"
+import { safeHttpsUrl, newOperationId, textLength, httpsLinkError } from "@/utils/qq-presentation"
 export default {
   name: "QQCardEditor", components: { QQCommandInput },
   props: { card: { type: Object, required: true }, kind: String, disabled: Boolean, commands: { type: Array, default: () => [] } },
@@ -51,11 +51,13 @@ export default {
   watch: {
     card: { deep: true, handler(value) { if (JSON.stringify(value) !== JSON.stringify(this.draft)) this.draft = JSON.parse(JSON.stringify(value)) } },
     draft: { deep: true, handler(value) { if (JSON.stringify(value) !== JSON.stringify(this.card)) this.$emit("update:card", JSON.parse(JSON.stringify(value))) } },
-    "draft.image_url": { immediate: true, handler(value) { window.clearTimeout(this._imageTimer); this._imageTimer = window.setTimeout(() => { this.previewImage = safeHttpsUrl(value) ? value : ""; this.imageError = false }, 300) } },
+    "draft.image_url": { immediate: true, handler(value) { window.clearTimeout(this._imageTimer); this.previewImage = ""; this.imageError = false; if (safeHttpsUrl(value)) this._imageTimer = window.setTimeout(() => { this.previewImage = value }, 300) } },
   },
   beforeDestroy() { window.clearTimeout(this._imageTimer) },
   methods: {
-    length: textLength, safeUrl: safeHttpsUrl,
+    length: textLength, safeUrl: safeHttpsUrl, linkError: httpsLinkError,
+    setImageUrl(value) { if (this.disabled) return; this.draft.image_url = value.trim(); this.$emit("update:card", JSON.parse(JSON.stringify(this.draft))) },
+    imageStatus(event, failed) { if (event.target.getAttribute("src") === this.previewImage && this.previewImage === this.draft.image_url) this.imageError = failed },
     limitError(value, limit) { return textLength(value) > limit ? "最多 " + limit + " 个字符（中文计 2）" : "" },
     move(items, index, delta) { if (this.disabled) return; const next = index + delta; if (next >= 0 && next < items.length) items.splice(next, 0, items.splice(index, 1)[0]) },
     addRow() { if (this.disabled || this.draft.rows.length >= 5) return; const row = { buttons: [] }; this.draft.rows.push(row); this.addButton(row) },

@@ -242,7 +242,7 @@
       <el-tab-pane label="统计" name="stats" lazy>
         <section class="zx-panel"><AIStats /></section>
       </el-tab-pane>
-      <el-tab-pane v-if="chatExecutor === 'dsh'" label="DSH 执行器" name="dsh" lazy><DSHStatus v-if="tab === 'dsh'" @configure="configModule = 'ai_chat'" @status="dshConnected = Boolean($event.connected)" /></el-tab-pane>
+      <el-tab-pane label="DSH 设置" name="dsh" lazy><DSHStatus v-if="tab === 'dsh'" @configure="configModule = 'ai_chat'" @status="dshConnected = Boolean($event.connected)" /></el-tab-pane>
     </el-tabs>
 
     <el-dialog :title="detail ? `会话 ${detail.session_id}` : ''" :visible.sync="detailVisible" width="min(760px, 94vw)" append-to-body>
@@ -332,7 +332,7 @@ export default {
         { key: "persona", title: "设置人设", done: this.personas.length > 0, description: persona ? `${this.personas.length} 个人设，默认「${persona.name}」` : "未设置时使用内置默认人设", label: "管理人设", run: () => { this.tab = "persona" } },
         { key: "test", title: "试聊", done: this.tested, description: "在 WebUI 里先聊几句，确认模型与人设正常", label: "开始试聊", run: () => this.openConsole(persona ? persona.id : null) },
       ]
-      if (this.chatExecutor === "dsh") steps.splice(0, 2, { key: "desktop", title: "连接所选 DSH 后端", done: this.dshConnected, description: "在聊天设置中选择 desktop 或 sdk，再到 DSH 执行器页核对能力；两种后端不自动互相回退。", label: "查看执行器状态", run: () => { this.tab = "dsh" } })
+      if (this.chatExecutor === "dsh") steps.splice(0, 2, { key: "desktop", title: "连接所选 DSH 后端", done: this.dshConnected, description: "在“DSH 设置”中选择桌面端或 SDK、填写连接参数并核对状态；两种后端不自动互相回退。", label: "打开 DSH 设置", run: () => { this.tab = "dsh" } })
       return steps
     },
     agentDirty() { return JSON.stringify(this.agentPayload()) !== this.agentSaved },
@@ -424,7 +424,6 @@ export default {
       this.chatEnabled = data.enabled; this.switchRevision = data.revision
       if (data.executor) this.chatExecutor = data.executor
       if (this.chatExecutor === "dsh") this.loadDshStatus()
-      else if (this.tab === "dsh") this.tab = "start"
     },
     /** 读取 DSH 桌面是否已连接，用于快速开始清单。 */
     async loadDshStatus() {

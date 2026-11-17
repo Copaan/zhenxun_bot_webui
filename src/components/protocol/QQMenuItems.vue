@@ -1,11 +1,11 @@
 <template>
   <div class="qq-items">
     <p v-if="!draftItems.length" class="hint empty-items">还没有{{ panel ? '指令' : '菜单' }}，可从插件生成或手动添加。</p>
-    <article v-for="(item, index) in draftItems" :key="index" class="qq-item" :class="{ 'is-open': activeIndex === index, 'is-invalid': nameError(item) }" @dragover.prevent @drop.stop.prevent="drop(index)">
+    <article v-for="(item, index) in draftItems" :key="index" class="qq-item" :class="{ 'is-open': activeIndex === index, 'is-invalid': itemError(item) }" @dragover.prevent @drop.stop.prevent="drop(index)">
       <header>
         <span class="drag-handle" :draggable="!disabled" title="拖动排序；也可展开后使用上移、下移" aria-hidden="true" @dragstart.stop="startDrag($event, index)" @dragend="dragIndex = -1">⠿</span>
         <button type="button" class="item-summary" :aria-expanded="activeIndex === index" @click="activeIndex = activeIndex === index ? -1 : index"><span class="item-number">{{ index + 1 }}</span><strong>{{ item.name || '未命名' }}</strong><small>{{ typeName(item.type) }}</small><i :class="activeIndex === index ? 'el-icon-arrow-up' : 'el-icon-arrow-down'" /></button>
-        <small v-if="nameError(item)" class="invalid-label">名称过长或为空</small>
+        <small v-if="itemError(item)" class="invalid-label">{{ itemError(item) }}</small>
       </header>
       <section v-if="activeIndex === index" class="item-details">
         <div class="item-actions"><el-button size="mini" :disabled="disabled || !index" @click="move(index, -1)">上移</el-button><el-button size="mini" :disabled="disabled || index === draftItems.length - 1" @click="move(index, 1)">下移</el-button><el-button size="mini" :disabled="disabled || draftItems.length >= limit" @click="copyItem(index)">复制</el-button><el-button size="mini" :disabled="disabled" type="danger" plain @click="remove(index)">删除</el-button></div>
@@ -17,7 +17,7 @@
           </el-form-item>
           <el-form-item label="点击后的动作"><el-select v-model="item.type" @change="prepare(item)"><el-option v-for="type in types" :key="type.value" :value="type.value" :label="type.label" /></el-select><el-checkbox v-if="!panel && !child" v-model="advanced" class="advanced-toggle">高级类型</el-checkbox></el-form-item>
           <el-form-item v-if="item.type === 'send_message'" label="填入输入框的指令" :error="length(item.send_message) > 2000 ? '指令内容过长' : ''"><QQCommandInput v-model="item.send_message" :options="commands" :disabled="disabled" /></el-form-item>
-          <el-form-item v-if="item.type === 'link'" label="HTTPS 链接"><el-input v-model="item.link" placeholder="https://" maxlength="2048" /></el-form-item>
+          <el-form-item v-if="item.type === 'link'" label="HTTPS 链接" :error="linkError(item.link)"><el-input v-model.trim="item.link" placeholder="https://example.com" maxlength="2048" /></el-form-item>
           <template v-if="item.type === 'switch'"><el-form-item label="开关标识"><el-input v-model="item.switch.switch_id" maxlength="100" placeholder="例如：show_tips" /></el-form-item><el-form-item label="默认开启"><el-switch v-model="item.switch.default" /></el-form-item><p class="hint">供处理 QQ 菜单事件的插件识别此开关，可填字母、数字、下划线或横线，不能重复。它不会启停真寻插件；没有对应事件处理时请使用指令类型。</p></template>
           <template v-if="panel"><el-form-item label="说明" :error="length(item.desc) > 30 ? '说明最多 30 个字符（中文计 2）' : ''"><el-input v-model="item.desc" maxlength="60" /></el-form-item><el-checkbox v-model="item.only_admin">仅管理员操作（仍须通过插件权限检查）</el-checkbox></template>
         </el-form>
@@ -29,7 +29,7 @@
 </template>
 <script>
 import QQCommandInput from "./QQCommandInput.vue"
-import { textLength } from "@/utils/qq-presentation"
+import { textLength, httpsLinkError } from "@/utils/qq-presentation"
 const editableItems = value => {
   const items = JSON.parse(JSON.stringify(value || []))
   for (const item of items) {
@@ -52,7 +52,8 @@ export default {
     types() { return this.panel ? [{ value: "command", label: "指令" }, { value: "link", label: "链接" }] : [{ value: "send_message", label: "填入指令" }, { value: "link", label: "链接" }, ...this.child ? [] : [{ value: "menu", label: "展开子菜单" }, ...(this.advanced || this.draftItems[this.activeIndex]?.type === "switch" ? [{ value: "switch", label: "开关（高级）" }] : [])]] },
   },
   methods: {
-    length: textLength,
+    length: textLength, linkError: httpsLinkError,
+    itemError(item) { return this.nameError(item) || (item.type === 'link' ? this.linkError(item.link) : item.type === 'menu' && (item.sub_menu_items || []).some(child => child.type === 'link' && this.linkError(child.link)) ? '子菜单有无效链接，请展开检查' : '') },
     nameError(item) { return !item.name?.trim() ? "请填写名称或指令" : this.length(item.name) > this.nameLimit ? "超出 " + this.nameLimit + " 个字符，中文计 2" : "" },
     typeName(type) { return { send_message: "指令", command: "指令", link: "链接", menu: "子菜单", switch: "开关" }[type] || "未知类型" },
     prepare(item) { if (item.type === "menu" && !Array.isArray(item.sub_menu_items)) this.$set(item, "sub_menu_items", []); if (item.type === "switch" && !item.switch) this.$set(item, "switch", { switch_id: "", default: false }) },
