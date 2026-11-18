@@ -30,7 +30,14 @@
             <el-button v-if="block.parent_run_id && !block.done" type="text" size="mini" :disabled="stoppingChildren.includes(block.run_id)" @click="stopChild(block.run_id)">停止此子任务</el-button>
           </div>
         </template>
-        <div v-if="run.question && !run.done" :class="['tool-card', 'question', { 'is-approval': run.question.kind === 'approval' }]"><p>{{ run.question.text }}</p><div v-if="run.question.kind === 'approval'" class="approval-actions"><el-button size="small" type="primary" icon="el-icon-check" :loading="run.answering" @click="answerQuestion(run, '允许')">允许本次</el-button><el-button size="small" type="warning" plain icon="el-icon-finished" :disabled="run.answering" @click="answerQuestion(run, '全部允许')">本轮全部允许</el-button><el-button size="small" icon="el-icon-close" :disabled="run.answering" @click="answerQuestion(run, '拒绝')">拒绝</el-button><small class="muted">5 分钟内未处理视为拒绝</small></div><template v-else><el-input v-model="run.answer" type="textarea" :rows="2" maxlength="4000" placeholder="回答本轮问题；停止对话会取消等待" /><el-button size="small" :loading="run.answering" :disabled="!run.answer.trim()" @click="answerQuestion(run)">提交回答</el-button></template></div>
+        <div v-if="run.question && !run.done" :class="['tool-card', 'question', { 'is-approval': run.question.kind === 'approval' }]"><p>{{ run.question.text }}</p>
+          <div v-if="run.question.kind === 'approval'" class="approval-actions">
+            <el-button size="small" type="primary" icon="el-icon-check" :loading="run.answering" :disabled="stopping" @click="answerQuestion(run, '允许')">允许本次</el-button>
+            <el-button size="small" type="warning" plain icon="el-icon-finished" :disabled="stopping || run.answering" @click="answerQuestion(run, '全部允许')">本轮全部允许</el-button>
+            <el-button size="small" icon="el-icon-close" :disabled="stopping || run.answering" @click="answerQuestion(run, '拒绝')">拒绝本次</el-button>
+            <el-button size="small" type="danger" plain icon="el-icon-switch-button" :loading="stopping" :disabled="run.answering" @click="stop(run)">停止本轮</el-button>
+            <small class="muted">5 分钟内未处理视为拒绝</small>
+          </div><template v-else><el-input v-model="run.answer" type="textarea" :rows="2" maxlength="4000" placeholder="回答本轮问题；停止对话会取消等待" /><el-button size="small" :loading="run.answering" :disabled="!run.answer.trim()" @click="answerQuestion(run)">提交回答</el-button></template></div>
         <small v-if="!run.done" class="run-footer muted"><i class="el-icon-loading"></i> {{ run.question ? (run.question.kind === 'approval' ? '等待你的批准' : '等待你的回答') : run.retry ? (run.retry.state === 'waiting' ? '等待 ' + run.retry.delay_seconds + ' 秒后尝试 ' : '正在尝试 ') + run.retry.attempt + '/5' : '生成中' }}</small>
         <small v-else class="run-footer" :class="{ error: run.done.error }">{{ footerText(run.done) }}</small>
         <p v-if="run.done && run.done.agent_requested && run.done.agent_available === false" class="muted">Agent 工具未启用：{{ run.done.agent_unavailable_reason || "当前授权或人设没有可用工具" }}</p>
@@ -43,7 +50,7 @@
     <div class="console-input">
       <el-input v-model="input" type="textarea" :rows="3" maxlength="8000" placeholder="输入消息，Ctrl+Enter 发送" @keydown.native.ctrl.enter="send" />
       <div>
-        <el-button v-if="running" size="small" type="danger" plain :loading="stopping" @click="stop">停止</el-button>
+        <el-button v-if="running" size="small" type="danger" plain :loading="stopping" @click="stop()">停止</el-button>
         <el-button v-else type="primary" size="small" :disabled="!input.trim() || historyLoading || Boolean(historyError)" @click="send">发送</el-button>
       </div>
     </div>
@@ -225,7 +232,7 @@ export default {
     },
     async answerQuestion(run, value) {
       const answer = value || run.answer
-      if (!answer.trim() || run.answering || !run.question || run.done || this.disposed || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
+      if (!answer.trim() || this.stopping || run.answering || !run.question || run.done || this.disposed || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       const id = run.question.id, epoch = businessNetworkEpoch(), token = getAuthToken()
       run.answering = true
       try {
@@ -236,13 +243,18 @@ export default {
       } catch (error) { if (!this.disposed && token === getAuthToken()) this.$message.error(apiErrorDetail(error, '回答未提交，本轮可能已结束。')) }
       finally { run.answering = false }
     },
-    async stop() {
-      if (this.stopping || !this.running) return
-      const run = this.runs[this.runs.length - 1]
+    async stop(run = this.runs[this.runs.length - 1]) {
+      if (this.stopping || !this.running || run?.done || run !== this.runs[this.runs.length - 1] || this.disposed || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       if (!run?.run_id) { this.interrupt(); return }
+      const epoch = businessNetworkEpoch(), token = getAuthToken()
+      const current = () => !this.disposed && token === getAuthToken() && hasValidAuthToken() && epoch === businessNetworkEpoch() && run === this.runs[this.runs.length - 1]
       this.stopping = true
-      try { await this.postRequest(this.url("/console/stop"), { persona_id: this.personaId, run_id: run.run_id }, QUIET) }
-      catch (error) { this.$message.error(apiErrorDetail(error, "停止失败。")) }
+      try {
+        const result = await this.postRequest(this.url("/console/stop"), { persona_id: this.personaId, run_id: run.run_id }, QUIET)
+        if (!current()) return
+        if (!result.suc) throw new Error(result.info)
+        this.$message.info(result.info || "已请求停止本轮。")
+      } catch (error) { if (current()) this.$message.error(apiErrorDetail(error, "停止结果待确认。")) }
       finally { this.stopping = false }
     },
     interrupt() {
