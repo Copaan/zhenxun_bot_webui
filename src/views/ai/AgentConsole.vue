@@ -30,8 +30,8 @@
             <el-button v-if="block.parent_run_id && !block.done" type="text" size="mini" :disabled="stoppingChildren.includes(block.run_id)" @click="stopChild(block.run_id)">停止此子任务</el-button>
           </div>
         </template>
-        <div v-if="run.question && !run.done" class="tool-card question"><p>{{ run.question.text }}</p><el-input v-model="run.answer" type="textarea" :rows="2" maxlength="4000" placeholder="回答本轮问题；停止对话会取消等待" /><el-button size="small" :loading="run.answering" :disabled="!run.answer.trim()" @click="answerQuestion(run)">提交回答</el-button></div>
-        <small v-if="!run.done" class="run-footer muted"><i class="el-icon-loading"></i> {{ run.question ? '等待你的回答' : run.retry ? (run.retry.state === 'waiting' ? '等待 ' + run.retry.delay_seconds + ' 秒后尝试 ' : '正在尝试 ') + run.retry.attempt + '/5' : '生成中' }}</small>
+        <div v-if="run.question && !run.done" :class="['tool-card', 'question', { 'is-approval': run.question.kind === 'approval' }]"><p>{{ run.question.text }}</p><div v-if="run.question.kind === 'approval'" class="approval-actions"><el-button size="small" type="primary" icon="el-icon-check" :loading="run.answering" @click="answerQuestion(run, '允许')">允许本次</el-button><el-button size="small" type="warning" plain icon="el-icon-finished" :disabled="run.answering" @click="answerQuestion(run, '全部允许')">本轮全部允许</el-button><el-button size="small" icon="el-icon-close" :disabled="run.answering" @click="answerQuestion(run, '拒绝')">拒绝</el-button><small class="muted">5 分钟内未处理视为拒绝</small></div><template v-else><el-input v-model="run.answer" type="textarea" :rows="2" maxlength="4000" placeholder="回答本轮问题；停止对话会取消等待" /><el-button size="small" :loading="run.answering" :disabled="!run.answer.trim()" @click="answerQuestion(run)">提交回答</el-button></template></div>
+        <small v-if="!run.done" class="run-footer muted"><i class="el-icon-loading"></i> {{ run.question ? (run.question.kind === 'approval' ? '等待你的批准' : '等待你的回答') : run.retry ? (run.retry.state === 'waiting' ? '等待 ' + run.retry.delay_seconds + ' 秒后尝试 ' : '正在尝试 ') + run.retry.attempt + '/5' : '生成中' }}</small>
         <small v-else class="run-footer" :class="{ error: run.done.error }">{{ footerText(run.done) }}</small>
         <p v-if="run.done && run.done.agent_requested && run.done.agent_available === false" class="muted">Agent 工具未启用：{{ run.done.agent_unavailable_reason || "当前授权或人设没有可用工具" }}</p>
         <p v-if="run.done && run.done.diagnostics && run.done.diagnostics.operation_uncertain" class="error">部分外部操作结果待核查，系统没有自动重试。</p>
@@ -203,7 +203,7 @@ export default {
         if (item.session_id) this.resolvedSession = item.session_id
         if (item.executor) this.executor = item.executor
       } else if (item.type === "question") {
-        run.question = { id: item.question_id, text: item.question }; run.answer = ''
+        run.question = { id: item.question_id, text: item.question, kind: item.kind || 'text' }; run.answer = ''
       } else if (item.type === "retry") {
         this.$set(run, 'retry', item)
       } else if (item.type === "settled") {
@@ -223,12 +223,13 @@ export default {
       }
       this.scroll()
     },
-    async answerQuestion(run) {
-      if (run.answering || !run.question || run.done || this.disposed || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
+    async answerQuestion(run, value) {
+      const answer = value || run.answer
+      if (!answer.trim() || run.answering || !run.question || run.done || this.disposed || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       const id = run.question.id, epoch = businessNetworkEpoch(), token = getAuthToken()
       run.answering = true
       try {
-        const response = await this.postRequest(this.url('/console/answer'), { run_id: run.run_id, question_id: id, answer: run.answer }, QUIET)
+        const response = await this.postRequest(this.url('/console/answer'), { run_id: run.run_id, question_id: id, answer }, QUIET)
         if (this.disposed || token !== getAuthToken() || epoch !== businessNetworkEpoch()) return
         if (!response.suc) throw new Error(response.info)
         if (run.question && run.question.id === id) run.question = null
@@ -338,6 +339,9 @@ export default {
 .run > p.error { color: var(--el-color-danger, #f56c6c); }
 .question p { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .question .el-button { margin-top: 8px; }
+.question.is-approval { border-color: var(--warning-color); }
+.approval-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.approval-actions .el-button { margin: 0; }
 .console-input > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .files { padding: 0 16px 16px; }
 .files-path { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }

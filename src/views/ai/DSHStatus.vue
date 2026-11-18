@@ -4,12 +4,14 @@
     <div :class="['dsh-overview', 'is-' + tone]" aria-live="polite">
       <span class="overview-dot" />
       <div class="overview-main"><strong>{{ status ? statusLabel : loading ? '正在读取状态…' : '状态未读取' }}</strong><span v-if="status" class="muted">{{ sdk ? '独立 SDK' : '桌面端' }}<template v-if="status.version"> · v{{ status.version }}</template></span></div>
-      <div v-if="status && status.connected" class="overview-chips"><span :class="['ready-chip', { 'is-ready': chatReady }]"><i :class="chatReady ? 'el-icon-check' : 'el-icon-minus'" />普通聊天</span><span :class="['ready-chip', { 'is-ready': status.native_ready }]"><i :class="status.native_ready ? 'el-icon-check' : 'el-icon-minus'" />原生 Agent</span></div>
+      <div v-if="status && status.connected" class="overview-chips"><span :class="['ready-chip', { 'is-ready': chatReady }]"><i :class="chatReady ? 'el-icon-check' : 'el-icon-minus'" />普通聊天</span><span :class="['ready-chip', { 'is-ready': status.native_ready }]"><i :class="status.native_ready ? 'el-icon-check' : 'el-icon-minus'" />原生 Agent</span><span v-if="sdk" :class="['ready-chip', { 'is-ready': status.permission === 'full' || sandboxReady }]"><i :class="status.permission === 'full' ? 'el-icon-unlock' : 'el-icon-lock'" />{{ permissionLabel }}</span></div>
       <el-dropdown v-if="status && sdk" trigger="click" @command="hostCommand"><el-button size="small" :disabled="statusStale || configSaving || Boolean(busy)">宿主操作 <i class="el-icon-arrow-down el-icon--right" /></el-button><el-dropdown-menu slot="dropdown"><el-dropdown-item command="agent" icon="el-icon-video-play" :disabled="statusStale || configSaving || Boolean(busy)">启动原生 Agent</el-dropdown-item><el-dropdown-item command="stop" icon="el-icon-switch-button" :disabled="statusStale || configSaving || Boolean(busy) || !status.connected">停止 SDK 宿主</el-dropdown-item></el-dropdown-menu></el-dropdown>
       <p v-if="status && (!status.connected || status.mapping_trusted === false)" class="overview-note">{{ status.reason }}</p>
       <p v-else-if="status && !sdk && status.login_state === 'signed-out'" class="overview-note">请先在 DSH 桌面完成登录。</p>
     </div>
     <el-alert v-if="status && status.restart_required" :title="status.restart_reason" type="warning" :closable="false" show-icon />
+    <el-alert v-if="sdk && status.connected && status.permission === 'sandbox' && status.sandbox && !status.sandbox.available" title="本机沙箱不可用，Agent 的每条命令都需要超管批准" type="warning" :closable="false" show-icon><p class="alert-text">{{ status.sandbox.detail }}。可安装 bubblewrap（如 <code>apt install bubblewrap</code> 或 <code>yum install bubblewrap</code>），在容器中运行时还需允许创建命名空间；也可以在连接的高级设置中改用完全权限。批准时回复“全部允许”可放行本轮后续请求。</p></el-alert>
+    <el-alert v-if="sdk && status.permission_pending" title="Agent 权限已修改，Agent 空闲时下次运行会自动重启工作进程后生效。" type="info" :closable="false" show-icon />
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <div class="dsh-card"><div class="card-heading"><h3><i class="el-icon-connection" />连接</h3></div><DSHConnection ref="connection" :disabled="Boolean(busy) || choice.busy" @configure="$emit('configure')" @saving="configurationBusy" @saved="configurationSaved" @connected="connectionStatus" /></div>
     <div v-if="status" class="dsh-card">
@@ -48,7 +50,7 @@ export default {
   name: "DSHStatus",
   components: { DSHConnection },
   data: () => ({ status: null, statusStale: false, configSaving: false, error: "", loading: false, busy: "", seq: 0, disposed: false, choice: { visible: false, loading: false, busy: false, seq: 0, targets: [], owner: null, loadedOwner: null, items: [], selected: null, revision: 0 } }),
-  computed: { sdk() { return this.status?.transport === 'sdk' }, chatReady() { return Boolean(this.status?.connected && this.status.presets?.chat !== false) }, tone() { if (!this.status || this.statusStale) return 'idle'; return this.status.connected && !this.status.restart_required && this.status.mapping_trusted !== false && this.chatReady ? 'success' : this.status.connected ? 'warning' : 'idle' }, statusLabel() { if (this.statusStale) return '状态待确认'; if (this.status?.mapping_trusted === false) return '需要处理'; if (this.status?.restart_required) return '需要重新连接'; if (!this.status?.connected) return '未连接'; if (this.status.presets?.chat === false) return this.sdk ? '普通聊天未启动' : '普通聊天预设未就绪'; return '已连接' }, selectedSession() { return this.choice.items.find(item => item.remote_id === this.choice.selected) } },
+  computed: { sdk() { return this.status?.transport === 'sdk' }, chatReady() { return Boolean(this.status?.connected && this.status.presets?.chat !== false) }, sandboxReady() { return this.status?.sandbox?.available !== false }, permissionLabel() { if (this.status?.permission === 'full') return '完全权限'; if (!this.sandboxReady) return '沙箱不可用'; const runner = this.status?.sandbox?.runner; return runner ? '沙箱 · ' + runner : '沙箱' }, tone() { if (!this.status || this.statusStale) return 'idle'; return this.status.connected && !this.status.restart_required && this.status.mapping_trusted !== false && this.chatReady ? 'success' : this.status.connected ? 'warning' : 'idle' }, statusLabel() { if (this.statusStale) return '状态待确认'; if (this.status?.mapping_trusted === false) return '需要处理'; if (this.status?.restart_required) return '需要重新连接'; if (!this.status?.connected) return '未连接'; if (this.status.presets?.chat === false) return this.sdk ? '普通聊天未启动' : '普通聊天预设未就绪'; return '已连接' }, selectedSession() { return this.choice.items.find(item => item.remote_id === this.choice.selected) } },
   mounted() {
     this.load()
     document.addEventListener("visibilitychange", this.visibility)
@@ -209,6 +211,8 @@ export default {
 .dsh-selection p { margin: 2px 0; }
 .dsh-target { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .dsh-target .el-select { flex: 1; }
+.alert-text { margin: 4px 0 0; font-size: 12px; line-height: 1.7; }
+.alert-text code { padding: 0 4px; border-radius: 4px; background: var(--bg-color-secondary); }
 .session-risk { color: var(--warning-color); font-size: 12px; }
 @media (max-width: 680px) {
   .dsh-overview, .dsh-card { padding: 12px; }

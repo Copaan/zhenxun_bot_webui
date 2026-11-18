@@ -26,7 +26,7 @@
           <el-form-item label="SDK 程序位置"><el-switch v-model="customSdk" active-text="使用自定义 SDK" @change="customChanged" /><el-input v-if="customSdk" v-model.trim="draft.sdk_bin" placeholder="程序完整路径，或 PATH 中的 dsh" /><code v-else class="path-value">{{ draft.sdk_bin || (sdkInfo && sdkInfo.path || '安装完成后自动填写') }}</code></el-form-item>
           <div class="connection-fields"><el-form-item label="SDK 数据目录"><el-input v-model.trim="draft.sdk_home" placeholder="留空使用真寻专用目录" clearable /><small>不要与桌面端共用。</small></el-form-item><el-form-item label="新会话思考等级"><el-input v-model.trim="draft.sdk_thinking" placeholder="留空使用 SDK 默认值" clearable /></el-form-item></div>
         </template>
-        <div class="connection-fields"><el-form-item label="单轮超时（秒）"><el-input-number v-model="draft.timeout" :min="10" :max="1800" :precision="0" controls-position="right" /></el-form-item><el-form-item label="允许已授权超管使用原生 Agent"><el-switch v-model="draft.allow_tools" /><small v-if="draft.allow_tools" class="field-warning">Agent 跨群和私聊共享上下文，群回复可能涉及此前私聊内容。</small></el-form-item></div>
+        <el-form-item label="Agent 权限" class="permission-item"><div class="permission-options" role="radiogroup" aria-label="Agent 权限"><button v-for="item in permissions" :key="item.value" type="button" role="radio" :aria-checked="String(draft.permission === item.value)" :class="['permission-option', { 'is-active': draft.permission === item.value }]" :disabled="formDisabled" @click="draft.permission = item.value"><i :class="item.icon" /><span><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span></button></div><small v-if="draft.permission === 'full'" class="field-warning">命令直接以 Bot 进程的系统权限运行，且不再请求批准。{{ draft.transport === 'desktop' ? '桌面端的沙箱仍由桌面设置决定，这里只自动批准。' : '' }}</small></el-form-item><div class="connection-fields"><el-form-item label="单轮超时（秒）"><el-input-number v-model="draft.timeout" :min="10" :max="3600" :precision="0" controls-position="right" /><small>等待人工确认的时间不计入。</small></el-form-item><el-form-item label="允许已授权超管使用原生 Agent"><el-switch v-model="draft.allow_tools" /><small v-if="draft.allow_tools" class="field-warning">Agent 跨群和私聊共享上下文，群回复可能涉及此前私聊内容。</small></el-form-item></div>
         <p class="muted">连接不会自动启用 AI 或切换聊天执行器；已有会话的模型和模式保持不变。安装只使用独立目录，不修改 Bot 或桌面依赖。</p>
       </el-collapse-item></el-collapse>
       <div v-if="error || sdkError || notice" class="connection-result" aria-live="polite"><el-alert v-if="error || sdkError" :title="error || sdkError" type="error" :closable="false" show-icon /><el-alert v-else :title="notice" type="success" :closable="false" show-icon /></div>
@@ -43,7 +43,7 @@ import { notifyRestartStatusChanged } from "@/utils/apply-result"
 import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 import { clearDirtyState, setDirtyState } from "@/utils/dirty-state"
 
-const KEYS = ['transport', 'desktop_url', 'home', 'sdk_bin', 'sdk_home', 'sdk_provider', 'sdk_model', 'sdk_thinking', 'timeout', 'allow_tools']
+const KEYS = ['transport', 'desktop_url', 'home', 'sdk_bin', 'sdk_home', 'sdk_provider', 'sdk_model', 'sdk_thinking', 'timeout', 'permission', 'allow_tools']
 const QUIET = { suppressErrorToast: true }
 const copy = value => JSON.parse(JSON.stringify(value))
 export default {
@@ -56,6 +56,10 @@ export default {
     transports: () => [
       { value: 'desktop', label: '桌面端', icon: 'el-icon-monitor', description: '连接 Bot 所在机器上已登录的 DSH 桌面，默认自动发现。' },
       { value: 'sdk', label: '独立 SDK', icon: 'el-icon-box', description: '在独立目录运行 SDK，复用已配置的官方 DeepSeek 服务商。' },
+    ],
+    permissions: () => [
+      { value: 'sandbox', label: '沙箱', icon: 'el-icon-lock', description: '命令在沙箱内运行，越权操作需超管批准，可回复“全部允许”放行本轮。' },
+      { value: 'full', label: '完全权限', icon: 'el-icon-unlock', description: '不使用沙箱，所有操作直接执行，不再询问。' },
     ],
     installStep() { return this.sdkInfo?.active ? ({ checking: 0, creating: 1, installing: 2, verifying: 3 })[this.sdkInfo.phase] ?? -1 : -1 },
     installTone() { const info = this.sdkInfo; if (!info) return 'idle'; if (info.active) return 'active'; if (['failed', 'interrupted', 'unavailable'].includes(info.phase)) return 'danger'; return info.installed ? 'success' : 'idle' },
@@ -172,7 +176,8 @@ export default {
     validate() {
       if (!['desktop', 'sdk'].includes(this.draft.transport)) throw new Error('请选择桌面端或 SDK。')
       if (KEYS.filter(key => !['timeout', 'allow_tools'].includes(key)).some(key => typeof this.draft[key] !== 'string')) throw new Error('连接地址、路径、服务商、模型和思考等级必须是文本。')
-      if (!Number.isInteger(this.draft.timeout) || this.draft.timeout < 10 || this.draft.timeout > 1800) throw new Error('单轮超时需为 10 至 1800 秒的整数。')
+      if (!Number.isInteger(this.draft.timeout) || this.draft.timeout < 10 || this.draft.timeout > 3600) throw new Error('单轮超时需为 10 至 3600 秒的整数。')
+      if (!['sandbox', 'full'].includes(this.draft.permission)) throw new Error('请选择 Agent 权限。')
       if (typeof this.draft.allow_tools !== 'boolean') throw new Error('Agent 选项必须为开关。')
       if (this.draft.transport === 'sdk') {
         if (!this.draft.sdk_bin?.trim()) throw new Error('请先安装 SDK，或在高级设置填写自定义程序位置（也可填写 PATH 中的 dsh）。')
@@ -282,4 +287,13 @@ small { display: block; margin-top: 5px; }
   .connection-actions .el-button { flex: 1 1 auto; }
   .draft-label { width: 100%; }
 }
+.permission-item { margin-bottom: 14px; }
+.permission-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; width: 100%; }
+.permission-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-color); color: var(--text-color-primary); font: inherit; text-align: left; cursor: pointer; transition: border-color .2s, box-shadow .2s; }
+.permission-option:hover:not(:disabled) { border-color: var(--primary-color); }
+.permission-option.is-active { border-color: var(--primary-color); box-shadow: 0 0 0 1px var(--primary-color) inset; }
+.permission-option:disabled { cursor: not-allowed; opacity: .6; }
+.permission-option i { margin-top: 2px; font-size: 16px; color: var(--primary-color); }
+.permission-option span { display: flex; flex-direction: column; gap: 2px; line-height: 1.5; }
+.permission-option small { color: var(--text-color-secondary); font-size: 12px; }
 </style>
