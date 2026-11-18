@@ -157,9 +157,10 @@ export function pluginOperationResult(entry, restartAvailable = false, store = "
   if (applied && result.remaining_conflicts?.length) message = `所选修复已生效；仍有 ${result.remaining_conflicts.length} 项依赖问题待处理。`
   if (skipped) message = '插件已安装，但未能加载，已跳过该插件。补全配置或资源后重启即可加载。'
   if (result.cleanup_error && applied && mode !== 'cleanup_pending') message += ' 清理待重试，不影响已确认的生效结果。'
+  if (rolledBack && !canceled && result.reason) message += `\n${reasonText(result.reason)}`
   if (result.diagnostic) message += `\n${result.diagnostic}`
   return {
-    status: skipped || pending || inProgress || attention ? 'pending' : applied || rolledBack ? 'success' : 'error',
+    status: skipped || pending || inProgress || attention ? 'pending' : applied || (rolledBack && canceled) ? 'success' : 'error',
     title: manualMigration ? '等待手工数据库迁移' : inProgress || attention ? restartChangeText({ state: mode }) : pending ? '插件事务等待重启' : canceled ? '插件变更已抵消' : skipped ? '插件已安装但未加载' : applied ? '插件操作完成' : rolledBack ? '插件操作已回滚' : recovery ? '事务需要恢复处理' : failed ? '插件操作未完成' : '操作结果待确认',
     message, applyMode: mode || 'unknown',
     restartAvailable: pending && !manualMigration && (result.restart_available ?? restartAvailable),
