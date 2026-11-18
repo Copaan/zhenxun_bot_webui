@@ -440,7 +440,8 @@ export default {
       this.settingsLocalIssues = {}
       this.revision = data.revision; this.schema = data.schema || {}; this.presets = data.presets || {}; this.protocols = data.protocols || []; this.providers = clone(data.providers || []); this.validationIssues = data.validation_issues || []; this.operationIssues = []; this.catalog = data.catalog || {}
       this.originalSections = clone(data.sections || {}); this.sectionDrafts = clone(data.sections || {}); this.dirtySections = {}; this.invalidSections = {}; this.groupRows = this.groupsToRows(this.sectionDrafts.model_groups); this.selectedRouteGroupId = this.groupRows.some((item) => item.clientId === this.selectedRouteGroupId) ? this.selectedRouteGroupId : this.groupRows[0]?.clientId || ""; this.routingIssues = []
-      const target = preferredName || this.selectedProviderName; this.selectedProviderName = this.providers.some((item) => item.name === target) ? target : this.providers[0]?.name || ""
+      const requested = typeof this.$route.query.provider === "string" ? this.$route.query.provider : ""
+      const target = preferredName || this.selectedProviderName || requested; this.selectedProviderName = this.providers.some((item) => item.name === target) ? target : this.providers[0]?.name || ""
       this.resetProviderDraft(); this.providerDirty = false; this.modelsDirty = false; this.syncDirty()
     },
     resetProviderDraft() {
