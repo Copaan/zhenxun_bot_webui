@@ -174,6 +174,7 @@
             <el-table-column type="expand"><template #default="{ row }"><div class="call-detail">
               <strong>输入</strong><pre>{{ row.input }}</pre><strong>输出</strong><pre>{{ row.error || row.output || "无" }}</pre>
               <template v-if="row.details && row.details.delivery">
+                <p v-if="row.details.delivery.reply_kind">回复：{{ replyKinds[row.details.delivery.reply_kind] || row.details.delivery.reply_kind }}</p>
                 <p v-if="row.details.external_stop_guarantee === 'unverified'" class="error-text">外部执行器是否已停止尚未确认；真寻已停止等待，但外部操作可能仍在进行。</p>
                 <p>投递：{{ deliveryNames[row.details.delivery.status] || row.details.delivery.status }}<span v-if="row.details.delivery.uncertain">（结果未知，不自动补发）</span></p>
                 <pre v-if="row.details.delivery.text">确认送达内容：{{ row.details.delivery.text }}</pre>
@@ -304,6 +305,7 @@ export default {
       agentDraft: { enabled: false }, agentSaved: "", agentTimer: null,
       decisionNames: { auto: "自动放行", approved: "已批准", rejected: "已拒绝", timeout: "超时" }, decisionTypes: { auto: "info", approved: "success", rejected: "danger", timeout: "warning" },
       deliveryNames: { sent: "全部送达", partial: "部分送达", failed: "失败", unknown: "结果未知", skipped: "主动跳过", pending: "尚未结算" },
+      replyKinds: { answer: "生成了回答", tool_reply: "工具已代答", silent: "主动未发言", failure: "没有有效回答", skipped: "已跳过" },
       statusNames: { completed: "执行完成", queued: "排队中", running: "执行中", delivering: "投递中", settling: "收尾中", stopping: "停止中", interrupted: "已中断", cancelled: "已取消", timeout: "已超时", exhausted: "预算耗尽", skipped: "已跳过", ok: "完成", silent: "未发言", partial: "部分送达", failed: "投递失败", unknown: "结果待核验", error: "出错", stopped: "已停止" }, statusTypes: { completed: "success", queued: "info", running: "info", delivering: "info", settling: "info", stopping: "info", interrupted: "warning", cancelled: "info", timeout: "warning", exhausted: "warning", skipped: "info", ok: "success", silent: "info", partial: "warning", failed: "danger", unknown: "warning", error: "danger", stopped: "info" },
       proactiveSources: { interject: "插话", task: "任务", listen: "接话判断", steal: "偷表情", memory: "记忆整理" },
       voiceNames: { off: "关闭", voice: "语音提问时", always: "总是" },
