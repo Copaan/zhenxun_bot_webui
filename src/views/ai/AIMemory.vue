@@ -18,7 +18,7 @@
       </div>
     </div>
 
-    <p class="muted">长期记忆用于本地 Agent；DSH 会话不支持此能力。新群记忆默认参与衰减，管理员可明确固定。</p>
+    <p class="muted">DSH 按需调用记忆工具，不自动召回或整理。新群记忆默认参与衰减，管理员可明确固定。</p>
     <p v-if="status.rebuild_result && status.rebuild_result.failed" class="wrap">向量重算：成功 {{ status.rebuild_result.succeeded }} 条，未完成 {{ status.rebuild_result.failed }} 条。{{ status.rebuild_result.error }}</p>
     <section v-if="status.summaries && status.summaries.length" class="zx-panel">
       <h3>整理进度</h3>
