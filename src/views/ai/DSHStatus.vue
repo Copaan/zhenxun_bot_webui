@@ -79,10 +79,11 @@ export default {
         const response = await this.postRequest(this.url('/dsh/session/stop'), { owner: row.owner, remote_id: row.remote_id, expected_revision: row.revision, run_id: row.inflight.run_id }, QUIET)
         if (!current()) return
         if (!response.suc) throw new Error(response.info)
-        this.$message({ type: ['unknown', 'desktop_continues'].includes(response.data.state) || response.data.local_done === false ? 'warning' : 'success', message: response.info })
-        await this.load()
+        const confirmed = ['confirmed', 'foreground_confirmed', 'foreground_idle', 'target_removed'].includes(response.data?.state) && response.data?.local_done !== false
+        if (confirmed) this.$message.success(response.info || '已确认本轮前台请求停止。')
+        else this.$message.warning([response.info || '停止结果待核验。', response.data?.reason].filter(Boolean).join(' '))
       } catch (error) { if (current()) this.$message.warning(apiErrorDetail(error, '停止结果待核验，请刷新；不会重新执行输入。')) }
-      finally { this.busy = '' }
+      finally { try { if (current()) await this.load() } finally { this.busy = '' } }
     },
     async hostAction(action, mode = 'chat') {
       if (this.statusStale || this.configSaving || this.busy || this.choice.busy || this.disposed || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
@@ -96,7 +97,9 @@ export default {
         const response = await this.postRequest(this.url('/dsh/host/' + action), { mode, ...(action === 'stop' ? { expected_boot: this.status.host_boot } : {}) }, QUIET)
         if (this.statusStale || this.configSaving || this.disposed || document.hidden || !hasValidAuthToken() || epoch !== businessNetworkEpoch() || token !== getAuthToken()) return
         if (!response.suc) throw new Error(response.info)
-        this.$message({ type: action === 'stop' && !response.data?.stopped ? 'warning' : 'success', message: response.info }); await this.load()
+        if (action === 'stop' && !response.data?.stopped) this.$message.warning(response.info || '宿主停止结果待核验。')
+        else this.$message.success(response.info || '宿主操作已完成。')
+        await this.load()
       } catch (error) { if (!this.disposed && !document.hidden && epoch === businessNetworkEpoch() && token === getAuthToken() && hasValidAuthToken()) this.$message.error(apiErrorDetail(error, '宿主操作未确认，请刷新状态。')) }
       finally { this.busy = '' }
     },
