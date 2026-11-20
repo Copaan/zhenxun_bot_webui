@@ -4,15 +4,16 @@
       <el-select v-model="personaId" size="small" placeholder="默认人设" clearable :disabled="running" class="persona-select" @change="loadHistory">
         <el-option v-for="item in personas" :key="item.id" :label="item.name" :value="item.id" />
       </el-select>
-      <el-tooltip :content="agentEnabled ? '使用 Agent 工具；服务端仍会按当前登录、人设和工具配置检查权限' : '请先在 Agent 页开启 Agent'" placement="bottom">
-        <el-switch v-model="agent" :disabled="!agentEnabled || running" active-text="Agent" />
-      </el-tooltip>
+      <el-select v-model="owner" clearable size="small" placeholder="选择 Bot 与超管" :disabled="running || changing" @change="loadHistory">
+        <el-option v-for="item in owners" :key="item.id" :label="item.label" :value="item.id" />
+      </el-select>
+      <el-switch :value="agent" active-text="个人 Agent" :disabled="!owner || historyLoading || running || changing" @change="toggleEntry" />
       <span class="spacer"></span>
       <el-button v-if="executor !== 'dsh'" size="small" icon="el-icon-folder-opened" @click="openFiles">沙箱文件</el-button>
-      <el-button size="small" icon="el-icon-delete" :disabled="running" @click="clearHistory">清空记录</el-button>
+      <el-button size="small" icon="el-icon-brush" :disabled="running || changing || historyLoading" @click="clearView">清空本页</el-button>
+      <el-button size="small" type="danger" plain icon="el-icon-delete" :disabled="running || changing || historyLoading || !resolvedSession || Boolean(historyError)" @click="resetHistory">{{ agent ? '重置个人 Agent' : '重置会话' }}</el-button>
     </div>
-    <p v-if="executor === 'dsh'" class="muted">DSH 桌面执行器：与 QQ 超管使用不同的会话，沿用桌面的权限、模型和模式。离开页面会停止本轮且不自动补发；桌面上已启动的后台任务请在 DSH 中管理。</p>
-    <p v-else class="muted">控制台使用独立会话（每个人设一份记忆），回复不会发到群里；工具调用会显示在对话中。</p>
+    <p class="muted">{{ agent ? '与所选超管已开启的入口共用个人会话；本轮回复留在控制台。' : '普通控制台对话' }}{{ executor === 'dsh' ? ' · 原生工作区与模型由 DSH 保留。' : ' · 内置执行器' }}</p>
     <el-alert v-if="historyError" :title="historyError" type="warning" :closable="false"><el-button type="text" @click="loadHistory">重新读取</el-button></el-alert>
 
     <div ref="log" class="console-log">
@@ -91,24 +92,21 @@ export default {
   name: "AgentConsole",
   props: {
     personas: { type: Array, default: () => [] },
-    agentEnabled: { type: Boolean, default: false },
     initialPersona: { type: Number, default: null },
   },
   data() {
     return {
-      personaId: this.initialPersona, agent: false, input: "", history: [], runs: [], running: false, stopping: false, controller: null,
+      personaId: this.initialPersona, agent: false, owner: null, owners: [], changing: false, input: "", history: [], runs: [], running: false, stopping: false, controller: null,
       files: { visible: false, path: ".", items: [], error: "", loading: false, preview: null },
       requestSeq: 0, disposed: false, stoppingChildren: [],
-      resolvedSession: null, executor: 'local', historySeq: 0, historyLoading: false, historyError: '',
+      resolvedSession: null, resolvedRevision: null, executor: 'local', historySeq: 0, historyLoading: false, historyError: '',
     }
   },
   computed: {
     sessionId() { if (this.resolvedSession) return this.resolvedSession; return `webui_console:${this.personaId == null ? "default" : this.personaId}` },
   },
   watch: {
-    agent() { if (!this.running) this.loadHistory() },
     initialPersona(value) { if (!this.running && value !== this.personaId) { this.personaId = value; this.loadHistory() } },
-    agentEnabled(value) { if (!value) this.agent = false },
   },
   mounted() {
     this.loadHistory()
@@ -130,17 +128,27 @@ export default {
     /**
      * 载入当前人设控制台会话的历史消息
      */
+    async toggleEntry(agent) {
+      if (this.running || this.changing || !this.owner) return
+      this.changing = true
+      try {
+        const response = await this.putRequest(this.url('/console/entry'), { owner: this.owner, agent }, QUIET)
+        if (!response.suc) throw new Error(response.info)
+      } catch (error) { this.$message.error(apiErrorDetail(error, '入口设置未确认。')) }
+      finally { this.changing = false; this.loadHistory() }
+    },
     async loadHistory() {
       if (this.disposed || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       const seq = ++this.historySeq, epoch = businessNetworkEpoch(), credential = getAuthToken()
       const current = () => !this.disposed && !document.hidden && seq === this.historySeq && epoch === businessNetworkEpoch() && credential === getAuthToken() && hasValidAuthToken()
       this.historyLoading = true
-      this.runs = []
+      this.runs = []; this.history = []; this.resolvedSession = null; this.resolvedRevision = null
       try {
-        const target = await this.getRequest(this.url('/console/session'), { persona_id: this.personaId, agent: this.agent }, QUIET)
+        const target = await this.getRequest(this.url('/console/session'), { persona_id: this.personaId, owner: this.owner || undefined }, QUIET)
         if (!current()) return
         if (!target.suc) throw new Error(target.info)
-        this.resolvedSession = target.data.session_id; this.executor = target.data.executor
+        this.owners = target.data.owners; this.owner = target.data.owner; this.agent = target.data.agent
+        this.resolvedSession = target.data.session_id; this.resolvedRevision = target.data.revision; this.executor = target.data.executor
         if (!this.resolvedSession) { this.history = []; this.historyError = ''; return }
         const response = await this.getRequest(this.url("/chat/sessions/messages"), { session_id: this.resolvedSession }, QUIET)
         if (!current()) return
@@ -150,19 +158,37 @@ export default {
       } catch (error) { if (current()) this.historyError = apiErrorDetail(error, '会话暂不可确认，保留上次记录。') }
       finally { if (current()) this.historyLoading = false }
     },
-    async clearHistory() {
-      if (!this.resolvedSession || this.running || this.historyLoading) return
+    clearView() {
+      ++this.historySeq; this.historyLoading = false; this.history = []; this.runs = []
+    },
+    async resetHistory() {
+      if (!this.resolvedSession || this.running || this.historyLoading || this.changing || this.historyError) return
+      const session = this.resolvedSession, revision = this.resolvedRevision, seq = this.historySeq
+      const token = getAuthToken(), epoch = businessNetworkEpoch()
+      const current = () => !this.disposed && seq === this.historySeq && session === this.resolvedSession && !this.running && hasValidAuthToken() && token === getAuthToken() && epoch === businessNetworkEpoch() && !isBusinessNetworkFrozen()
+      const owner = this.owners.find(item => item.id === this.owner)
+      if (this.agent && (!owner || revision == null)) { await this.loadHistory(); return }
+      this.changing = true
       try {
-        const response = await this.deleteRequest(this.url(`/chat/sessions?session_id=${encodeURIComponent(this.sessionId)}`), null, QUIET)
+        const target = this.agent ? owner.label + ' 的共享个人 Agent' : '当前控制台会话'
+        const effect = this.executor === 'dsh' ? '解除当前 DSH 关联，原生历史保留。' : '清空短期历史，此操作无法撤销。'
+        await this.$confirm(`重置${target}？这会停止该会话正在执行和排队的任务。${effect}`, '确认重置会话', { type: 'warning', confirmButtonText: '确认重置' })
+        if (!current()) return
+        const query = new URLSearchParams({ session_id: session })
+        if (revision != null) query.set('expected_revision', revision)
+        const response = await this.deleteRequest(this.url('/chat/sessions?' + query), null, QUIET)
+        if (!current()) return
         if (!response.suc) throw new Error(response.info)
-        this.history = []; this.runs = []; this.loadHistory()
-      } catch (error) { this.$message.error(apiErrorDetail(error, "清空失败。")) }
+        this.$message.success(response.info || '会话已重置。'); await this.loadHistory()
+      } catch (error) {
+        if (error !== 'cancel' && error !== 'close' && current()) { this.$message.error(apiErrorDetail(error, "重置未确认，请重新读取。")); await this.loadHistory() }
+      } finally { this.changing = false }
     },
     /**
      * 发送消息并读取服务端推送的流式事件
      */
     async send() {
-      if (this.historyLoading || this.historyError) return
+      if (this.changing || this.historyLoading || this.historyError) return
       const message = this.input.trim()
       if (!message || this.running || this.disposed || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       const seq = ++this.requestSeq, epoch = businessNetworkEpoch(), credential = getAuthToken()
@@ -174,7 +200,7 @@ export default {
         const response = await fetch(`${getBaseUrl()}${this.url("/console/run")}`, {
           method: "POST",
           headers: { Authorization: getAuthToken(), "Content-Type": "application/json" },
-          body: JSON.stringify({ message, persona_id: this.personaId, agent: this.agent, session_id: this.resolvedSession }),
+          body: JSON.stringify({ message, persona_id: this.personaId, agent: this.agent, owner: this.owner, session_id: this.resolvedSession, executor: this.executor }),
           signal: this.controller.signal,
         })
         if (!response.ok) throw new Error(ERRORS[response.status] || `请求失败（${response.status}）`)

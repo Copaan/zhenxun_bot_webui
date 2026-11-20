@@ -80,7 +80,6 @@
             <el-table-column label="账号场景设置" min-width="220"><template #default="{ row }"><el-select size="mini" :value="null" placeholder="选择机器人账号" @change="openScene"><el-option v-for="target in row.scene_targets || []" :key="target.scene_id" :value="target.scene_id" :label="target.label + (target.overrides.length ? '（有显式覆盖）' : '（继承）')" /></el-select><small v-if="!(row.scene_targets || []).length" class="muted">暂无已连接账号或已有场景</small></template></el-table-column>
             <el-table-column label="插话判断概率" width="120"><template #default="{ row }"><el-input v-model="row.probabilityText" size="mini" placeholder="全局" /></template></el-table-column>
             <el-table-column label="语音回复" width="120"><template #default="{ row }"><el-select v-model="row.voice_reply" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in voiceNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
-            <el-table-column label="执行器" width="140"><template #default="{ row }"><el-select v-model="row.agent_runner" size="mini" clearable placeholder="全局"><el-option v-for="(label, value) in runnerNames" :key="value" :label="label" :value="value" /></el-select></template></el-table-column>
             <el-table-column label="知识库" min-width="220"><template #default="{ row }"><el-checkbox v-model="row.overrideKb" class="override">覆盖</el-checkbox><el-select v-if="row.overrideKb" v-model="row.kbs" size="mini" multiple placeholder="不使用知识库" class="words"><el-option v-for="kb in knowledgeBases" :key="kb.id" :label="kb.name" :value="kb.id" /></el-select><span v-else class="muted">全局</span></template></el-table-column>
             <el-table-column label="唤醒词" min-width="240"><template #default="{ row }"><el-checkbox v-model="row.overrideWords" class="override">覆盖</el-checkbox><el-select v-if="row.overrideWords" v-model="row.words" size="mini" multiple filterable allow-create default-first-option placeholder="不使用唤醒词" class="words" /><span v-else class="muted">全局</span></template></el-table-column>
             <el-table-column label="" width="90"><template #default="{ row }"><el-button size="mini" type="primary" plain :loading="busy === `group-${row.group_id}`" @click="saveGroup(row)">保存</el-button></template></el-table-column>
@@ -115,16 +114,16 @@
 
       <el-tab-pane label="控制台" name="console" lazy>
         <section class="zx-panel">
-          <AgentConsole v-if="tab === 'console'" :personas="personas" :agent-enabled="agent.enabled" :initial-persona="consolePersona" @done="onConsoleDone" />
+          <AgentConsole v-if="tab === 'console'" :personas="personas" :initial-persona="consolePersona" @done="onConsoleDone" />
         </section>
       </el-tab-pane>
 
       <el-tab-pane name="agent" lazy>
         <span slot="label">Agent</span>
         <section class="zx-panel">
-          <div class="zx-section-heading"><div><h2>Agent 权限</h2><p>开启后超级用户的对话可以使用 HTTP 请求、沙箱、MCP 与向用户提问等工具，调用直接执行并记入下方运行记录；普通用户不会获得这些工具。</p><p class="muted">循环次数、并行调用与工具结果长度在「AI 配置 → 运行设置 → Agent」中。<el-button type="text" size="mini" @click="$router.push({ path: '/ai', query: { section: 'settings', tab: 'agent' } })">打开</el-button></p></div><el-button type="primary" size="small" :loading="busy === 'agent'" :disabled="!agentDirty" @click="saveAgent">保存</el-button></div>
+          <div class="zx-section-heading"><div><h2>Agent 权限</h2><p>个人 Agent 按超管及入口开启。普通工具可按稳定工具标识收紧为仅超管。</p><p class="muted">循环次数、并行调用与工具结果长度在「AI 配置 → 运行设置 → Agent」中。<el-button type="text" size="mini" @click="$router.push({ path: '/ai', query: { section: 'settings', tab: 'agent' } })">打开</el-button></p></div><el-button type="primary" size="small" :loading="busy === 'agent'" :disabled="!agentDirty" @click="saveAgent">保存</el-button></div>
           <el-form label-position="top" class="agent-form">
-            <el-form-item label="开启 Agent"><el-switch v-model="agentDraft.enabled" /></el-form-item>
+            <el-form-item label="仅超管可用的工具标识"><el-select v-model="agentDraft.restricted" multiple filterable allow-create default-first-option placeholder="输入完整工具标识"><el-option v-for="id in agentDraft.restricted" :key="id" :value="id" /></el-select></el-form-item>
           </el-form>
           <el-alert v-if="!agent.sandbox.ready" type="info" :closable="false" show-icon :title="`沙箱不可用（${agent.sandbox.reason}），沙箱工具不会提供给 Agent。`" />
         </section>
@@ -302,7 +301,7 @@ export default {
       runQuery: { source: "", status: "" }, runCalls: {},
       sandbox: { ready: false, reason: "", docker: { ok: false, version: "", error: "" }, image: { name: "", installed: false }, pull: { status: "idle" }, sessions: [], settings: {} },
       sandboxDraft: {}, sandboxSaved: "", sandboxTest: null,
-      agentDraft: { enabled: false }, agentSaved: "", agentTimer: null,
+      agentDraft: { restricted: [] }, agentSaved: "", agentTimer: null,
       decisionNames: { auto: "自动放行", approved: "已批准", rejected: "已拒绝", timeout: "超时" }, decisionTypes: { auto: "info", approved: "success", rejected: "danger", timeout: "warning" },
       deliveryNames: { sent: "全部送达", partial: "部分送达", failed: "失败", unknown: "结果未知", skipped: "主动跳过", pending: "尚未结算" },
       replyKinds: { answer: "生成了回答", tool_reply: "工具已代答", silent: "主动未发言", failure: "没有有效回答", skipped: "已跳过" },
@@ -511,7 +510,7 @@ export default {
       const isCurrent = this.beginDataRead("groups")
       const response = await this.request("get", "/chat/groups")
       if (!isCurrent()) return
-      this.groups = response.data.map((item) => ({ ...item, model: item.model || "", voice_reply: item.voice_reply || "", agent_runner: item.agent_runner || "", probabilityText: item.active_probability == null ? "" : String(item.active_probability), overrideWords: item.wake_words != null, words: [...(item.wake_words || [])], overrideKb: item.knowledge_bases != null, kbs: [...(item.knowledge_bases || [])] }))
+      this.groups = response.data.map((item) => ({ ...item, model: item.model || "", voice_reply: item.voice_reply || "", probabilityText: item.active_probability == null ? "" : String(item.active_probability), overrideWords: item.wake_words != null, words: [...(item.wake_words || [])], overrideKb: item.knowledge_bases != null, kbs: [...(item.knowledge_bases || [])] }))
     },
     async saveGroup(row) {
       const text = row.probabilityText.trim()
@@ -519,7 +518,7 @@ export default {
       if (probability !== null && !(probability >= 0 && probability <= 1)) { this.$message.error("插话判断概率应在 0 到 1 之间。"); return }
       this.busy = `group-${row.group_id}`
       try {
-        const response = await this.request("put", `/chat/groups/${encodeURIComponent(row.group_id)}`, { active_probability: probability, wake_words: row.overrideWords ? row.words : null, model: row.model || null, voice_reply: row.voice_reply || null, agent_runner: row.agent_runner || null, knowledge_bases: row.overrideKb ? row.kbs : null, persona_id: row.persona_id || null, enabled: row.enabled })
+        const response = await this.request("put", `/chat/groups/${encodeURIComponent(row.group_id)}`, { active_probability: probability, wake_words: row.overrideWords ? row.words : null, model: row.model || null, voice_reply: row.voice_reply || null, knowledge_bases: row.overrideKb ? row.kbs : null, persona_id: row.persona_id || null, enabled: row.enabled })
         this.$message.success(response.info)
         await this.loadPersonas()
       } catch (error) { this.fail(error, "群设置保存失败。") }
@@ -538,7 +537,7 @@ export default {
         const dirty = this.agentSaved && this.agentDirty
         this.agent = data
         if (quiet && dirty) return
-        this.agentDraft = { enabled: data.enabled }
+        this.agentDraft = { restricted: [...(data.restricted || [])] }
         this.agentSaved = JSON.stringify(this.agentPayload())
       } catch (error) {
         if (!isCurrent()) return
@@ -556,7 +555,7 @@ export default {
       try { this.$set(this.runCalls, row.run_id, (await this.request("get", `/chat/agent/runs/${row.run_id}`)).data.calls) }
       catch (error) { this.fail(error, "运行记录加载失败。") }
     },
-    agentPayload() { return { enabled: this.agentDraft.enabled } },
+    agentPayload() { return { restricted: this.agentDraft.restricted } },
     async saveAgent() {
       this.busy = "agent"
       try {
@@ -705,7 +704,9 @@ export default {
       if (row.local) return this.sessionAction(row, "reset")
       if (!(await this.confirm("清空该会话的短期记忆？用户下次聊天将从头开始。", "重置会话"))) return
       try {
-        const response = await this.request("delete", `/chat/sessions?session_id=${encodeURIComponent(row.session_id)}`)
+        const query = new URLSearchParams({ session_id: row.session_id })
+        if (row.dsh && row.dsh.revision != null) query.set("expected_revision", row.dsh.revision)
+        const response = await this.request("delete", "/chat/sessions?" + query)
         this.$message.success(response.info); await this.loadSessions()
       } catch (error) { this.fail(error, "重置失败。") }
     },

@@ -8,10 +8,8 @@
       <p class="muted">{{ state.policy_note }}</p>
       <el-form label-position="top" size="small" class="scene-grid" :disabled="saving || loading">
         <el-form-item label="场景 AI 开关"><el-select v-model="draft.disabled"><el-option label="跟随基础设置" :value="null" /><el-option label="开启" :value="false" /><el-option label="关闭（计划跳过但不删除）" :value="true" /></el-select><small>有效：{{ state.effective.disabled ? '关闭' : '开启' }} · {{ source('disabled') }}</small></el-form-item>
-        <el-form-item label="执行器"><el-select v-model="draft.runner"><el-option label="跟随基础设置" :value="null" /><el-option label="本地 Agent" value="local" /><el-option label="DSH" value="dsh" /></el-select><small>有效：{{ state.effective.runner }} · {{ source('runner') }}</small></el-form-item>
         <el-form-item v-for="field in modelFields" :key="field.key" :label="field.label"><el-select v-model="draft[field.key]" filterable><el-option label="跟随基础设置" :value="null" /><el-option v-for="item in state.models[field.task]" :key="item.id" :label="item.label" :value="item.value || item.id" /></el-select><small>有效：{{ state.effective[field.key] || '未指定，按既有工具配置处理' }} · {{ source(field.key) }}</small><small v-if="route(field).members">适用：{{ route(field).members.join('、') }}<span v-for="item in route(field).excluded || []" :key="item.model"><br />未采用：{{ item.model }} · {{ item.reason }}</span></small></el-form-item>
         <el-form-item label="人设"><el-select v-model="draft.persona_id" filterable><el-option label="跟随绑定或默认人设" :value="null" /><el-option v-for="item in personas.filter(p => p.enabled)" :key="item.id" :value="item.id" :label="item.name" /></el-select><small>有效：{{ personaName(state.effective.persona_id) }} · {{ source('persona_id') }}</small></el-form-item>
-        <el-form-item label="敏感 Agent 能力"><el-select v-model="draft.agent"><el-option label="跟随基础设置" :value="null" /><el-option label="允许已授权超管使用" :value="true" /><el-option label="关闭" :value="false" /></el-select><small>不提升普通用户权限，不关闭独立原生宿主。</small></el-form-item>
       </el-form>
       <el-alert v-if="state.capabilities.native_selection_preserved" title="DSH 保留原生会话的模型、思考等级和模式；这里的本地聊天模型仅供 local 使用。DSH 语音输入尚未接入，STT 选择不会伪装成已生效。" type="info" :closable="false" />
       <p>选择 TTS 不会自动开启语音回复；输出方式仍由原语音回复设置决定。路由组仅使用适合当前任务的成员，不改变失败重试策略。</p>
@@ -25,7 +23,7 @@ import { apiErrorDetail } from "@/utils/api-error"
 import { getAuthToken, hasValidAuthToken } from "@/utils/auth-token"
 import { businessNetworkEpoch, isBusinessNetworkFrozen, onBusinessNetworkChange } from "@/utils/restart-network"
 
-const empty = () => ({ model: null, persona_id: null, tts: null, stt: null, disabled: null, runner: null, agent: null })
+const empty = () => ({ model: null, persona_id: null, tts: null, stt: null, disabled: null })
 const QUIET = { suppressErrorToast: true }
 export default {
   name: "SceneSettings",
