@@ -1,5 +1,13 @@
 <template>
   <section class="dsh-connection" aria-label="DSH 连接配置">
+    <div v-if="loaded" class="executor-row">
+      <strong>全局回复执行器</strong>
+      <el-radio-group :value="runner" size="small" aria-label="全局回复执行器" :disabled="formDisabled || sdkBusy || !runner || uncertain || Boolean(serverSnapshot)" @input="switchRunner">
+        <el-radio-button label="local">内置 Agent</el-radio-button>
+        <el-radio-button label="dsh" :disabled="!dshSelectable">DSH</el-radio-button>
+      </el-radio-group>
+      <small role="status">{{ runnerMessage || (!runner ? '执行器状态未确认，请刷新。' : !dshSelectable && runner !== 'dsh' ? '请先保存连接并确认 DSH 普通聊天就绪。' : '对之后收到的新消息生效。') }}</small>
+    </div>
     <el-form v-if="loaded" label-position="top" size="small" :disabled="formDisabled" @submit.native.prevent="save">
       <div class="transport-options" role="radiogroup" aria-label="连接方式">
         <button v-for="item in transports" :key="item.value" type="button" role="radio" :aria-checked="String(draft.transport === item.value)" :class="['transport-option', { 'is-active': draft.transport === item.value }]" :disabled="formDisabled" @click="draft.transport = item.value">
@@ -48,9 +56,10 @@ const QUIET = { suppressErrorToast: true }
 const copy = value => JSON.parse(JSON.stringify(value))
 export default {
   name: 'DSHConnection',
-  props: { disabled: Boolean },
-  data: () => ({ loaded: false, loading: false, saving: false, disposed: false, seq: 0, available: false, ownerToken: '', revision: '', original: {}, baseline: '', draft: {}, error: '', notice: '', uncertain: false, advanced: [], customSdk: false, serverSnapshot: null, sdkInfo: null, sdkLoading: false, sdkBusy: false, sdkError: '', sdkSeq: 0, installUncertain: false }),
+  props: { disabled: Boolean, readyTransport: String },
+  data: () => ({ runner: '', runnerMessage: '', loaded: false, loading: false, saving: false, disposed: false, seq: 0, available: false, ownerToken: '', revision: '', original: {}, baseline: '', draft: {}, error: '', notice: '', uncertain: false, advanced: [], customSdk: false, serverSnapshot: null, sdkInfo: null, sdkLoading: false, sdkBusy: false, sdkError: '', sdkSeq: 0, installUncertain: false }),
   computed: {
+    dshSelectable() { return !this.dirty && this.readyTransport === this.draft.transport },
     dirty() { return this.loaded && JSON.stringify(this.draft) !== this.baseline },
     formDisabled() { return this.disabled || this.saving || this.loading || !this.available },
     transports: () => [
@@ -98,14 +107,19 @@ export default {
     },
     async refresh() {
       if (!this.readable() || this.loading || this.saving || this.sdkBusy) return
-      this.available = true; await this.load(true); if (this.draft.transport === 'sdk') await this.loadSDK()
+      this.available = true; this.runnerMessage = ''; await this.load(true); if (this.draft.transport === 'sdk') await this.loadSDK()
     },
     async load(preserve = false) {
       if (this.disposed || document.hidden || this.loading || this.saving || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       const current = this.guard(); this.loading = true
       try {
-        const response = await this.getRequest(this.$root.prefix + '/plugin/get_plugin', { module: 'ai_chat' }, QUIET)
+        const [response, switchState] = await Promise.all([
+          this.getRequest(this.$root.prefix + '/plugin/get_plugin', { module: 'ai_chat' }, QUIET),
+          this.getRequest(this.$root.prefix + '/ai/chat/switch', null, QUIET).catch(() => null),
+        ])
         if (!current()) return
+        this.runner = switchState?.suc && ['local','dsh'].includes(switchState.data?.executor) ? switchState.data.executor : ''
+        this.$emit('executor', this.runner)
         if (!response.suc || response.warning) throw new Error(response.warning || response.info)
         const group = (response.data.config_groups || []).find(item => item.module === 'ai_chat')
         const field = group?.fields.find(item => item.key === 'DSH')
@@ -122,8 +136,28 @@ export default {
         if (preserve && this.dirty && JSON.stringify(snapshot.draft) !== JSON.stringify(this.draft)) { this.serverSnapshot = snapshot; this.notice = '已刷新状态，未保存草稿已保留。' }
         else { this.applyConfig(snapshot); this.error = ''; this.notice = '' }
         this.available = true
-      } catch (error) { if (current()) this.error = apiErrorDetail(error, '读取 DSH 配置失败，请重试。') }
+      } catch (error) { if (current()) { this.runner = ''; this.error = apiErrorDetail(error, '读取 DSH 配置失败，请重试。') } }
       finally { if (current()) this.loading = false }
+    },
+    async switchRunner(next) {
+      if (!['local','dsh'].includes(next) || !this.runner || next === this.runner || (next === 'dsh' && !this.dshSelectable) || this.formDisabled || this.sdkBusy || this.uncertain || this.serverSnapshot || !this.readable() || this.ownerToken !== getAuthToken()) return
+      const current = this.guard()
+      this.saving = true; this.runnerMessage = ''; this.$emit('saving', true)
+      let failure = ''
+      try {
+        const response = await saveSimpleConfig(this, this.revision, { ai_chat: { AGENT_RUNNER: next } })
+        if (current() && response.data?.apply_mode === 'failed') failure = response.info || '配置未生效。'
+      } catch (error) { failure = apiErrorDetail(error, '切换结果未确认，请刷新核对。') }
+      finally {
+        this.saving = false; this.$emit('saving', false)
+        if (current()) {
+          this.runner = ''
+          await this.load(true)
+          if (this.readable() && this.ownerToken === getAuthToken()) {
+            this.runnerMessage = failure || (this.runner === next ? '' : '未确认切换生效，请刷新核对。')
+          }
+        } else if (this.readable()) this.resume()
+      }
     },
     async openAIConfiguration() {
       if (!this.readable() || this.saving || this.disabled) return
@@ -234,6 +268,8 @@ export default {
 </script>
 
 <style scoped>
+.executor-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border-color-light); }
+.executor-row small { color: var(--text-color-secondary); }
 .dsh-connection { min-width: 0; }
 .transport-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
 .transport-option { position: relative; display: flex; align-items: center; gap: 12px; padding: 14px 36px 14px 16px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-color-secondary); color: var(--text-color); text-align: left; font: inherit; cursor: pointer; transition: border-color .15s, background-color .15s, box-shadow .15s; }

@@ -4,6 +4,7 @@
       <div><h1>AI 聊天</h1><p>配置内置 AI 聊天的人设、按群规则与 Agent 权限，在控制台试聊，查看运行记录、会话与调用统计。</p></div>
       <div class="zx-page-actions">
         <el-tag v-if="personaDirty" type="warning" size="small">人设未保存</el-tag>
+        <el-button size="small" icon="el-icon-sort" @click="tab = 'dsh'">回复执行器{{ chatExecutor ? '：' + runnerNames[chatExecutor] : '' }}</el-button>
         <el-button size="small" icon="el-icon-setting" @click="configModule = 'ai_chat'">聊天设置</el-button>
         <el-button size="small" icon="el-icon-refresh" @click="reload">重新加载</el-button>
       </div>
@@ -242,7 +243,7 @@
       <el-tab-pane label="统计" name="stats" lazy>
         <section class="zx-panel"><AIStats /></section>
       </el-tab-pane>
-      <el-tab-pane label="DSH 设置" name="dsh" lazy><DSHStatus v-if="tab === 'dsh'" @configure="configModule = 'ai_chat'" @status="dshConnected = Boolean($event.connected)" /></el-tab-pane>
+      <el-tab-pane label="DSH 设置" name="dsh" lazy><DSHStatus v-if="tab === 'dsh'" ref="dshPanel" @configure="configModule = 'ai_chat'" @status="dshConnected = Boolean($event.connected)" @executor="chatExecutor = $event" /></el-tab-pane>
     </el-tabs>
 
     <el-dialog :title="detail ? `会话 ${detail.session_id}` : ''" :visible.sync="detailVisible" width="min(760px, 94vw)" append-to-body>
@@ -253,7 +254,7 @@
 
     <el-dialog title="账号场景设置" :visible.sync="sceneDialog" width="min(800px, 94vw)" append-to-body><SceneSettings v-if="sceneDialog && selectedScene" :key="selectedScene" :scene-id="selectedScene" :personas="personas" /></el-dialog>
 
-    <UpdateDialog v-if="configModule" :module="configModule" tab="config" @close="configModule = ''" />
+    <UpdateDialog v-if="configModule" :module="configModule" tab="config" @close="closeConfig" />
   </main>
 </template>
 
@@ -291,7 +292,7 @@ export default {
       tab: TABS.includes(this.$route.query.tab) ? this.$route.query.tab : "start",
       loading: false, error: "", busy: "", configModule: "",
       sectionLoading: {}, sectionErrors: {}, loadedSections: {}, dataGeneration: 0, dataRequests: {}, disposed: false,
-      providers: [], defaultChat: "", chatEnabled: false, switchRevision: "", chatExecutor: 'local', dshConnected: false,
+      providers: [], defaultChat: "", chatEnabled: false, switchRevision: "", chatExecutor: '', dshConnected: false,
       personas: [], tools: [], skillList: [], knowledgeBases: [], groups: [], groupSearch: "", groupPage: 1,
       draft: emptyDraft(), original: emptyDraft(), tested: false,
       sessions: { total: 0, items: [] }, sessionQuery: { keyword: "", page: 1, page_size: 20 }, sessionLoading: false, summarizing: "", sessionBusy: "",
@@ -365,6 +366,15 @@ export default {
   },
   beforeDestroy() { this.disposed = true; this.dataGeneration++; clearDirtyState("ai-chat"); clearInterval(this.agentTimer) },
   methods: {
+    async closeConfig() {
+      this.configModule = ''
+      if (this.$refs.dshPanel) return this.$refs.dshPanel.refreshAll()
+      const generation = this.dataGeneration
+      try {
+        const state = await this.request("get", "/chat/switch")
+        if (!this.disposed && generation === this.dataGeneration) this.applySwitch(state.data)
+      } catch (_) { if (!this.disposed && generation === this.dataGeneration) this.chatExecutor = '' }
+    },
     preparationLabel(details) {
       const prep = details && details.preparation
       return prep ? ({ running: '准备中', completed: '已完成', cancelled: '已取消', failed: '准备失败', unknown: '未确认结束' }[prep.status] || '待核验') : '未记录'
