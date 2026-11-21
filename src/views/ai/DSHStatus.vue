@@ -21,10 +21,10 @@
         <el-table-column label="模式" min-width="100"><template #default="{ row }"><el-tag size="mini" :type="row.native ? '' : row.mode === 'agent' ? 'warning' : 'info'" effect="plain">{{ row.native ? '原生 Agent' : row.mode === 'agent' ? '旧版 Agent' : '普通聊天' }}</el-tag></template></el-table-column>
         <el-table-column label="本轮状态" min-width="140"><template #default="{ row }"><span :class="['run-state', { 'is-running': row.local_running }]">{{ row.stop_state_label || '状态待确认' }}</span></template></el-table-column>
         <el-table-column label="操作" min-width="200" align="right"><template #default="{ row }"><div class="dsh-row-actions">
-          <el-button v-if="row.inflight && row.inflight.run_id" size="mini" type="warning" plain :disabled="statusStale || Boolean(busy) || configSaving" @click="stopRun(row)">停止当前轮次</el-button>
-          <el-button v-if="row.mode === 'agent' && (row.identity || {}).source !== 'webui'" size="mini" :disabled="statusStale || Boolean(busy) || configSaving || !status.connected" @click="openChoice(row.owner)">选择会话</el-button>
-          <el-button v-if="row.native" size="mini" :disabled="statusStale || Boolean(busy) || configSaving" @click="change(row, 'new')">新建</el-button>
-          <el-dropdown trigger="click" @command="change(row, $event)"><el-button size="mini" icon="el-icon-more" :disabled="statusStale || Boolean(busy) || configSaving" aria-label="更多会话操作" /><el-dropdown-menu slot="dropdown"><el-dropdown-item command="reset" icon="el-icon-refresh-left" :disabled="statusStale || Boolean(busy) || configSaving">重置对话</el-dropdown-item><el-dropdown-item command="archive" icon="el-icon-folder" :disabled="statusStale || Boolean(busy) || configSaving">{{ sdk ? '解除关联' : row.native ? '归档' : '归档并新建' }}</el-dropdown-item></el-dropdown-menu></el-dropdown>
+          <el-button v-if="row.inflight && row.inflight.run_id" size="mini" type="warning" plain :disabled="!allows(row, 'stop') || statusStale || Boolean(busy) || configSaving" @click="stopRun(row)">停止当前轮次</el-button>
+          <el-button v-if="row.mode === 'agent' && (row.identity || {}).source !== 'webui'" size="mini" :disabled="!allows(row, 'new') && !allows(row, 'select') || statusStale || Boolean(busy) || configSaving || !status.connected" @click="openChoice(row.owner)">选择会话</el-button>
+          <el-button size="mini" :disabled="!allows(row, 'new') || statusStale || Boolean(busy) || configSaving" @click="change(row, 'new')">新建</el-button>
+          <el-dropdown trigger="click" @command="change(row, $event)"><el-button size="mini" icon="el-icon-more" :disabled="statusStale || Boolean(busy) || configSaving" aria-label="更多会话操作" /><el-dropdown-menu slot="dropdown"><el-dropdown-item command="reset" icon="el-icon-refresh-left" :disabled="!allows(row, 'reset') || statusStale || Boolean(busy) || configSaving">重置对话</el-dropdown-item><el-dropdown-item command="archive" icon="el-icon-folder" :disabled="!allows(row, 'archive') || statusStale || Boolean(busy) || configSaving">{{ sdk ? '解除关联' : row.native ? '归档' : '归档并新建' }}</el-dropdown-item></el-dropdown-menu></el-dropdown>
         </div></template></el-table-column>
       </el-table>
       <el-collapse class="dsh-notes"><el-collapse-item><span slot="title" class="notes-title"><i class="el-icon-info" />能力与操作说明</span><ul><li>图片由 DSH 识别。聊天工具按当前用户和人设授权；普通群聊与私聊不开放宿主工具。</li><li>原生 Agent 的工具与后台任务由 DSH 管理；停止当前轮次不代表后台任务全部结束。</li><li>新建保留原会话。重置还会清除真寻短期历史；{{ sdk ? '解除关联不删除或归档 SDK 记录。' : '归档保留桌面历史，不永久删除。' }}</li><li>模型临时错误最多尝试 5 次；不会自动重发用户输入或补发未知结果。</li></ul></el-collapse-item></el-collapse>
@@ -32,9 +32,10 @@
     <el-dialog title="选择 Agent 会话" :visible.sync="choice.visible" width="min(680px, 94vw)" append-to-body>
       <div class="dsh-target"><span>使用者</span><el-select v-model="choice.owner" size="small" :disabled="configSaving || choice.busy || choice.loading" @change="openChoice(choice.owner)"><el-option v-for="target in choice.targets" :key="target.owner" :value="target.owner" :label="target.label" /></el-select></div>
       <p class="muted">使用已有会话会保留历史、模型、思考等级、模式和工作目录。</p><p class="session-risk">Agent 跨群和私聊共享上下文，回复到本轮触发位置；请留意原会话中的私密内容。</p>
-      <el-select v-model="choice.selected" filterable clearable :placeholder="sdk ? '搜索 SDK 会话' : '搜索桌面会话'" style="width: 100%" :disabled="configSaving || choice.busy"><el-option v-for="item in choice.items" :key="item.remote_id" :value="item.remote_id" :disabled="item.running" :label="(item.archived ? '[已归档] ' : '') + item.title + ' · ' + item.preset" /></el-select>
+      <el-alert v-if="choice.listError" :title="choice.listError" type="warning" :closable="false" show-icon />
+      <el-select v-model="choice.selected" filterable clearable :placeholder="sdk ? '搜索 SDK 会话' : '搜索桌面会话'" style="width: 100%" :disabled="configSaving || choice.busy || choice.loading || Boolean(choice.listError)"><el-option v-for="item in choice.items" :key="item.remote_id" :value="item.remote_id" :disabled="item.running" :label="(item.archived ? '[已归档] ' : '') + item.title + ' · ' + item.preset" /></el-select>
       <div v-if="selectedSession" class="dsh-selection"><p>模型：{{ (selectedSession.model || {}).model || '后端默认' }} · 思考：{{ (selectedSession.model || {}).reasoningEffort || '默认' }}</p><p>模式：{{ selectedSession.preset }} · {{ (selectedSession.plan || {}).pending === true || (selectedSession.plan || {}).active ? '计划模式' : '执行模式' }}</p><p>工作目录：{{ selectedSession.cwd }}</p></div>
-      <span slot="footer"><el-button :disabled="configSaving || choice.busy" @click="choice.visible = false">取消</el-button><el-button :loading="choice.busy" :disabled="configSaving" @click="chooseSession(null)">新建会话</el-button><el-button type="primary" :loading="choice.busy" :disabled="configSaving || !choice.selected" @click="chooseSession(choice.selected)">使用所选会话</el-button></span>
+      <span slot="footer"><el-button :disabled="configSaving || choice.busy" @click="choice.visible = false">取消</el-button><el-button :loading="choice.busy" :disabled="!allows(choice, 'new') || configSaving || choice.loading" @click="chooseSession(null)">新建会话</el-button><el-button type="primary" :loading="choice.busy" :disabled="configSaving || choice.loading || !allows(choice, 'select') || !selectedSession" @click="chooseSession(choice.selected)">使用所选会话</el-button></span>
     </el-dialog>
   </section>
 </template>
@@ -49,7 +50,7 @@ const QUIET = { suppressErrorToast: true }
 export default {
   name: "DSHStatus",
   components: { DSHConnection },
-  data: () => ({ status: null, statusStale: false, configSaving: false, error: "", loading: false, busy: "", seq: 0, disposed: false, choice: { visible: false, loading: false, busy: false, seq: 0, targets: [], owner: null, loadedOwner: null, items: [], selected: null, revision: 0 } }),
+  data: () => ({ status: null, statusStale: false, configSaving: false, error: "", loading: false, busy: "", seq: 0, disposed: false, choice: { visible: false, loading: false, busy: false, seq: 0, targets: [], owner: null, loadedOwner: null, items: [], selected: null, revision: 0, allowed_actions: [], listError: '' } }),
   computed: {
     readyTransport() {
       const s = this.status
@@ -117,6 +118,7 @@ export default {
       if (who.platform === 'webui') return 'WebUI · ' + String(who.user_id || '').replace(/^webui:/, '')
       return (who.platform || '未知平台') + ' · ' + (who.group_id ? '群 ' + who.group_id : who.user_id || '历史记录')
     },
+    allows(row, action) { return Array.isArray(row.allowed_actions) && row.allowed_actions.includes(action) },
     async openChoice(owner = null) {
       if (this.statusStale || this.configSaving || this.disposed || this.choice.loading || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       const seq = ++this.choice.seq, epoch = businessNetworkEpoch(), token = getAuthToken()
@@ -127,12 +129,12 @@ export default {
         if (!current()) return
         if (!response.suc) throw new Error(response.info)
         const data = response.data
-        Object.assign(this.choice, { targets: data.targets, owner: data.owner, loadedOwner: data.owner, items: data.items, selected: data.current_id, revision: data.revision, visible: true })
+        Object.assign(this.choice, { allowed_actions: data.allowed_actions || [], targets: data.targets, owner: data.owner, loadedOwner: data.owner, items: data.items, selected: data.list_error ? null : data.current_id, listError: data.list_error || '', revision: data.revision, visible: true })
       } catch (error) { if (current()) { this.choice.owner = this.choice.loadedOwner; this.$message.error(apiErrorDetail(error, '无法读取当前后端会话')) } }
       finally { if (current()) this.choice.loading = false }
     },
     async chooseSession(remoteId) {
-      if (this.statusStale || this.configSaving || this.busy || this.choice.busy || this.disposed || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
+      if (this.statusStale || this.configSaving || this.busy || this.choice.busy || this.choice.loading || this.choice.owner !== this.choice.loadedOwner || (remoteId && !this.selectedSession) || this.disposed || document.hidden || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
       const target = this.choice.targets.find((item) => item.owner === this.choice.owner)
       if (target && target !== this.choice.targets[0]) {
         try { await this.$confirm(`${target.label} 之后在 QQ 中的 Agent 对话将使用${remoteId ? '所选' : '新建的'}DSH 会话，工作目录和模型以该会话为准。`, '为超管选择会话', { type: 'warning' }) } catch (_) { return }
@@ -164,8 +166,9 @@ export default {
     },
     async change(row, action) {
       if (this.statusStale || this.configSaving || this.busy || this.choice.busy || this.disposed || isBusinessNetworkFrozen() || !hasValidAuthToken()) return
+      const newAgent = row.native && action === 'new'
       const text = {
-        new: '解除与当前 DSH 会话的关联？下一条消息会新建会话，原会话及历史仍保留在 DSH。',
+        new: newAgent ? `为 ${this.owner(row)} 新建个人 Agent 会话？旧历史保留，结果待核验的任务不会重跑。` : '新建普通对话？旧历史保留，未确认的输入不会重发。',
         archive: this.sdk ? '解除当前 SDK 会话关联？原记录保留在 SDK，不宣称远端已归档或删除。' : '停止并归档当前 DSH 会话？下一条消息会新建会话，桌面历史保留不删除。',
         reset: this.sdk || row.native ? '停止本会话并清除真寻短期历史？DSH 原会话保留。' : '停止本会话、归档桌面会话并清除真寻短期历史？桌面历史不会删除。',
       }[action]
@@ -175,7 +178,9 @@ export default {
       const epoch = businessNetworkEpoch(), token = getAuthToken()
       try {
         const query = new URLSearchParams({ session_id: row.local_id, expected_revision: row.revision, action })
-        const response = await this.deleteRequest(this.url('/chat/sessions?' + query), null, QUIET)
+        const response = newAgent
+          ? await this.postRequest(this.url('/dsh/session'), { owner: row.owner, remote_id: null, expected_revision: row.revision }, QUIET)
+          : await this.deleteRequest(this.url('/chat/sessions?' + query), null, QUIET)
         if (this.statusStale || this.configSaving || this.disposed || token !== getAuthToken() || epoch !== businessNetworkEpoch()) return
         if (!response.suc) throw new Error(response.info)
         this.$message.success(response.info); await this.load()
