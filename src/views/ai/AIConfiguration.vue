@@ -244,7 +244,7 @@ export default {
       loading: false, loadError: "", saving: "", activeSection: "providers", revision: "", schema: {}, presets: {}, protocols: [], providers: [], validationIssues: [], operationIssues: [], selectedProviderName: "", providerDraft: null,
       providerSearch: "", providerDirty: false, modelsDirty: false, modelSearch: "", sectionDrafts: { default_models: {}, model_groups: {}, context: {}, agent: {}, web_search: {}, deepseek_tools: {}, advanced: {} }, originalSections: {}, dirtySections: {}, invalidSections: {}, groupRows: [], routeSearch: "", selectedRouteGroupId: "", routingIssues: [],
       discovering: false, discoveryVisible: false, discoverySearch: "", discoverySelected: [], discoveryError: "", discoveryScope: "", modelChecks: {}, modelOutcomes: {}, draftGeneration: 0, catalog: {}, catalogUpdating: false, batchChecking: false,
-      connectionOpen: false, editorVisible: false, editorModel: null, editorIndex: null, settingsTab: "context",
+      connectionOpen: false, editorVisible: false, editorModel: null, editorIndex: null, modelRenames: {}, settingsTab: "context",
       taskLabels: TASK_LABELS,
       defaultTasks: [{ key: "chat", label: "对话" }, { key: "vision", label: "视觉", tip: "对话模型不支持图片时，用视觉模型把图片转述成文字" }, { key: "embedding", label: "向量嵌入" }, { key: "tts", label: "语音合成" }, { key: "stt", label: "语音转文字" }, { key: "image", label: "图像生成" }, { key: "rerank", label: "文本重排" }],
       schemaTabs: [
@@ -446,6 +446,7 @@ export default {
       this.resetProviderDraft(); this.providerDirty = false; this.modelsDirty = false; this.syncDirty()
     },
     resetProviderDraft() {
+      this.modelRenames = {}
       this.invalidateProbeQueue(); this.draftGeneration += 1; this._discoverySequence += 1; this.discovering = false; this.discoveryVisible = false
       const provider = this.providers.find((item) => item.name === this.selectedProviderName)
       if (!provider) { this.providerDraft = null; return }
@@ -534,7 +535,7 @@ export default {
     removeKey(index) { this.providerDraft.api_key_slots.splice(index, 1); this.markProviderDirty() },
     providerPayload({ includeModels = false } = {}) {
       const draft = this.providerDraft
-      return { expected_revision: this.revision, name: draft.name.trim(), preset: draft.preset || null, protocol: draft.protocol, base_url: String(draft.base_url || "").trim() || null, timeout: draft.timeout, headers: parseJsonObject(draft.headersText), params: parseJsonObject(draft.paramsText), api_keys: draft.api_key_slots.map((slot) => String(slot.value || "").trim()).filter(Boolean), auto_break_keys: draft.api_key_slots.filter((slot) => slot.auto_break).map((slot) => String(slot.value || "").trim()).filter(Boolean), models: draft.isNew || includeModels ? draft.models.map(({ resolved_profile, check, ...model }) => model) : null }
+      return { expected_revision: this.revision, name: draft.name.trim(), preset: draft.preset || null, protocol: draft.protocol, base_url: String(draft.base_url || "").trim() || null, timeout: draft.timeout, headers: parseJsonObject(draft.headersText), params: parseJsonObject(draft.paramsText), api_keys: draft.api_key_slots.map((slot) => String(slot.value || "").trim()).filter(Boolean), auto_break_keys: draft.api_key_slots.filter((slot) => slot.auto_break).map((slot) => String(slot.value || "").trim()).filter(Boolean), models: draft.isNew || includeModels ? draft.models.map(({ resolved_profile, check, ...model }) => model) : null, model_renames: !draft.isNew && includeModels ? this.modelRenames : null }
     },
     /**
      * 一次保存服务商参数、密钥与模型列表；模型列表未修改时不提交模型
@@ -758,10 +759,12 @@ export default {
       const confirmedModels = JSON.stringify(draft.models.map((model) => this.modelFingerprint(model)))
       const saved = this.providerDraft.isNew ? [] : (this.providers.find((item) => item.name === this.selectedProviderName)?.models || []).map((item) => item.name)
       const added = this.providerDraft.models.filter((model) => !saved.includes(model.name) && model.enabled !== false && this.modelTask(model) === "chat" && this.checkState(model) !== CHECK_STATES.checked).map((model) => model.name)
+      const targets = this.checkTargets(added)
       let check = false
-      if (added.length) {
+      if (targets.length) {
+        const subject = targets.length < added.length ? `新增了 ${added.length} 个对话模型，保存后只核验默认对话模型 ${targets[0]}，其余模型可稍后按需核验。` : `新增的对话模型 ${added.join("、")} 尚未核验能力。`
         try {
-          await this.$confirm(`新增的对话模型 ${added.join("、")} 尚未核验能力。核验会按默认项目发起少量请求，可能产生费用；跳过时按能力库与名称推断处理，之后可随时核验。`, "保存后核验模型？", { confirmButtonText: "保存并核验", cancelButtonText: "跳过核验", distinguishCancelAndClose: true, type: "info" })
+          await this.$confirm(`${subject}核验会按默认项目发起少量请求，可能产生费用；跳过时按能力库与名称推断处理，之后可随时核验。`, "保存后核验模型？", { confirmButtonText: "保存并核验", cancelButtonText: "跳过核验", distinguishCancelAndClose: true, type: "info" })
           check = true
         } catch (action) { if (action !== "cancel") return }
       }
@@ -769,9 +772,33 @@ export default {
       if (this.blockProbeSave()) return
       if (!(await this.saveProvider())) return
       const savedDraft = this.providerDraft; const savedGeneration = this.draftGeneration
-      if (check) await this.checkModels((this.providerDraft?.models || []).filter((model) => added.includes(model.name)))
+      if (check) await this.checkModels((this.providerDraft?.models || []).filter((model) => targets.includes(model.name)))
       if (savedDraft !== this.providerDraft || savedGeneration !== this.draftGeneration) return
       await this.fillDefaultModels()
+    },
+    /**
+     * 确定保存后要核验的新增对话模型；新增多个时只核验将作为默认对话模型的那个
+     * @param {string[]} added 新增且未核验的对话模型名称
+     * @returns {string[]} 需要核验的模型名称
+     */
+    checkTargets(added) {
+      if (added.length <= 1) return added
+      const current = (this.sectionDrafts.default_models || {}).chat
+      const prefix = `${this.selectedProviderName}/`
+      let name = this.pickDefaultModel(this.providerDraft.models, "chat")?.name
+      if (current) name = current.startsWith(prefix) ? this.modelRenames[current.slice(prefix.length)] || current.slice(prefix.length) : null
+      return added.includes(name) ? [name] : []
+    },
+    /**
+     * 按默认模型的选用规则挑选模型；对话任务优先选用已核验且对话正常的模型
+     * @param {object[]} models 模型列表
+     * @param {string} task 任务
+     * @returns {object|undefined} 选中的模型
+     */
+    pickDefaultModel(models, task) {
+      const failed = (model) => (model.check?.results || []).some((row) => row.item === "chat" && row.status === "failed")
+      const candidates = models.filter((model) => model.enabled !== false && modelProfile(model).tasks.includes(task) && !failed(model))
+      return (task === "chat" && candidates.find((item) => item.check?.status === "checked")) || candidates[0]
     },
     /**
      * 为尚未配置默认模型的任务选用当前服务商中合适的模型；对话任务优先选用已核验且对话正常的模型
@@ -782,12 +809,10 @@ export default {
       const defaults = this.sectionDrafts.default_models || {}
       if (!provider) return
       const pending = this.routingDirty
-      const failed = (model) => (model.check?.results || []).some((row) => row.item === "chat" && row.status === "failed")
       const filled = []
       this.defaultTasks.forEach(({ key, label }) => {
         if (defaults[key]) return
-        const candidates = provider.models.filter((model) => model.enabled !== false && modelProfile(model).tasks.includes(key) && !failed(model))
-        const model = (key === "chat" && candidates.find((item) => item.check?.status === "checked")) || candidates[0]
+        const model = this.pickDefaultModel(provider.models, key)
         if (!model) return
         this.$set(this.sectionDrafts.default_models, key, `${provider.name}/${model.name}`)
         filled.push(`${model.name}（${label}）`)
@@ -831,8 +856,22 @@ export default {
     toggleModel(model, enabled) { if (this.currentModelChecks[model.name]) return; this.$set(model, "enabled", enabled); this.modelsDirty = true; this.syncDirty() },
     openEditor(model = null) { if (model && this.currentModelChecks[model.name]) return; this.editorModel = model; this.editorIndex = model ? this.modelIndex(model) : null; this.editorVisible = true },
     saveEditedModel(value) {
-      if (this.editorIndex == null) this.providerDraft.models.push(value); else this.providerDraft.models.splice(this.editorIndex, 1, value)
+      if (this.editorIndex == null) this.providerDraft.models.push(value)
+      else { this.trackModelRename(this.providerDraft.models[this.editorIndex].name, value.name); this.providerDraft.models.splice(this.editorIndex, 1, value) }
       this.modelsDirty = true; this.syncDirty()
+    },
+    /**
+     * 记录已保存模型的改名，保存时服务端据此同步默认模型与路由组中的引用
+     * @param {string} from 改名前的名称
+     * @param {string} to 改名后的名称
+     */
+    trackModelRename(from, to) {
+      if (from === to || this.providerDraft.isNew) return
+      const origin = Object.keys(this.modelRenames).find((key) => this.modelRenames[key] === from) || from
+      if (!(this.savedProvider?.models || []).some((model) => model.name === origin)) return
+      const renames = { ...this.modelRenames }
+      if (origin === to) delete renames[origin]; else renames[origin] = to
+      this.modelRenames = renames
     },
     resolveSchema(node) { if (!node?.$ref) return node || {}; return node.$ref.replace(/^#\//, "").split("/").reduce((value, key) => value?.[key], this.schema) || node },
     sectionSchema(name) { const properties = this.schema.properties || {}; const map = SECTION_KEYS; if (name === "advanced") return { type: "object", properties: { client_settings: properties.client_settings, debug_log: properties.debug_log } }; return this.resolveSchema(properties[map[name]]) },
